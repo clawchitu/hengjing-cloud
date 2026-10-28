@@ -1,4 +1,4 @@
-// Static SPA behind a shared-password gate (HTTP Basic auth, user "demo").
+// Static SPA behind a shared-password gate (HTTP Basic auth, user "cosyhome").
 // Password lives in the BASIC_PASS secret (source of truth: macOS Keychain "hvac-demo-basic").
 const enc = new TextEncoder()
 function safeEqual(a, b) {
@@ -13,7 +13,7 @@ function authorized(req, env) {
   let decoded = ''
   try { decoded = atob(h.slice(6)) } catch { return false }
   const i = decoded.indexOf(':')
-  return i > 0 && safeEqual(decoded.slice(0, i), 'demo') && safeEqual(decoded.slice(i + 1), env.BASIC_PASS)
+  return i > 0 && safeEqual(decoded.slice(0, i), 'cosyhome') && safeEqual(decoded.slice(i + 1), env.BASIC_PASS)
 }
 export default {
   async fetch(req, env) {
