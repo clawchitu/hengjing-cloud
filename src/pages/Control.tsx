@@ -25,7 +25,7 @@ export default function Control() {
   const [sending, setSending] = useState(false)
 
   const online = ps.filter((p) => p.online)
-  const shownP = expand ? ps : ps.slice(0, 8)
+  const shownP = expand ? ps : ps.slice(0, 7)
   const devices = picked.reduce((s, id) => s + (projects.find((p) => p.id === id)?.devices ?? 0), 0)
   const fix = (n: number) => Math.min(30, Math.max(16, +n.toFixed(1)))
 
@@ -80,7 +80,7 @@ export default function Control() {
               </div>
             )
           })}
-          {ps.length > 8 && <div className="c muted" style={{ fontSize: 12.5, marginTop: 10, cursor: 'pointer', textAlign: 'center' }} onClick={() => setExpand(!expand)}>{expand ? '收起' : `展开其余 ${ps.length - 8} 个项目`} <Icon icon={expand ? faChevronUp : faChevronDown} size="xs" /></div>}
+          {ps.length > 7 && <div className="c muted" style={{ fontSize: 12.5, marginTop: 10, cursor: 'pointer', textAlign: 'center' }} onClick={() => setExpand(!expand)}>{expand ? '收起' : `展开其余 ${ps.length - 7} 个项目`} <Icon icon={expand ? faChevronUp : faChevronDown} size="xs" /></div>}
         </Card>
 
         <Card>
