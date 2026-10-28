@@ -101,8 +101,8 @@ export default function Login() {
   const { login, toast } = useApp()
   const nav = useNavigate()
   const loc = useLocation() as { state?: { from?: string } }
-  const [u, setU] = useState('zhangjianguo')
-  const [pw, setPw] = useState('hengjing2025!')
+  const [u, setU] = useState('')
+  const [pw, setPw] = useState('')
   const [show, setShow] = useState(false)
   const [remember, setRemember] = useState(true)
   const [busy, setBusy] = useState(false)
@@ -111,7 +111,12 @@ export default function Login() {
     e.preventDefault()
     if (!u.trim() || !pw) return toast('请输入用户名和密码', true)
     setBusy(true)
-    await api.login(u, pw)
+    try {
+      await api.login(u, pw)
+    } catch {
+      setBusy(false)
+      return toast('用户名或密码错误', true)
+    }
     login(u, remember)
     toast('登录成功，欢迎回来')
     nav(loc.state?.from && loc.state.from !== '/login' ? loc.state.from : '/home', { replace: true })

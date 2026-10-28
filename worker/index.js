@@ -1,5 +1,5 @@
-// Static SPA behind a shared-password gate (HTTP Basic auth, user "cosyhome").
-// Password lives in the BASIC_PASS secret (source of truth: macOS Keychain "hvac-demo-basic").
+// Static SPA. The in-app login page posts to /api/login, checked here against user "cosyhome"
+// and the BASIC_PASS secret (source of truth: macOS Keychain "hvac-demo-basic"/cosyhome). Owner's ask 10/28: single in-app login, no browser Basic-auth prompt.
 const enc = new TextEncoder()
 function safeEqual(a, b) {
   const x = enc.encode(a), y = enc.encode(b)
@@ -7,21 +7,15 @@ function safeEqual(a, b) {
   for (let i = 0; i < Math.max(x.length, y.length); i++) diff |= (x[i] ?? 0) ^ (y[i] ?? 0)
   return diff === 0
 }
-function authorized(req, env) {
-  const h = req.headers.get('Authorization') || ''
-  if (!h.startsWith('Basic ') || !env.BASIC_PASS) return false
-  let decoded = ''
-  try { decoded = atob(h.slice(6)) } catch { return false }
-  const i = decoded.indexOf(':')
-  return i > 0 && safeEqual(decoded.slice(0, i), 'cosyhome') && safeEqual(decoded.slice(i + 1), env.BASIC_PASS)
-}
 export default {
   async fetch(req, env) {
-    if (!authorized(req, env)) {
-      return new Response('需要登录 / Authentication required', {
-        status: 401,
-        headers: { 'WWW-Authenticate': 'Basic realm="hengjing-cloud demo", charset="UTF-8"', 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' },
-      })
+    const url = new URL(req.url)
+    if (url.pathname === '/api/login') {
+      if (req.method !== 'POST') return new Response('method', { status: 405 })
+      let b = {}
+      try { b = await req.json() } catch {}
+      const ok = !!env.BASIC_PASS && safeEqual(String(b.username || ''), 'cosyhome') && safeEqual(String(b.password || ''), env.BASIC_PASS)
+      return new Response(JSON.stringify({ ok }), { status: ok ? 200 : 401, headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' } })
     }
     const res = await env.ASSETS.fetch(req)
     const out = new Response(res.body, res)

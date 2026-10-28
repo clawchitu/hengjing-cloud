@@ -7,8 +7,10 @@ const delay = <T,>(v: T, ms = 120): Promise<T> => new Promise((r) => setTimeout(
 export type { Project, Group, Room, FreshAir, Meter, Alarm, Sensor, Param, Conn, DeviceNode } from '../mock/data'
 
 // auth ---------------------------------------------------------------
-export async function login(username: string, _password: string) {
-  return delay({ token: 'demo-' + Date.now(), user: { ...M.user, username } }, 400)
+export async function login(username: string, password: string) {
+  const r = await fetch('/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username, password }) })
+  if (!r.ok) throw new Error('bad credentials')
+  return delay({ token: 'demo-' + Date.now(), user: { ...M.user } }, 200)
 }
 
 // projects -----------------------------------------------------------
