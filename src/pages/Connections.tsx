@@ -18,9 +18,7 @@ export default function Connections() {
   const on = rows.filter((r) => r.state === '在线').length
   const off = rows.filter((r) => r.state === '离线').length
   const err = rows.filter((r) => r.state === '通讯异常').length
-  const order = { 离线: 0, 通讯异常: 1, 在线: 2 }
   const list = rows.filter((r) => f === '全部' || (f === '在线' && r.state === '在线') || (f === '离线' && r.state === '离线') || (f === '异常' && r.state === '通讯异常'))
-    .sort((a, b) => order[a.state] - order[b.state] || (a.state === '离线' ? a.last.localeCompare(b.last) : 0))
   const SIZE = 7
   const shown = list.slice((page - 1) * SIZE, page * SIZE)
   const bus = (prefix: string) => rows.filter((r) => r.bus.startsWith(prefix))
@@ -93,7 +91,7 @@ export default function Connections() {
       <Card style={{ marginBottom: 20 }}>
         <div className="card-head"><div><h3 className="card-title">24 小时连接质量</h3><div className="card-sub">在线设备数与通讯成功率</div></div>
           <div className="legend-dots"><span><i style={{ width: 12, height: 12, background: '#a5f3fc', display: 'inline-block', borderRadius: 2 }} />在线设备</span><span><i style={{ width: 14, height: 3, background: '#10b981', display: 'inline-block' }} />成功率</span></div></div>
-        <Chart option={opt} height={290} />
+        <Chart option={opt} height={225} />
       </Card>
       <Card pad={false}>
         <div className="card-head card-pad" style={{ marginBottom: 0, paddingBottom: 14, alignItems: 'center' }}><h3 className="card-title">设备连接明细</h3>

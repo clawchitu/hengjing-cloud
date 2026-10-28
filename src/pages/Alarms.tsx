@@ -58,7 +58,7 @@ export default function Alarms({ center }: { center?: boolean }) {
     legend: { top: 0, left: 40, itemWidth: 12, itemHeight: 12, itemGap: 24, textStyle: { color: '#475569', fontSize: 11 }, data: ['提示', '一般', '重要', '紧急'] },
     grid: { left: 32, right: 16, top: 46, bottom: 24 },
     xAxis: { type: 'category' as const, data: stats.trend.days, axisLabel: axis.label, axisLine: { lineStyle: { color: '#94a3b8' } }, axisTick: { show: false } },
-    yAxis: { type: 'value' as const, interval: 2, axisLabel: axis.label, splitLine: { show: false } },
+    yAxis: { type: 'value' as const, interval: 2, max: 8, axisLabel: axis.label, splitLine: { show: false } },
     series: (['紧急', '重要', '一般', '提示'] as const).map((k) => ({ name: k, type: 'bar' as const, stack: 's', barWidth: '50%', data: stats.trend[k], itemStyle: { color: { 紧急: '#f43f5e', 重要: '#f97316', 一般: '#fbbf24', 提示: '#38bdf8' }[k] } })),
   }
   const total = stats.types.reduce((s, x) => s + x.value, 0)
@@ -100,8 +100,8 @@ export default function Alarms({ center }: { center?: boolean }) {
         })}
       </div>
       <div className="grid" style={{ gridTemplateColumns: 'minmax(0,1fr) 340px', gap: 20, marginBottom: 20 }}>
-        <Card><h3 className="card-title" style={{ marginBottom: 8 }}>近 7 天报警趋势</h3><Chart option={trend} height={260} /></Card>
-        <Card><h3 className="card-title" style={{ marginBottom: 8 }}>报警类型分布</h3><Chart option={donut} height={260} /></Card>
+        <Card><h3 className="card-title" style={{ marginBottom: 8 }}>近 7 天报警趋势</h3><Chart option={trend} height={230} /></Card>
+        <Card><h3 className="card-title" style={{ marginBottom: 8 }}>报警类型分布</h3><Chart option={donut} height={230} /></Card>
       </div>
       <Card pad={false} style={{ marginBottom: 20 }}>
         <div className="filters">

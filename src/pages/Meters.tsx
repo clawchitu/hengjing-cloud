@@ -52,7 +52,7 @@ export default function Meters() {
     legend: { top: 0, left: 50, itemWidth: 11, itemHeight: 11, itemGap: 22, textStyle: { color: '#475569', fontSize: 11 }, data: [...names] },
     grid: { left: 42, right: 12, top: 44, bottom: 26 },
     xAxis: { type: 'category' as const, data: range === '日' ? usage.days : range === '月' ? ['1月', '2月', '3月', '4月', '5月', '6月'] : ['2021', '2022', '2023', '2024', '2025'], axisLabel: axis.label, axisLine: { lineStyle: { color: '#94a3b8' } }, axisTick: { show: false } },
-    yAxis: { type: 'value' as const, axisLabel: axis.label, splitLine: { show: false }, axisLine: { show: true, lineStyle: { color: '#94a3b8' } } },
+    yAxis: { type: 'value' as const, max: range === '日' ? 220 : undefined, interval: range === '日' ? 50 : undefined, axisLabel: { ...axis.label, formatter: (v: number) => (range === '日' && v > 200 ? '' : String(v)) }, splitLine: { show: false }, axisLine: { show: true, lineStyle: { color: '#94a3b8' } } },
     series: [...names].reverse().map((n) => ({
       name: n, type: 'bar' as const, stack: 'a', barWidth: '62%', itemStyle: { color: COLORS[n] },
       data: range === '日' ? usage.series[n] : (range === '月' ? [0.92, 0.85, 0.8, 0.9, 1.05, 1.1] : [0.8, 0.88, 0.95, 1.0, 0.5]).map((k) => Math.round(usage.series[n].reduce((a, b) => a + b, 0) / 18 * scale / (range === '年' ? 1 : 1) * k)),
@@ -63,10 +63,10 @@ export default function Meters() {
     legend: { bottom: 0, left: 'center', itemWidth: 10, itemHeight: 10, itemGap: 18, textStyle: { color: '#475569', fontSize: 11 }, data: ['热泵主机', '电梯动力', '照明插座', '新风除湿', '厨房电器', '水泵'] },
     title: { text: `${today.toFixed(1)}\nkWh`, left: 'center', top: '35%', textStyle: { fontSize: 17, fontWeight: 700, lineHeight: 24, fontFamily: 'Barlow', color: '#0f172a' } },
     series: [{
-      type: 'pie' as const, radius: ['46%', '84%'], center: ['50%', '42%'], startAngle: 90, clockwise: false,
+      type: 'pie' as const, radius: ['46%', '84%'], center: ['50%', '42%'], startAngle: 90, clockwise: true,
       itemStyle: { borderColor: '#fff', borderWidth: 2 },
       label: { position: 'inside' as const, formatter: (p: { percent: number }) => `${p.percent >= 10 ? p.percent.toFixed(1).replace(/\.0$/, '') : p.percent.toFixed(2)}%`, color: '#fff', fontSize: 10, fontWeight: 600 },
-      data: usage.share.map((s) => ({ ...s, itemStyle: { color: COLORS[s.name] } })),
+      data: ['热泵主机', '水泵', '厨房电器', '新风除湿', '照明插座', '电梯动力'].map((n) => usage.share.find((x) => x.name === n)!).map((s) => ({ ...s, itemStyle: { color: COLORS[s.name] } })),
     }],
   }
 

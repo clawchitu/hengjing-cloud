@@ -25,7 +25,7 @@ export default function Control() {
   const [sending, setSending] = useState(false)
 
   const online = ps.filter((p) => p.online)
-  const shownP = expand ? ps : ps.slice(0, 7)
+  const shownP = expand ? ps : ps.slice(0, 8)
   const devices = picked.reduce((s, id) => s + (projects.find((p) => p.id === id)?.devices ?? 0), 0)
   const fix = (n: number) => Math.min(30, Math.max(16, +n.toFixed(1)))
 
@@ -62,8 +62,9 @@ export default function Control() {
           <div style={{ position: 'relative', marginBottom: 14 }}>
             <Icon icon={faLayerGroup} style={{ position: 'absolute', left: 14, top: 12, color: 'var(--primary)' }} />
             <select className="select" style={{ width: '100%', height: 40, paddingLeft: 38, fontWeight: 500, color: 'var(--text)' }} value={gid} onChange={(e) => { setGid(e.target.value); setPicked([]) }}>
-              {groups.map((g) => <option key={g.id} value={g.id}>{g.name}　　{g.id}</option>)}
+              {groups.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
             </select>
+            <span className="faint num" style={{ position: 'absolute', right: 34, top: 12, fontSize: 12, pointerEvents: 'none' }}>{gid}</span>
           </div>
           <div className="row" style={{ justifyContent: 'space-between', marginBottom: 10, fontSize: 13 }}>
             <label className="row" style={{ cursor: 'pointer' }}><input type="checkbox" className="checkbox" checked={picked.length === online.length && online.length > 0} onChange={(e) => setPicked(e.target.checked ? online.map((p) => p.id) : [])} />全选在线项目</label>
@@ -79,7 +80,7 @@ export default function Control() {
               </div>
             )
           })}
-          {ps.length > 7 && <div className="c muted" style={{ fontSize: 12.5, marginTop: 10, cursor: 'pointer', textAlign: 'center' }} onClick={() => setExpand(!expand)}>{expand ? '收起' : `展开其余 ${ps.length - 7} 个项目`} <Icon icon={expand ? faChevronUp : faChevronDown} size="xs" /></div>}
+          {ps.length > 8 && <div className="c muted" style={{ fontSize: 12.5, marginTop: 10, cursor: 'pointer', textAlign: 'center' }} onClick={() => setExpand(!expand)}>{expand ? '收起' : `展开其余 ${ps.length - 8} 个项目`} <Icon icon={expand ? faChevronUp : faChevronDown} size="xs" /></div>}
         </Card>
 
         <Card>

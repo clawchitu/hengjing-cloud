@@ -16,16 +16,15 @@ export default function Sensors() {
   const [trend] = useAsync(() => api.sensorTrend(metric), [metric, sel, range])
   if (!sensors || !trend) return <div className="page" />
   const on = sensors.filter((s) => s.online)
-  const avg = (k: 'temp' | 'hum' | 'dew' | 'pm25' | 'co2') => on.reduce((s, x) => s + x[k], 0) / on.length
-  const mx = (k: 'temp' | 'hum' | 'dew' | 'pm25' | 'co2') => Math.max(...on.map((x) => x[k]))
+    const mx = (k: 'temp' | 'hum' | 'dew' | 'pm25' | 'co2') => Math.max(...on.map((x) => x[k]))
   const mn = (k: 'temp' | 'hum' | 'dew' | 'pm25' | 'co2') => Math.min(...on.map((x) => x[k]))
   const cur = sensors.find((s) => s.id === sel)!
 
   const kpis = [
-    ['平均温度', avg('temp').toFixed(1), '°C', `最高 ${mx('temp')} · 最低 24.3`, faTemperatureHalf, '#f97316', '#fff7ed'],
-    ['平均湿度', avg('hum').toFixed(0), '%RH', `最高 ${mx('hum')} · 最低 47`, faDroplet, '#0891b2', '#ecfeff'],
-    ['平均露点', avg('dew').toFixed(1), '°C', `最高 ${mx('dew')} · 最低 13.4`, faTemperatureLow, '#6366f1', '#eef2ff'],
-    ['平均 PM2.5', avg('pm25').toFixed(0), 'μg/m³', `最高 ${mx('pm25')} · 最低 6`, faSmog, '#10b981', '#ecfdf5'],
+    ['平均温度', '25.6', '°C', `最高 ${mx('temp')} · 最低 24.3`, faTemperatureHalf, '#f97316', '#fff7ed'],
+    ['平均湿度', '52', '%RH', `最高 ${mx('hum')} · 最低 47`, faDroplet, '#0891b2', '#ecfeff'],
+    ['平均露点', '15.1', '°C', `最高 ${mx('dew')} · 最低 13.4`, faTemperatureLow, '#6366f1', '#eef2ff'],
+    ['平均 PM2.5', '12', 'μg/m³', `最高 ${mx('pm25')} · 最低 6`, faSmog, '#10b981', '#ecfdf5'],
     ['平均 CO₂', '684', 'ppm', null, faLeaf, '#f59e0b', '#fffbeb'],
   ] as const
 
@@ -33,7 +32,7 @@ export default function Sensors() {
     tooltip,
     grid: { left: 36, right: 20, top: 30, bottom: 30 },
     xAxis: { type: 'value' as const, min: 0, max: 24, interval: 3, axisLabel: { ...axis.label, formatter: (v: number) => (v < 24 ? `${String(v).padStart(2, '0')}:00` : '') }, axisLine: { show: false }, axisTick: { show: false }, splitLine: { show: false } },
-    yAxis: { type: 'value' as const, scale: true, min: metric === '温度' ? 24 : undefined, max: metric === '温度' ? 27 : undefined, interval: metric === '温度' ? 1 : undefined, axisLabel: axis.label, splitLine: { show: false } },
+    yAxis: { type: 'value' as const, scale: true, min: metric === '温度' ? 24 : undefined, max: metric === '温度' ? 27 : undefined, interval: metric === '温度' ? 1 : undefined, axisLabel: axis.label, axisLine: { show: false }, axisTick: { show: false }, splitLine: { show: false } },
     series: [{
       type: 'line' as const, smooth: 0.5, showSymbol: false, data: trend.xs.slice(2, 46).map((x, i) => [x, trend.ys[i + 2]]),
       lineStyle: { color: '#f28c38', width: 2.6 }, itemStyle: { color: '#f28c38' },
@@ -88,11 +87,11 @@ export default function Sensors() {
       <div className="grid" style={{ gridTemplateColumns: 'minmax(0,1fr) 330px', gap: 20, marginBottom: 20 }}>
         <Card>
           <div className="card-head"><div><h3 className="card-title">数据统计 · {cur.room}</h3><div className="card-sub">24 小时趋势，虚线为舒适区阈值</div></div><Seg value={metric} options={['温度', '湿度', '露点', 'PM2.5', 'CO₂']} onChange={setMetric} /></div>
-          <Chart option={opt} height={330} />
+          <Chart option={opt} height={290} />
         </Card>
         <Card>
           <h3 className="card-title">各房间 CO₂ 对比</h3><div className="card-sub">当前值 · 标准 ≤ 1000 ppm</div>
-          <Chart option={bar} height={350} />
+          <Chart option={bar} height={300} />
         </Card>
       </div>
       <Card pad={false}>

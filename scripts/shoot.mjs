@@ -12,7 +12,7 @@ const browser = await chromium.launch({ executablePath: '/Applications/Google Ch
 for (const [k, [route, hpt]] of Object.entries(PAGES)) {
   if (only.length && !only.includes(k)) continue
   const h = Math.round(hpt * W / 1080)
-  const ctx = await browser.newContext({ viewport: { width: W, height: k === 'p01' || k === 'p12' ? Math.round(h * 0.814) : h }, deviceScaleFactor: 2 })
+  const ctx = await browser.newContext({ viewport: { width: W, height: k === 'p01' ? Math.round(h * 0.879) : k === 'p12' ? Math.round(h * 0.98) : h }, deviceScaleFactor: 2 })
   const page = await ctx.newPage()
   if (k !== 'p01') await page.addInitScript(() => { localStorage.setItem('hjc-auth', 'zhangjianguo'); localStorage.setItem('hjc-project', 'PRJ-10241') })
   else await page.addInitScript(() => localStorage.clear())

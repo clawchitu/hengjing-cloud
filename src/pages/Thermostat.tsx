@@ -47,8 +47,8 @@ export default function Thermostat() {
   const on = rooms.filter((r) => r.on)
   const eco = rooms.filter((r) => r.on && r.mode === '节能')
   const avgT = on.reduce((s, r) => s + r.temp, 0) / Math.max(1, on.length)
-  const avgH = on.reduce((s, r) => s + r.humidity, 0) / Math.max(1, on.length)
-  const avgD = on.reduce((s, r) => s + r.dew, 0) / Math.max(1, on.length)
+  const avgH = rooms.reduce((s, r) => s + r.humidity, 0) / rooms.length
+  const avgD = rooms.reduce((s, r) => s + r.dew, 0) / rooms.length
 
   const setPower = async (ids: string[], v: boolean) => setRooms(await api.setRoomPower(projectId, ids, v))
   const all = async (v: boolean) => {

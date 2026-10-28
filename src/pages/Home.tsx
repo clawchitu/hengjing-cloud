@@ -99,7 +99,7 @@ export default function Home() {
         <Card>
           <div className="card-head" style={{ marginBottom: 4 }}><div><h3 className="card-title">24 小时预报</h3><div className="card-sub">室外温度与相对湿度变化趋势</div></div>
             <div className="legend-dots"><span><i style={{ width: 14, height: 3, background: '#f28c38', display: 'inline-block' }} />温度 °C</span><span><i style={{ width: 14, height: 3, background: '#06b6d4', display: 'inline-block' }} />湿度 %</span></div></div>
-          <Chart option={opt} height={262} />
+          <Chart option={opt} height={236} />
           <div className="hourly">{w.hourIcons.map(([ic, h]) => <div key={h}><Icon icon={WX[ic][0]} style={{ color: WX[ic][1] }} /><span className="num">{h}</span></div>)}</div>
         </Card>
         <Card>

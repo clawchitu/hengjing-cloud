@@ -148,7 +148,7 @@ export interface Meter {
 }
 
 export const meters: Meter[] = [
-  { id: 'EM-T01', name: '热泵主机总回路', model: 'DTSD1352', phase: '三相', addr: '001', voltage: 381.2, current: 12.6, power: 7.84, today: 96.3, total: 28416.2, month: 1682.5, icon: 'heat', voltages: [220.4, 219.8, 221.1], currents: [12.4, 12.9, 12.5] },
+  { id: 'EM-T01', name: '热泵主机总回路', model: 'DTSD1352', phase: '三相', addr: '001', voltage: 381.2, current: 12.6, power: 7.86, today: 96.3, total: 28416.2, month: 1682.5, icon: 'heat', voltages: [220.4, 219.8, 221.1], currents: [12.4, 12.9, 12.5] },
   { id: 'EM-T02', name: '电梯动力回路', model: 'DTSD1352', phase: '三相', addr: '002', voltage: 380.6, current: 4.1, power: 1.95, today: 26.1, total: 6102.8, month: 452.0, icon: 'elevator', voltages: [219.6, 220.2, 219.9], currents: [4.0, 4.3, 3.9] },
   { id: 'EM-S01', name: '照明插座回路', model: 'DDS1352', phase: '单相', addr: '011', voltage: 228.6, current: 6.42, power: 1.43, today: 21.6, total: 5284.6, month: 398.1, icon: 'bulb' },
   { id: 'EM-S02', name: '新风除湿回路', model: 'DDS1352', phase: '单相', addr: '012', voltage: 229.1, current: 4.18, power: 0.94, today: 18.2, total: 4906.3, month: 336.4, icon: 'fan' },

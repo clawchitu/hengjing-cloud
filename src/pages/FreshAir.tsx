@@ -153,7 +153,7 @@ export default function FreshAir() {
 
       <Card style={{ marginBottom: 20 }}>
         <div className="card-head"><div><h3 className="card-title">温度 / 湿度 / 露点 统计</h3><div className="card-sub">{u.name} · 送风参数</div></div><Seg value={range} options={['24小时', '7天', '30天']} onChange={setRange} /></div>
-        <Chart option={opt} height={330} />
+        <Chart option={opt} height={280} />
       </Card>
 
       <Card pad={false}>

@@ -24,21 +24,33 @@ function NightScene() {
         if (r() > 0.86) far.push(<rect key={`fw${wx}-${wy}`} x={wx} y={wy} width={3} height={5} fill={r() > 0.5 ? '#fcd34d' : '#93c5fd'} opacity={0.35 + r() * 0.4} />)
       x += w + 4
     }
-    // main tower
+    // main tower: front face + darker side face, floor slabs, glazing, warm interiors, balcony planting
     const tower: React.ReactElement[] = []
-    const tx = 270, tw = 360, top = 40
+    const tx = 250, tw = 330, side = 90, top = 30, fh = 46
     tower.push(<rect key="tb" x={tx} y={top} width={tw} height={1000 - top} fill="url(#towerG)" />)
-    for (let fy = top + 30, i = 0; fy < 1000; fy += 62, i++) {
-      tower.push(<rect key={'sl' + i} x={tx - 18} y={fy} width={tw + 36} height={7} fill="#1e3354" />)
-      tower.push(<rect key={'gl' + i} x={tx - 18} y={fy - 14} width={tw + 36} height={14} fill="#0f2440" opacity=".7" />)
-      for (let c = 0; c < 9; c++) {
-        const wx = tx + 10 + c * 39, lit = r()
-        tower.push(<rect key={`w${i}-${c}`} x={wx} y={fy + 12} width={30} height={42} rx={1} fill={lit > 0.55 ? '#f6c66b' : lit > 0.35 ? '#c0874a' : '#132a48'} opacity={lit > 0.35 ? 0.55 + r() * 0.35 : 0.9} />)
-        tower.push(<rect key={`m${i}-${c}`} x={wx + 14} y={fy + 12} width={2} height={42} fill="#0b1a2e" opacity=".6" />)
+    tower.push(<polygon key="ts" points={`${tx + tw},${top} ${tx + tw + side},${top + 26} ${tx + tw + side},1000 ${tx + tw},1000`} fill="#0a182c" />)
+    for (let fy = top + 14, i = 0; fy < 1000; fy += fh, i++) {
+      const cols = 11, cw = (tw - 12) / cols
+      for (let c = 0; c < cols; c++) {
+        const wx = tx + 6 + c * cw, lit = r()
+        const warm = lit > 0.6
+        tower.push(<rect key={`w${i}-${c}`} x={wx + 1} y={fy + 8} width={cw - 2} height={fh - 14} fill={warm ? 'url(#warm)' : lit > 0.3 ? '#1b3556' : '#11263f'} opacity={warm ? 0.22 + r() * 0.4 : 0.9} />)
+        if (warm && r() > 0.5) tower.push(<rect key={`lamp${i}-${c}`} x={wx + cw * 0.3} y={fy + 10} width={cw * 0.4} height={2} fill="#ffe7b0" opacity=".8" />)
+        tower.push(<rect key={`m${i}-${c}`} x={wx + cw - 1.5} y={fy + 8} width={1.5} height={fh - 14} fill="#0b1a2e" opacity=".8" />)
       }
-      // balcony plants
-      for (let pl = 0; pl < 6; pl++) tower.push(<circle key={`p${i}-${pl}`} cx={tx - 10 + r() * (tw + 20)} cy={fy - 4} r={4 + r() * 6} fill="#16331f" opacity=".85" />)
+      // side face windows
+      for (let c = 0; c < 3; c++) {
+        const lit = r() > 0.7
+        tower.push(<polygon key={`sw${i}-${c}`} points={`${tx + tw + 8 + c * 27},${fy + 10 + c * 7.5} ${tx + tw + 30 + c * 27},${fy + 15 + c * 7.5} ${tx + tw + 30 + c * 27},${fy + 40 + c * 7.5} ${tx + tw + 8 + c * 27},${fy + 35 + c * 7.5}`} fill={lit ? '#a8743c' : '#0f2139'} opacity={lit ? 0.55 : 1} />)
+      }
+      // balcony slab + glass railing + planters
+      tower.push(<rect key={'sl' + i} x={tx - 14} y={fy} width={tw + 28} height={5} fill="#2a4266" />)
+      tower.push(<rect key={'slh' + i} x={tx - 14} y={fy} width={tw + 28} height={1.2} fill="#4b6a93" opacity=".7" />)
+      tower.push(<rect key={'gl' + i} x={tx - 14} y={fy - 11} width={tw + 28} height={11} fill="#6c8db5" opacity=".08" />)
+      for (let pl = 0; pl < 9; pl++) tower.push(<ellipse key={`p${i}-${pl}`} cx={tx - 8 + r() * (tw + 16)} cy={fy - 3} rx={4 + r() * 7} ry={3 + r() * 4} fill={r() > 0.5 ? '#1d3b26' : '#244a2c'} opacity=".9" />)
     }
+    // rooftop garden
+    for (let pl = 0; pl < 16; pl++) tower.push(<ellipse key={'rt' + pl} cx={tx + r() * tw} cy={top - 2} rx={6 + r() * 8} ry={5 + r() * 6} fill="#1d3b26" />)
     return { far, tower }
   }, [])
 
@@ -55,7 +67,8 @@ function NightScene() {
       <defs>
         <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stopColor="#0b1d36" /><stop offset=".55" stopColor="#15304f" /><stop offset=".8" stopColor="#3a3f55" /><stop offset="1" stopColor="#0a1628" /></linearGradient>
         <linearGradient id="towerG" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stopColor="#0e213b" /><stop offset=".5" stopColor="#162d4d" /><stop offset="1" stopColor="#0c1c33" /></linearGradient>
-        <linearGradient id="shade" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stopColor="#0a1a30" stopOpacity=".88" /><stop offset=".6" stopColor="#0a1a30" stopOpacity=".55" /><stop offset="1" stopColor="#0a1a30" stopOpacity=".35" /></linearGradient>
+        <linearGradient id="warm" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stopColor="#ffd890" /><stop offset="1" stopColor="#b8732f" /></linearGradient>
+        <linearGradient id="shade" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stopColor="#0a1a30" stopOpacity=".9" /><stop offset=".55" stopColor="#0a1a30" stopOpacity=".62" /><stop offset="1" stopColor="#0a1a30" stopOpacity=".45" /></linearGradient>
         <linearGradient id="fadeB" x1="0" y1="0" x2="0" y2="1"><stop offset=".6" stopColor="#0a1628" stopOpacity="0" /><stop offset="1" stopColor="#0a1628" stopOpacity=".9" /></linearGradient>
       </defs>
       <rect width="1000" height="1000" fill="url(#sky)" />

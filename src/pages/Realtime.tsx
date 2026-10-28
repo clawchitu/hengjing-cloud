@@ -165,7 +165,7 @@ export default function Realtime() {
           <Card>
             <div className="card-head"><div><h3 className="card-title">实时曲线</h3><div className="card-sub">压缩机频率与电流 · 近 30 分钟</div></div>
               <div className="legend-dots"><span><i style={{ width: 14, height: 3, background: '#06b6d4', display: 'inline-block' }} />频率 Hz</span><span><i style={{ width: 14, height: 3, background: '#f59e0b', display: 'inline-block' }} />电流 A</span></div></div>
-            <Chart option={lineOpt} height={290} />
+            <Chart option={lineOpt} height={230} />
           </Card>
         </div>
       </div>
