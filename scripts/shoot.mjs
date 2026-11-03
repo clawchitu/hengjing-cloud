@@ -15,7 +15,7 @@ async function session(role, user, pw) {
   const p = await ctx.newPage()
   p.on('pageerror', (e) => errors.push(`${role} ${p.url()} ${e.message}`))
   p.on('console', (m) => m.type() === 'error' && errors.push(`${role} ${p.url()} ${m.text()}`))
-  const shot = async (name) => { await p.waitForTimeout(900); await p.screenshot({ path: `${dir}/${name}.png`, fullPage: true }) }
+  const shot = async (name) => { await p.waitForTimeout(2000); await p.screenshot({ path: `${dir}/${name}.png`, fullPage: true }) }
   await p.goto(base + '/login'); await shot('00-login')
   await p.fill('input[autocomplete=username]', user); await p.fill('input[autocomplete=current-password]', pw)
   await p.click('.btn-login'); await p.waitForURL('**/home')
