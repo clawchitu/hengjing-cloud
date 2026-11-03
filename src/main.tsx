@@ -16,13 +16,9 @@ import Login from './pages/Login'
 import Home from './pages/Home'
 import Groups from './pages/Groups'
 import Control from './pages/Control'
-import Alarms from './pages/Alarms'
 import Sensors from './pages/Sensors'
 import Thermostat from './pages/Thermostat'
 import FreshAir from './pages/FreshAir'
-import Meters from './pages/Meters'
-import Realtime from './pages/Realtime'
-import Params from './pages/Params'
 import Connections from './pages/Connections'
 import Settings from './pages/Settings'
 import type { ReactNode } from 'react'
@@ -43,15 +39,10 @@ createRoot(document.getElementById('root')!).render(
             <Route path="/home" element={<Home />} />
             <Route path="/groups" element={<Groups />} />
             <Route path="/control" element={<Control />} />
-            <Route path="/alarm-center" element={<Alarms center />} />
             <Route path="/sensors" element={<Sensors />} />
             <Route path="/thermostat" element={<Thermostat />} />
             <Route path="/fresh-air" element={<FreshAir />} />
-            <Route path="/meters" element={<Meters />} />
-            <Route path="/realtime" element={<Realtime />} />
-            <Route path="/params" element={<Params />} />
             <Route path="/connections" element={<Connections />} />
-            <Route path="/alarms" element={<Alarms />} />
             <Route path="/settings" element={<Settings />} />
           </Route>
           <Route path="*" element={<Navigate to="/home" replace />} />

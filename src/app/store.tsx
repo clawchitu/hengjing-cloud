@@ -1,39 +1,53 @@
-import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from 'react'
+import { createContext, useCallback, useContext, useMemo, useState, type ReactNode } from 'react'
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome'
 import { faCircleCheck, faCircleXmark, faTriangleExclamation } from '@fortawesome/free-solid-svg-icons'
-import { projects } from '../mock/data'
 import * as api from '../api'
+import type { Project, Role, Scope, User } from '../api'
 
 type Toast = { id: number; text: string; err?: boolean }
 type Confirm = { title: string; body: ReactNode; okText?: string; danger?: boolean; resolve: (v: boolean) => void }
+type Auth = { username: string; role: Role }
 
 interface Ctx {
   authed: boolean
-  login: (u: string, remember: boolean) => void
+  user: User
+  scope: Scope
+  login: (a: Auth, remember: boolean) => void
   logout: () => void
   projectId: string
+  /** make a project the 当前项目 and report the select event to the backend */
   setProjectId: (id: string) => void
-  project: (typeof projects)[number]
+  project: Project
   toast: (text: string, err?: boolean) => void
   confirm: (o: Omit<Confirm, 'resolve'>) => Promise<boolean>
-  alarmBadge: number
-  currentUnprocessed: number
-  refreshAlarms: () => void
+  /** bumps whenever a select event was reported (常用项目 refresh) */
+  selectTick: number
 }
 
 const C = createContext<Ctx>(null as unknown as Ctx)
 export const useApp = () => useContext(C)
 
 const KEY = 'hjc-auth'
+function readAuth(): Auth | null {
+  const raw = localStorage.getItem(KEY) || sessionStorage.getItem(KEY)
+  if (!raw) return null
+  try {
+    const a = JSON.parse(raw) as Auth
+    return a && typeof a.username === 'string' && (a.role === 'dealer' || a.role === 'admin') ? a : null
+  } catch { return null }
+}
+
 export function AppProvider({ children }: { children: ReactNode }) {
-  const [authed, setAuthed] = useState(() => !!(localStorage.getItem(KEY) || sessionStorage.getItem(KEY)))
-  const [projectId, setProjectId] = useState(() => localStorage.getItem('hjc-project') || 'PRJ-10241')
+  const [auth, setAuth] = useState<Auth | null>(readAuth)
+  const [storedPid, setStoredPid] = useState(() => localStorage.getItem('hjc-project') || '')
   const [toasts, setToasts] = useState<Toast[]>([])
   const [dlg, setDlg] = useState<Confirm | null>(null)
-  const [alarmBadge, setBadge] = useState(api.unprocessedAll())
-  const [currentUnprocessed, setCur] = useState(api.unprocessedCurrent())
+  const [selectTick, setTick] = useState(0)
 
-  useEffect(() => { localStorage.setItem('hjc-project', projectId) }, [projectId])
+  const user = useMemo(() => api.profile(auth?.username ?? 'cosyhome'), [auth])
+  const scope = useMemo(() => api.scopeOf(user), [user])
+  // stale / foreign project id (e.g. after switching account) → first visible project
+  const project = scope.projects.find((p) => p.id === storedPid) ?? scope.projects[0]
 
   const toast = useCallback((text: string, err?: boolean) => {
     const id = Date.now() + Math.random()
@@ -43,15 +57,20 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const confirm = useCallback((o: Omit<Confirm, 'resolve'>) => new Promise<boolean>((resolve) => setDlg({ ...o, resolve })), [])
   const close = (v: boolean) => { dlg?.resolve(v); setDlg(null) }
 
+  const setProjectId = useCallback((id: string) => {
+    setStoredPid(id)
+    localStorage.setItem('hjc-project', id)
+    api.reportProjectSelect(user, id).then(() => setTick((t) => t + 1))
+  }, [user])
+
   const value: Ctx = {
-    authed,
-    login: (u, remember) => { (remember ? localStorage : sessionStorage).setItem(KEY, u); setAuthed(true) },
-    logout: () => { localStorage.removeItem(KEY); sessionStorage.removeItem(KEY); setAuthed(false) },
-    projectId, setProjectId,
-    project: projects.find((p) => p.id === projectId) ?? projects[0],
-    toast, confirm,
-    alarmBadge, currentUnprocessed,
-    refreshAlarms: () => { setBadge(api.unprocessedAll()); setCur(api.unprocessedCurrent()) },
+    authed: !!auth,
+    user, scope,
+    login: (a, remember) => { (remember ? localStorage : sessionStorage).setItem(KEY, JSON.stringify(a)); setAuth(a) },
+    logout: () => { localStorage.removeItem(KEY); sessionStorage.removeItem(KEY); setAuth(null) },
+    projectId: project.id, setProjectId,
+    project,
+    toast, confirm, selectTick,
   }
 
   return (

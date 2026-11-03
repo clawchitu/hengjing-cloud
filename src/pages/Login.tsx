@@ -1,9 +1,8 @@
 import type React from 'react'
 import { useMemo, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
-import { faEyeSlash, faEye, faMobileScreen, faChartLine, faSliders, faShieldHalved, faLock, faThermometerHalf, faWind, faDroplet, faCube } from '@fortawesome/free-solid-svg-icons'
+import { faEyeSlash, faEye, faChartLine, faSliders, faShieldHalved, faLock, faThermometerHalf, faWind, faDroplet, faCube } from '@fortawesome/free-solid-svg-icons'
 import { faUser as faUserR } from '@fortawesome/free-regular-svg-icons'
-import { faWeixin } from '@fortawesome/free-brands-svg-icons'
 import { Icon, LogoMark } from '../components/ui'
 import { useApp } from '../app/store'
 import * as api from '../api'
@@ -111,13 +110,14 @@ export default function Login() {
     e.preventDefault()
     if (!u.trim() || !pw) return toast('请输入用户名和密码', true)
     setBusy(true)
+    let auth
     try {
-      await api.login(u, pw)
+      auth = await api.login(u.trim(), pw)
     } catch {
       setBusy(false)
       return toast('用户名或密码错误', true)
     }
-    login(u, remember)
+    login(auth, remember)
     toast('登录成功，欢迎回来')
     nav(loc.state?.from && loc.state.from !== '/login' ? loc.state.from : '/home', { replace: true })
   }
@@ -135,7 +135,7 @@ export default function Login() {
             <div className="feat">
               <div><Icon icon={faChartLine} /><b>实时监测</b><small>秒级数据刷新</small></div>
               <div><Icon icon={faSliders} /><b>统一控制</b><small>分组批量下发</small></div>
-              <div><Icon icon={faShieldHalved} /><b>智能告警</b><small>异常即时推送</small></div>
+              <div><Icon icon={faShieldHalved} /><b>分级权限</b><small>经销商 / 管理员</small></div>
             </div>
           </div>
           <div className="login-foot">© 2025 恒境云科技 · 沪ICP备2025000000号</div>
@@ -158,11 +158,6 @@ export default function Login() {
             <a className="cyan" onClick={() => toast('已向绑定手机发送重置链接')} style={{ cursor: 'pointer' }}>忘记密码?</a>
           </div>
           <button className="btn-login" disabled={busy}>{busy ? '登录中…' : '登 录'}</button>
-          <div className="divider">其他方式</div>
-          <div className="alt-login">
-            <button type="button" className="btn" onClick={() => toast('短信登录：演示环境未开通', true)}><Icon icon={faMobileScreen} className="faint" />短信登录</button>
-            <button type="button" className="btn" onClick={() => toast('企业微信：演示环境未开通', true)}><Icon icon={faWeixin} style={{ color: '#07c160' }} />企业微信</button>
-          </div>
           <div className="login-ver">平台版本 <b>v3.6.2</b> · 技术支持 400-820-1234</div>
         </form>
       </div>
