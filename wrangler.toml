@@ -1,6 +1,9 @@
-# 恒境云 HVAC IoT demo — static SPA on Workers Static Assets, gated by Basic auth (worker/index.js)
+# 恒境云 HVAC IoT demo — static SPA on Workers Static Assets, in-app login checked by worker/index.js
 # Deploy: npx wrangler deploy   (build runs automatically)
-# Secret: BASIC_PASS — security find-generic-password -s hvac-demo-basic -w | npx wrangler secret put BASIC_PASS
+# Secrets (never in repo): BASIC_PASS = dealer login cosyhome, ADMIN_PASS = admin login hjadmin
+#   security find-generic-password -s hvac-demo-basic -w | npx wrangler secret put BASIC_PASS
+#   security find-generic-password -s hvac-demo-admin -w | npx wrangler secret put ADMIN_PASS
+# Local dev: npx wrangler dev with a gitignored .dev.vars (dummy BASIC_PASS / ADMIN_PASS)
 name = "hvac-demo"
 main = "worker/index.js"
 compatibility_date = "2026-10-01"

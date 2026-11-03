@@ -321,3 +321,85 @@ tr.st-err td { background: #fffcf2; }
 .bico { width: 30px; height: 30px; border-radius: 8px; background: #f1f5f9; color: #64748b; display: inline-grid; place-items: center; font-size: 12px; margin-right: 12px; }
 tr.cur-row td { background: #f0fdff; }
 tr.cur-row .bico { background: #cffafe; color: var(--primary); }
+
+/* ------------------------------------------------------------ v2 additions */
+/* project search (topbar) */
+.search { position: relative; width: 280px; }
+.search-pop { position: absolute; top: calc(100% + 6px); left: 0; right: 0; background: #fff; border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 12px 32px rgba(15,23,42,.14); padding: 6px; z-index: 60; max-height: 360px; overflow-y: auto; }
+.sp-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 10px; border-radius: 8px; cursor: pointer; color: var(--text); }
+.sp-row:hover { background: var(--bg); }
+.sp-row.cur { background: var(--primary-soft); }
+.sp-row b { display: block; font-size: 13px; font-weight: 600; }
+.sp-row small { display: block; font-size: 11.5px; color: var(--faint); margin-top: 2px; }
+.sp-empty { padding: 14px 10px; font-size: 12.5px; color: var(--muted); }
+.proj-menu .dlr { font-size: 11px; font-weight: 700; color: var(--primary); padding: 10px 10px 2px; border-top: 1px solid var(--line-2); }
+.crumb-off { margin-left: 10px; font-size: 11.5px; }
+
+/* offline project state */
+.offline-banner { display: flex; align-items: center; gap: 18px; background: linear-gradient(90deg, #7f1d1d, #b91c1c); color: #fff; border-radius: 14px; padding: 18px 22px; margin-bottom: 22px; box-shadow: 0 8px 24px rgba(185,28,28,.28); border: 1px solid #ef4444; }
+.offline-banner .ob-ico { width: 52px; height: 52px; border-radius: 12px; background: rgba(255,255,255,.16); display: grid; place-items: center; font-size: 24px; flex: none; }
+.offline-banner .ob-main { flex: 1; min-width: 0; }
+.offline-banner .ob-main h2, .offline-banner .ob-main b:first-child { font-size: 19px; font-weight: 700; margin: 0 0 4px; display: block; }
+.offline-banner .ob-main p, .offline-banner .ob-main span, .offline-banner .ob-main small { color: #fee2e2; font-size: 13px; line-height: 1.6; margin: 0; }
+.offline-banner .ob-last { text-align: right; background: rgba(0,0,0,.18); border-radius: 10px; padding: 10px 16px; flex: none; }
+.offline-banner .ob-last small { display: block; font-size: 11.5px; color: #fecaca; }
+.offline-banner .ob-last b { display: block; font-size: 18px; font-weight: 700; margin: 3px 0; }
+.offline-page { padding-bottom: 0; }
+.offline-data { filter: grayscale(1); opacity: .5; pointer-events: none; user-select: none; position: relative; }
+.offline-data .page { padding: 0 0 32px; }
+
+/* 集成项目: dealer filter (admin) */
+.dealer-pick { background: #fff; border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; margin-bottom: 14px; }
+.dealer-pick label { display: block; font-size: 12px; font-weight: 600; color: var(--text-2); margin-bottom: 6px; }
+.dealer-pick .select { width: 100%; height: 38px; font-weight: 500; color: var(--text); }
+.dealer-pick small { display: block; font-size: 11.5px; color: var(--faint); margin-top: 6px; }
+
+/* home 常用项目 */
+.demo-seg { display: inline-flex; align-items: center; gap: 8px; margin-right: 16px; padding: 3px 4px 3px 10px; border: 1px dashed #cbd5e1; border-radius: 9px; }
+.demo-seg small { font-size: 11px; color: var(--faint); }
+.demo-seg .seg button { padding: 3px 10px; font-size: 12px; }
+.empty-fav { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 34px 0 30px; color: var(--muted); border: 1.5px dashed var(--line); border-radius: 12px; }
+.empty-fav svg { font-size: 26px; color: #cbd5e1; margin-bottom: 4px; }
+.empty-fav b { font-size: 15px; color: var(--text-2); }
+.empty-fav small { font-size: 12.5px; color: var(--faint); }
+
+/* 统一控制 capability notes */
+.cap-note { display: flex; gap: 8px; align-items: flex-start; background: #f0f9ff; border: 1px solid #bae6fd; color: #0369a1; border-radius: 10px; padding: 9px 12px; font-size: 12.5px; line-height: 1.55; margin-top: 12px; }
+.cap-note svg { margin-top: 3px; flex: none; }
+.cap-note.big { padding: 14px 16px; margin-top: 20px; }
+.cap-note.big b { display: block; font-size: 13.5px; margin-bottom: 2px; }
+.cap-note.big span { color: #0c4a6e; }
+
+/* sensors */
+.sensor .nocap { font-size: 11.5px; color: var(--faint); background: #f8fafc; border-radius: 6px; padding: 5px 8px; }
+.chart-loading { display: grid; place-items: center; color: var(--faint); font-size: 13px; }
+
+/* thermostat placeholder */
+.card.placeholder { display: flex; flex-direction: column; align-items: center; text-align: center; padding: 64px 24px 70px; }
+.placeholder .ph-ico { width: 72px; height: 72px; border-radius: 20px; background: var(--primary-soft); color: var(--primary); display: grid; place-items: center; font-size: 30px; margin-bottom: 18px; }
+.placeholder h3 { font-size: 20px; margin: 0 0 10px; }
+.placeholder p { color: var(--muted); font-size: 13.5px; line-height: 1.8; margin: 0; }
+
+/* fresh air (new PDF layout) */
+.fa-top.wide { grid-template-columns: minmax(0, 1fr); }
+.fa-banner { display: flex; gap: 14px; margin-bottom: 16px; }
+.fb-filter { flex: 1; display: flex; align-items: center; gap: 22px; border: 1px solid #a7f3d0; background: linear-gradient(90deg, #ecfdf5, #f8fffc); border-radius: 12px; padding: 14px 22px; }
+.fb-filter svg { flex: none; }
+.fb-t { display: flex; align-items: center; gap: 8px; font-size: 15px; }
+.fb-t svg { color: var(--green-2); }
+.fb-s { font-size: 13px; color: var(--text-2); margin-top: 6px; }
+.fb-s b { font-weight: 700; color: var(--text); }
+.fb-mode { width: 200px; flex: none; border: 1px solid var(--line); border-radius: 12px; padding: 16px; display: flex; flex-direction: column; justify-content: center; gap: 8px; background: #f8fafc; }
+.fb-mode small { font-size: 12px; color: var(--muted); }
+.fb-mode b { font-size: 26px; font-weight: 700; }
+.fb-mode .pill { align-self: flex-start; }
+.fa-tiles { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+.fa-tiles.six { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+.fa-tiles > div { background: #f8fafc; border-radius: 10px; padding: 11px 16px; }
+.fa-tiles span { display: block; font-size: 12px; color: var(--muted); margin-bottom: 5px; }
+.fa-tiles b { font-size: 14.5px; font-weight: 600; }
+.fixed-ctl { display: flex; gap: 12px; align-items: flex-start; background: #f8fafc; border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; margin: 10px 0 14px; }
+.fixed-ctl svg { color: var(--muted); margin-top: 3px; }
+.fixed-ctl b { display: block; font-size: 14px; }
+.fixed-ctl small { display: block; font-size: 11.5px; color: var(--muted); margin-top: 3px; line-height: 1.5; }
+.full { grid-column: 1 / -1; }

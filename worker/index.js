@@ -1,5 +1,11 @@
-// Static SPA. The in-app login page posts to /api/login, checked here against user "cosyhome"
-// and the BASIC_PASS secret (source of truth: macOS Keychain "hvac-demo-basic"/cosyhome). Owner's ask 10/28: single in-app login, no browser Basic-auth prompt.
+// Static SPA. The in-app login page posts to /api/login, checked here against two demo accounts:
+//   cosyhome → role "dealer" (经销商), password = BASIC_PASS secret (source of truth: macOS Keychain "hvac-demo-basic"/cosyhome)
+//   hjadmin  → role "admin"  (管理员), password = ADMIN_PASS secret (source of truth: macOS Keychain "hvac-demo-admin"/hjadmin)
+// Owner's ask 10/28: single in-app login, no browser Basic-auth prompt. Roles added 11/3 (v2).
+const ACCOUNTS = [
+  { username: 'cosyhome', secret: 'BASIC_PASS', role: 'dealer' },
+  { username: 'hjadmin', secret: 'ADMIN_PASS', role: 'admin' },
+]
 const enc = new TextEncoder()
 function safeEqual(a, b) {
   const x = enc.encode(a), y = enc.encode(b)
@@ -14,8 +20,14 @@ export default {
       if (req.method !== 'POST') return new Response('method', { status: 405 })
       let b = {}
       try { b = await req.json() } catch {}
-      const ok = !!env.BASIC_PASS && safeEqual(String(b.username || ''), 'cosyhome') && safeEqual(String(b.password || ''), env.BASIC_PASS)
-      return new Response(JSON.stringify({ ok }), { status: ok ? 200 : 401, headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' } })
+      const u = String(b.username || ''), pw = String(b.password || '')
+      let hit = null
+      for (const a of ACCOUNTS) {
+        const ok = !!env[a.secret] && safeEqual(u, a.username) && safeEqual(pw, env[a.secret])
+        if (ok) hit = a
+      }
+      const ok = !!hit
+      return new Response(JSON.stringify(ok ? { ok, role: hit.role, username: hit.username } : { ok }), { status: ok ? 200 : 401, headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' } })
     }
     const res = await env.ASSETS.fetch(req)
     const out = new Response(res.body, res)
