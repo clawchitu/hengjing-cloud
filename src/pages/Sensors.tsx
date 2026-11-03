@@ -75,14 +75,16 @@ export default function Sensors() {
   // summary rows computed from the API data for the selected sensor
   const rows = stats && cur ? curMetrics.map((m) => {
     if (stats.hours) {
-      const vs = stats.hours.map((h) => h[m.key] as number)
+      const vs = stats.hours.map((h) => h[m.key]).filter((v): v is number => v !== undefined)
+      if (!vs.length) return null
       const bad = vs.filter((v) => out(m, v)).length
       return { m, avg: vs.reduce((a, b) => a + b, 0) / vs.length, max: Math.max(...vs), min: Math.min(...vs), over: `${bad} h`, overN: bad, pct: Math.round(((vs.length - bad) / vs.length) * 100) }
     }
-    const ds = stats.days!.map((d) => d[m.key]!)
+    const ds = stats.days!.map((d) => d[m.key]).filter((a) => a !== undefined)
+    if (!ds.length) return null
     const bad = ds.filter((a) => out(m, a.max) || out(m, a.min)).length
     return { m, avg: ds.reduce((a, b) => a + b.avg, 0) / ds.length, max: Math.max(...ds.map((a) => a.max)), min: Math.min(...ds.map((a) => a.min)), over: `${bad} 天`, overN: bad, pct: Math.round(((ds.length - bad) / ds.length) * 100) }
-  }) : []
+  }).filter((r) => r !== null) : []
 
   const avg = (k: MetricKey) => { const v = on.filter((s) => has(s, k)).map((s) => s[k] as number); return { a: v.reduce((x, y) => x + y, 0) / v.length, mx: Math.max(...v), mn: Math.min(...v), n: v.length } }
 

@@ -48,7 +48,7 @@ export default function Control() {
     })
     if (!ok) return
     setSending(true)
-    const r = await api.sendUnified({ picked, power, mode, ...(withRooms ? { roomSw, temp: keep ? null : temp } : {}) })
+    const r = await api.sendUnified({ targets: picked.map((id) => ({ projectId: id, power, mode, ...(withRooms && !noRoomP.some((p) => p.id === id) ? { roomSw, temp: keep ? null : temp } : {}) })) })
     setSending(false)
     const summary = [power, mode, ...(withRooms ? [roomSw === '全部开启' ? '全部房间开启' : roomSw === '全部关闭' ? '全部房间关闭' : '房间不变', keep ? '温度不变' : temp.toFixed(1) + '°C'] : [])].join(' / ')
     const rows = picked.map((id, i) => { const p = projects.find((x) => x.id === id)!; const total = p.devices; const okN = i === 2 ? Math.round(total * 0.68) : total; return { name: p.name, id, ok: okN, total, status: okN === total ? '成功' : '执行中', note: okN === total ? '—' : '等待温控面板应答' } })

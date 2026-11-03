@@ -1,3 +1,4 @@
+import { Fragment } from 'react'
 import { useEffect, useRef, useState } from 'react'
 import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import {
@@ -171,9 +172,9 @@ export default function Layout() {
         {offline ? (
           <div className="page offline-page">
             <OfflineBanner p={project} />
-            <div className="offline-data" aria-disabled><Outlet /></div>
+            <div className="offline-data" aria-disabled inert><Fragment key={project.id}><Outlet /></Fragment></div>
           </div>
-        ) : <Outlet />}
+        ) : <Fragment key={project.id}><Outlet /></Fragment>}
       </div>
     </div>
   )

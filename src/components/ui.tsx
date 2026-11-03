@@ -57,7 +57,7 @@ export function Toggle({ on, onChange, disabled }: { on: boolean; onChange?: (v:
 }
 
 export function Chart({ option, height = 300, style }: { option: object; height?: number; style?: CSSProperties }) {
-  return <ReactECharts option={option as EChartsOption} style={{ height, width: '100%', ...style }} notMerge={false} lazyUpdate opts={{ renderer: 'svg' }} />
+  return <ReactECharts option={option as EChartsOption} style={{ height, width: '100%', ...style }} notMerge lazyUpdate opts={{ renderer: 'svg' }} />
 }
 
 export function Pager({ total, page, size, onPage, label }: { total: number; page: number; size: number; onPage: (p: number) => void; label?: ReactNode }) {

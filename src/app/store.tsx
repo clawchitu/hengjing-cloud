@@ -66,7 +66,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const value: Ctx = {
     authed: !!auth,
     user, scope,
-    login: (a, remember) => { (remember ? localStorage : sessionStorage).setItem(KEY, JSON.stringify(a)); setAuth(a) },
+    login: (a, remember) => { localStorage.removeItem(KEY); sessionStorage.removeItem(KEY); (remember ? localStorage : sessionStorage).setItem(KEY, JSON.stringify(a)); setAuth(a) },
     logout: () => { localStorage.removeItem(KEY); sessionStorage.removeItem(KEY); setAuth(null) },
     projectId: project.id, setProjectId,
     project,
