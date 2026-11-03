@@ -59,16 +59,20 @@ export default function Sensors() {
     legend: isDaily ? { top: 0, right: 0, icon: 'rect', itemWidth: 16, itemHeight: 3, textStyle: { color: '#64748b', fontSize: 11 } } : undefined,
     grid: { left: 44, right: 20, top: 30, bottom: 30 },
     xAxis: { type: 'category' as const, boundaryGap: false, data: xs, axisLabel: { ...axis.label, interval: isDaily ? 'auto' as const : 2 }, axisLine: { show: false }, axisTick: { show: false } },
-    yAxis: { type: 'value' as const, scale: true, axisLabel: axis.label, axisLine: { show: false }, axisTick: { show: false }, splitLine: { show: false } },
+    yAxis: { type: 'value' as const, scale: true,
+      // keep the comfort thresholds inside the plotted range so the dashed lines are always visible
+      min: (v: { min: number; max: number }) => { const lo = Math.min(v.min, metric.lo ?? v.min); const pad = (Math.max(v.max, metric.hi) - lo) * 0.08; return +(lo - pad).toFixed(metric.digits) },
+      max: (v: { min: number; max: number }) => { const hi = Math.max(v.max, metric.hi); const pad = (hi - Math.min(v.min, metric.lo ?? v.min)) * 0.08; return +(hi + pad).toFixed(metric.digits) },
+      axisLabel: axis.label, axisLine: { show: false }, axisTick: { show: false }, splitLine: { show: false } },
     series: isDaily ? [
       { name: '日均值', type: 'line' as const, smooth: true, showSymbol: false, data: stats.days!.map((d) => d[metric.key]?.avg), lineStyle: { color: '#f28c38', width: 2.6 }, itemStyle: { color: '#f28c38' },
-        markLine: { silent: true, symbol: 'none', label: { show: false }, lineStyle: { color: '#cbd5e1', type: [6, 6] as unknown as 'dashed', width: 1 }, data: [metric.lo, metric.hi].filter((v) => v !== undefined).map((y) => ({ yAxis: y })) } },
+        markLine: { silent: true, symbol: 'none', label: { show: true, position: 'insideEndTop' as const, color: '#64748b', fontSize: 11, formatter: (x: { value: number }) => (x.value === metric.hi ? `上限 ${metric.hi}` : `下限 ${metric.lo}`) }, lineStyle: { color: '#94a3b8', type: [6, 6] as unknown as 'dashed', width: 1.2 }, data: [metric.lo, metric.hi].filter((v) => v !== undefined).map((y) => ({ yAxis: y })) } },
       { name: '日最高', type: 'line' as const, smooth: true, showSymbol: false, data: stats.days!.map((d) => d[metric.key]?.max), lineStyle: { color: '#f43f5e', width: 1.2, type: 'dashed' as const }, itemStyle: { color: '#f43f5e' } },
       { name: '日最低', type: 'line' as const, smooth: true, showSymbol: false, data: stats.days!.map((d) => d[metric.key]?.min), lineStyle: { color: '#06b6d4', width: 1.2, type: 'dashed' as const }, itemStyle: { color: '#06b6d4' } },
     ] : [{
       name: metric.tab, type: 'line' as const, smooth: 0.5, showSymbol: false, data: stats.hours!.map((h) => h[metric.key]),
       lineStyle: { color: '#f28c38', width: 2.6 }, itemStyle: { color: '#f28c38' },
-      markLine: { silent: true, symbol: 'none', label: { show: false }, lineStyle: { color: '#cbd5e1', type: [6, 6] as unknown as 'dashed', width: 1 }, data: [metric.lo, metric.hi].filter((v) => v !== undefined).map((y) => ({ yAxis: y })) },
+      markLine: { silent: true, symbol: 'none', label: { show: true, position: 'insideEndTop' as const, color: '#64748b', fontSize: 11, formatter: (x: { value: number }) => (x.value === metric.hi ? `上限 ${metric.hi}` : `下限 ${metric.lo}`) }, lineStyle: { color: '#94a3b8', type: [6, 6] as unknown as 'dashed', width: 1.2 }, data: [metric.lo, metric.hi].filter((v) => v !== undefined).map((y) => ({ yAxis: y })) },
     }],
   } : null
 
