@@ -403,3 +403,7 @@ tr.cur-row .bico { background: #cffafe; color: var(--primary); }
 .fixed-ctl b { display: block; font-size: 14px; }
 .fixed-ctl small { display: block; font-size: 11.5px; color: var(--muted); margin-top: 3px; line-height: 1.5; }
 .full { grid-column: 1 / -1; }
+
+.home-mid.full { grid-template-columns: minmax(0, 1fr); }
+.dp-search { display: flex; align-items: center; gap: 8px; height: 36px; border: 1px solid var(--line); border-radius: 8px; padding: 0 10px; margin-bottom: 8px; color: var(--faint); }
+.dp-search input { border: 0; outline: 0; flex: 1; min-width: 0; background: transparent; color: var(--text); }

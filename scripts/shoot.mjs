@@ -47,7 +47,14 @@ async function session(role, user, pw) {
   await setProject('PRJ-10252'); await p.goto(base + '/thermostat'); await p.waitForTimeout(500); ok('standalone thermostat placeholder', await p.isVisible('text=该项目无房间温控面板'))
   await p.goto(base + '/fresh-air'); await p.waitForTimeout(500); ok('standalone has 运行设置', await p.isVisible('text=运行设置'))
   for (const [i, m] of [[1, 2], [2, 13], [3, 23], [4, 33], [5, 5]]) { await p.click(`.dev-tab >> nth=${i - 1}`); await shot(`standalone12-fa-mode${m}`) }
-  await setProject('PRJ-10241'); await p.goto(base + '/fresh-air'); await p.waitForTimeout(500); ok('non-12 has no 运行设置', !(await p.isVisible('text=运行设置')))
+  // mode 5 (humidity-only): panel stays, only the control-type toggle and dew setpoint are hidden
+  ok('mode5 keeps 开关/湿度设定值/风速/下发', await p.isVisible('.set-panel >> text=开关') && await p.isVisible('text=湿度设定值') && await p.isVisible('text=风速设定') && await p.isVisible('text=下发设置'))
+  ok('mode5 hides 露点设定值 + toggle', !(await p.isVisible('text=露点设定值')) && !(await p.isVisible('.ctl-type')))
+  await p.click('.dev-tab >> nth=0'); await p.waitForTimeout(300); ok('mode2 shows 控制类型 toggle', await p.isVisible('.ctl-type'))
+  for (const id of ['PRJ-10241', 'PRJ-10242', 'PRJ-30058', 'PRJ-20117']) { await setProject(id); await p.goto(base + '/fresh-air'); await p.waitForTimeout(500); ok(`${id} non-12 has no 运行设置, full-row 实时数据`, !(await p.isVisible('text=运行设置')) && !!(await p.$('.fa-top.wide'))) }
+  await setProject('PRJ-10241'); await p.goto(base + '/connections'); await p.waitForTimeout(400); ok('connections has no 网络拓扑', !(await p.isVisible('text=网络拓扑')))
+  await p.goto(base + '/groups'); await p.waitForTimeout(300); ok('dealer: no dealer picker, only own groups', !(await p.$('.dealer-pick')) && !(await p.isVisible('text=西溪蝶园')))
+  await p.goto(base + '/home'); await p.waitForTimeout(500); { const [c, pg] = await Promise.all([p.$eval('.home-mid .card', (e) => e.getBoundingClientRect().width), p.$eval('.home-mid', (e) => e.getBoundingClientRect().width)]); ok('home 24h chart full width', c >= pg - 2) }
   await p.goto(base + '/control'); await p.waitForTimeout(400)
   const cs = 'input[placeholder*="按项目名称检索"]'
   await p.fill(cs, '地库'); await p.click('.pick:has-text("地库")'); await p.fill(cs, ''); await p.waitForTimeout(300); await shot('control-mixed')
@@ -63,6 +70,9 @@ async function session(role, user, pw) {
   const opts = await p.$$eval('.dealer-pick option', (o) => o.map((x) => x.value))
   for (const d of opts) { await p.selectOption('.dealer-pick select', d); await shot(`groups-${d}`) }
   ok('admin sees >=2 dealers', opts.length >= 2)
+  await p.fill('.dp-search input', '南京'); await p.waitForTimeout(300); ok('dealer search filters + selects', (await p.$$eval('.dealer-pick option', (o) => o.length)) === 1 && await p.isVisible('text=河西府住宅组')); await shot('groups-dealer-search')
+  await p.fill('.dp-search input', '杭州'); await p.waitForTimeout(300); ok('dealer search 杭州', await p.isVisible('text=西溪蝶园别墅组'))
+  await p.fill('.dp-search input', 'zzz'); await p.waitForTimeout(300); ok('dealer search no match', await p.isVisible('text=匹配 0 / 3'))
   await p.fill('.search input', '西溪'); await p.waitForTimeout(300); ok('admin search sees all dealers', await p.isVisible('.sp-row'))
   await ctx.close()
 }

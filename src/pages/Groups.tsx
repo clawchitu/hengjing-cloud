@@ -10,6 +10,10 @@ export default function Groups() {
   const { projectId, setProjectId, toast, scope, user } = useApp()
   const isAdmin = user.role === 'admin'
   const [dealerId, setDealerId] = useState(scope.dealers[0]?.id ?? '')
+  const [dq, setDq] = useState('')
+  const matchDealer = (d: { id: string; name: string; short: string; region: string }, q: string) => !q.trim() || (d.id + d.name + d.short + d.region).toLowerCase().includes(q.trim().toLowerCase())
+  const dealerHits = scope.dealers.filter((d) => matchDealer(d, dq))
+  // a dealer account's scope contains only its own dealer, so this never exposes other dealers' groups
   const groups = scope.groups.filter((g) => g.dealerId === dealerId)
   const projects = scope.projects.filter((p) => groups.some((g) => g.id === p.groupId))
   // default: first 集成项目 of the (selected) dealer
@@ -44,10 +48,15 @@ export default function Groups() {
           {isAdmin && (
             <div className="dealer-pick">
               <label>经销商</label>
+              <div className="dp-search"><Icon icon={faMagnifyingGlass} /><input placeholder="搜索经销商名称 / 编码 / 区域" value={dq} onChange={(e) => {
+                const q = e.target.value; setDq(q)
+                const hits = scope.dealers.filter((d) => matchDealer(d, q))
+                if (hits.length && !hits.some((d) => d.id === dealerId)) { setDealerId(hits[0].id); setGid('') }
+              }} /></div>
               <select className="select" value={dealerId} onChange={(e) => { setDealerId(e.target.value); setGid('') }}>
-                {scope.dealers.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+                {dealerHits.length ? dealerHits.map((d) => <option key={d.id} value={d.id}>{d.name}</option>) : <option value={dealerId} disabled>未找到匹配的经销商</option>}
               </select>
-              <small>{scope.dealers.length} 个经销商 · 先选择经销商，再查看其集成项目</small>
+              <small>{dq ? `匹配 ${dealerHits.length} / ${scope.dealers.length} 个经销商` : `${scope.dealers.length} 个经销商`} · 先选择经销商，再查看其集成项目</small>
             </div>
           )}
           <div className="card row" style={{ height: 40, padding: '0 14px', marginBottom: 14, color: 'var(--faint)', boxShadow: 'none' }}><Icon icon={faMagnifyingGlass} /><input style={{ border: 0, outline: 0, flex: 1, background: 'transparent' }} placeholder="搜索集成项目名称 / 编码" value={gq} onChange={(e) => setGq(e.target.value)} /></div>
