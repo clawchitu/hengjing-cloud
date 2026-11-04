@@ -14,7 +14,7 @@ export default function Groups() {
   const matchDealer = (d: { id: string; name: string; short: string; region: string }, q: string) => !q.trim() || (d.id + d.name + d.short + d.region).toLowerCase().includes(q.trim().toLowerCase())
   const dealerHits = scope.dealers.filter((d) => matchDealer(d, dq))
   // a dealer account's scope contains only its own dealer, so this never exposes other dealers' groups
-  const groups = scope.groups.filter((g) => g.dealerId === dealerId)
+  const groups = isAdmin && dealerHits.length === 0 ? [] : scope.groups.filter((g) => g.dealerId === dealerId)
   const projects = scope.projects.filter((p) => groups.some((g) => g.id === p.groupId))
   // default: first 集成项目 of the (selected) dealer
   const [gidRaw, setGid] = useState('')
@@ -26,7 +26,28 @@ export default function Groups() {
   const [page, setPage] = useState(1)
   useEffect(() => setPage(1), [gid, pq, area, st])
   const g = groups.find((x) => x.id === gid)
-  if (!g) return <div className="page" />
+  const dealerPick = isAdmin ? (
+            <div className="dealer-pick">
+              <label>经销商</label>
+              <div className="dp-search"><Icon icon={faMagnifyingGlass} /><input placeholder="搜索经销商名称 / 编码 / 区域" value={dq} onChange={(e) => {
+                const q = e.target.value; setDq(q)
+                const hits = scope.dealers.filter((d) => matchDealer(d, q))
+                if (hits.length && !hits.some((d) => d.id === dealerId)) { setDealerId(hits[0].id); setGid('') }
+              }} /></div>
+              <select className="select" value={dealerId} onChange={(e) => { setDealerId(e.target.value); setGid('') }}>
+                {dealerHits.length ? dealerHits.map((d) => <option key={d.id} value={d.id}>{d.name}</option>) : <option value={dealerId} disabled>未找到匹配的经销商</option>}
+              </select>
+              <small>{dq ? `匹配 ${dealerHits.length} / ${scope.dealers.length} 个经销商` : `${scope.dealers.length} 个经销商`} · 先选择经销商，再查看其集成项目</small>
+            </div>
+  ) : null
+  if (!g) return (
+    <div className="page">
+      <div className="page-head"><div><h1>集成项目</h1><div className="sub">{isAdmin && dq ? '未找到匹配的经销商' : '暂无集成项目'}</div></div></div>
+      <div className="groups"><div>{dealerPick}</div>
+        <Card><div className="empty-fav"><Icon icon={faMagnifyingGlass} /><b>{isAdmin && dq ? `没有与「${dq}」匹配的经销商` : '暂无集成项目'}</b><small>请修改搜索条件，或清空搜索查看全部经销商</small></div></Card>
+      </div>
+    </div>
+  )
   const inG = projects.filter((p) => p.groupId === gid)
   const list = inG.filter((p) => (!pq || (p.name + p.id).toLowerCase().includes(pq.toLowerCase())) && (area === '全部区域' || p.district === area) && (st === '全部' || (st === '在线') === p.online))
   const SIZE = 6
@@ -45,20 +66,7 @@ export default function Groups() {
       </div>
       <div className="groups">
         <div>
-          {isAdmin && (
-            <div className="dealer-pick">
-              <label>经销商</label>
-              <div className="dp-search"><Icon icon={faMagnifyingGlass} /><input placeholder="搜索经销商名称 / 编码 / 区域" value={dq} onChange={(e) => {
-                const q = e.target.value; setDq(q)
-                const hits = scope.dealers.filter((d) => matchDealer(d, q))
-                if (hits.length && !hits.some((d) => d.id === dealerId)) { setDealerId(hits[0].id); setGid('') }
-              }} /></div>
-              <select className="select" value={dealerId} onChange={(e) => { setDealerId(e.target.value); setGid('') }}>
-                {dealerHits.length ? dealerHits.map((d) => <option key={d.id} value={d.id}>{d.name}</option>) : <option value={dealerId} disabled>未找到匹配的经销商</option>}
-              </select>
-              <small>{dq ? `匹配 ${dealerHits.length} / ${scope.dealers.length} 个经销商` : `${scope.dealers.length} 个经销商`} · 先选择经销商，再查看其集成项目</small>
-            </div>
-          )}
+          {dealerPick}
           <div className="card row" style={{ height: 40, padding: '0 14px', marginBottom: 14, color: 'var(--faint)', boxShadow: 'none' }}><Icon icon={faMagnifyingGlass} /><input style={{ border: 0, outline: 0, flex: 1, background: 'transparent' }} placeholder="搜索集成项目名称 / 编码" value={gq} onChange={(e) => setGq(e.target.value)} /></div>
           {groups.filter((x) => !gq || (x.name + x.id).includes(gq)).map((x) => {
             const ps = projects.filter((p) => p.groupId === x.id), o = ps.filter((p) => p.online).length, pct = (o / ps.length) * 100
