@@ -129,24 +129,16 @@ export default function FreshAir() {
         {hasSettings && (
           <Card className="set-panel">
             <div className="card-head" style={{ marginBottom: 12 }}><h3 className="card-title">运行设置</h3><span className="row muted" style={{ fontSize: 13 }}>开关 <Toggle on={draft.on} onChange={(v) => setDraft({ ...draft, on: v })} /></span></div>
-            {canDew ? (
-              <>
-                <h4>控制类型设置</h4><div className="faint" style={{ fontSize: 11.5 }}>露点设定与湿度设定二选一（模式 {u.mode}）</div>
-                <div className="ctl-type">
-                  <button className={'opt-btn' + (dewOn ? ' on' : '')} onClick={() => setDraft({ ...draft, control: 'dew' })}><Icon icon={faTemperatureLow} />露点控制</button>
-                  <button className={'opt-btn' + (!dewOn ? ' on' : '')} onClick={() => setDraft({ ...draft, control: 'hum' })}><Icon icon={faDroplet} />湿度控制</button>
-                </div>
-                <div className={'setbox' + (dewOn ? ' on' : ' dis')}>
-                  <div className="sh"><div><b>露点设定值</b><small>范围 8.0 – 16.0 °C</small></div>{dewOn ? <span className="pill" style={{ background: 'var(--primary-2)', color: '#fff' }}>生效中</span> : <span className="pill gray">未启用</span>}</div>
-                  <div className="stepper"><button disabled={!dewOn} onClick={() => step('dewSet', -0.5)}>−</button><span className="sv num">{draft.dewSet.toFixed(1)}<small>°C</small></span><button className="plus" disabled={!dewOn} onClick={() => step('dewSet', 0.5)}>+</button></div>
-                </div>
-              </>
-            ) : (
-              <>
-                <h4>控制类型</h4>
-                <div className="fixed-ctl"><Icon icon={faLock} /><div><b>湿度控制（固定）</b><small>当前运行模式 {u.mode} 仅支持湿度控制；模式 {DEW_MODES.join(' / ')} 时可选择露点控制。</small></div></div>
-              </>
-            )}
+            <h4>控制类型设置</h4><div className="faint" style={{ fontSize: 11.5 }}>露点设定与湿度设定二选一</div>
+            <div className="ctl-type">
+              <button className={'opt-btn' + (dewOn ? ' on' : '')} disabled={!canDew} title={canDew ? undefined : '当前模式固定为湿度控制'} onClick={() => canDew && setDraft({ ...draft, control: 'dew' })}><Icon icon={faTemperatureLow} />露点控制</button>
+              <button className={'opt-btn' + (!dewOn ? ' on' : '')} disabled={!canDew} onClick={() => canDew && setDraft({ ...draft, control: 'hum' })}><Icon icon={!canDew ? faLock : faDroplet} />湿度控制</button>
+            </div>
+            {!canDew && <div className="ctl-hint"><Icon icon={faLock} />当前模式（{u.mode}）固定为湿度控制，不可修改</div>}
+            <div className={'setbox' + (dewOn ? ' on' : ' dis')}>
+              <div className="sh"><div><b>露点设定值</b><small>范围 8.0 – 16.0 °C</small></div>{dewOn ? <span className="pill" style={{ background: 'var(--primary-2)', color: '#fff' }}>生效中</span> : <span className="pill gray">未启用</span>}</div>
+              <div className="stepper"><button disabled={!dewOn} onClick={() => step('dewSet', -0.5)}>−</button><span className="sv num">{draft.dewSet.toFixed(1)}<small>°C</small></span><button className="plus" disabled={!dewOn} onClick={() => step('dewSet', 0.5)}>+</button></div>
+            </div>
             <div className={'setbox' + (!dewOn ? ' on' : ' dis')}>
               <div className="sh"><div><b>湿度设定值</b><small>范围 35 – 70 %RH</small></div>{!dewOn ? <span className="pill" style={{ background: 'var(--primary-2)', color: '#fff' }}>生效中</span> : <span className="pill gray">未启用</span>}</div>
               <div className="stepper"><button disabled={dewOn} onClick={() => step('humSet', -1)}>−</button><span className="sv num">{draft.humSet}<small>%</small></span><button className="plus" disabled={dewOn} onClick={() => step('humSet', 1)}>+</button></div>

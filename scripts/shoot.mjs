@@ -49,8 +49,9 @@ async function session(role, user, pw) {
   for (const [i, m] of [[1, 2], [2, 13], [3, 23], [4, 33], [5, 5]]) { await p.click(`.dev-tab >> nth=${i - 1}`); await shot(`standalone12-fa-mode${m}`) }
   // mode 5 (humidity-only): panel stays, only the control-type toggle and dew setpoint are hidden
   ok('mode5 keeps 开关/湿度设定值/风速/下发', await p.isVisible('.set-panel >> text=开关') && await p.isVisible('text=湿度设定值') && await p.isVisible('text=风速设定') && await p.isVisible('text=下发设置'))
-  ok('mode5 hides 露点设定值 + toggle', !(await p.isVisible('text=露点设定值')) && !(await p.isVisible('.ctl-type')))
-  await p.click('.dev-tab >> nth=0'); await p.waitForTimeout(300); ok('mode2 shows 控制类型 toggle', await p.isVisible('.ctl-type'))
+  ok('mode5: toggle shown but locked to 湿度, 露点 card 未启用', await p.isVisible('.ctl-type') && await p.isDisabled('.ctl-type button:has-text("露点控制")') && await p.isVisible('text=露点设定值') && await p.isVisible('.setbox.dis:has-text("露点设定值") >> text=未启用') && await p.isVisible('.setbox.on:has-text("湿度设定值")') && !(await p.isVisible('text=湿度控制（固定）')))
+  await p.click('.setbox.on button.plus'); ok('mode5 humidity editable', (await p.textContent('.setbox.on .sv')).startsWith('51'))
+  await p.click('.dev-tab >> nth=0'); await p.waitForTimeout(300); ok('mode2 toggle selectable', await p.isEnabled('.ctl-type button:has-text("露点控制")'))
   for (const id of ['PRJ-10241', 'PRJ-10242', 'PRJ-30058', 'PRJ-20117']) { await setProject(id); await p.goto(base + '/fresh-air'); await p.waitForTimeout(500); ok(`${id} non-12 has no 运行设置, full-row 实时数据`, !(await p.isVisible('text=运行设置')) && !!(await p.$('.fa-top.wide'))) }
   await setProject('PRJ-10241'); await p.goto(base + '/connections'); await p.waitForTimeout(400); ok('connections has no 网络拓扑', !(await p.isVisible('text=网络拓扑')))
   await p.goto(base + '/groups'); await p.waitForTimeout(300); ok('dealer: no dealer picker, only own groups', !(await p.$('.dealer-pick')) && !(await p.isVisible('text=西溪蝶园')))
