@@ -1,6 +1,7 @@
 // 下发写锁（统一控制 S12、温控 S9、新风 S10 三处共用）。模块级，离开页面再回来锁仍在；已发出的锁另存 localStorage。
 //
 // 这把锁只防误操作（重复点、同屏并发、结果未知时再下发），不防越权；越权靠后端拦。
+// 后续跨标签一致性类问题一律按「非目标，后端兜底，写幂等」处理。
 //
 // 口径（11/24 Chitu 定，#28 评审后由 Fable 复核定稿）：
 // 1. 按控制屏加锁，并且原子锁住项目所有可用的键：控制屏号、DTU 号、项目 id。任一键已被占即 busy；lockOf 任一键命中即返回。
@@ -13,14 +14,17 @@
 //    → 不发读请求、锁保持（not-visible）。不看 ctrl 响应判断能不能读（屏离线和 id 非法都是 503）。读到 503 → offline（屏离线，
 //    可重试，锁保持）。核对晚于原写结算：原写未结算时直接 send-pending；结算后若有核对方式，自动核对一次。
 //    传入已中止的 signal 直接返回；核对有超时（VERIFY_TIMEOUT_MS），超时后 verifying 复位、锁保留。
-// 6. 有效期：从发出（markSent）起算，默认 2 分钟，可配置、最短 30 秒；刷新和核对失败都不续期。到期放锁、通知订阅者，并发出
+// 6. 有效期：从登记（markSent）起算，含写入口等待令牌续期的时间；默认 2 分钟，可配置、最短 30 秒（不宜配到 60 秒以下：
+//    写 12 秒 + 续期 12 秒 + 回读核对都要在有效期内完成）；刷新和核对失败都不续期。到期放锁、通知订阅者，并发出
 //    「强制重读」事件（onForceReread），让页面重读设备状态。截止时间（markOverdue）只改标记，不放锁。
 // 7. 持久化：markSent 时就写 localStorage（键 = STORAGE_PREFIX + 主锁键），结论 ok / fail 时删；刷新后读到的记录一律按「结果未知」
 //    恢复（原 Promise 已不存在，视为已结算），靠 registerVerifier(消息号, fn) 注册的核对器重建核对，注册时若已有该消息号的锁就立刻
 //    核对一次。记录只存：锁键、projectId、消息号、设备 id、目标字段与值、userId、sentAt（不存 label、项目名、令牌或任何凭据）；
 //    读取时结构校验，JSON 损坏、sentAt 晚于现在（时钟异常 / 篡改，即到期时间晚于「现在 + 有效期」）或已到期的直接作废。
-// 8. 跨标签：监听 storage 事件，别的标签页写入 / 删除的记录同步到本标签（synced）。跨标签仍非严格原子：同一毫秒两个标签同时
-//    acquire 理论上可能都成功，后端兜底。
+// 8. 跨标签：监听 storage 事件，别的标签页写入 / 删除的记录同步到本标签（synced）。同步锁只读：本标签不核对它（verify 返回
+//    send-pending，对方的写可能还在路上），放锁时也不代删对方的记录；对方删除记录时本标签按到期处理（放锁 + 强制重读）。
+//    跨标签仍非严格原子：同一毫秒两个标签同时 acquire 理论上可能都成功；storage 写入冲突、迟到的删除事件也属已知限制，
+//    后端兜底，写幂等。
 // 9. 防泄露：别的账号看到的锁信息不带 label、projectId（lockOf 置空）；提示只用 OTHER_ACCOUNT_TEXT。
 //
 // 状态图：
@@ -43,6 +47,9 @@
 //
 // 与 S4 写入口对接（不改 http.ts）：acquire → requestWrite(…, { beforeSend: () => 其他复核 && claim(token) }) → 立刻
 // markSent(token, 那个 Promise, 记录) → 按结果 settle；页面另用 requireVerify 登记本次的核对函数（可选，否则用注册的核对器）。
+// 接入约束：subscribe / onForceReread 的回调里不得调用 settle / release（回调在状态变化途中同步触发）。
+// 初始化顺序：应用启动时先 configureWriteLock（注入 resolveProject 等），再 registerVerifier（注册时会立刻核对恢复的锁，
+// 没注入 resolveProject 会按不可见跳过）。localStorage 写入失败时 console.warn，降级为只在内存里锁。
 import { isApiError } from './errors'
 import { getSession, subscribeSession } from './session'
 
@@ -257,11 +264,12 @@ function writeStored(e: Entry) {
   const rec = storedOf(e)
   const s = storage()
   if (!rec || !s || e.origin !== 'local') return
-  try { s.setItem(STORAGE_PREFIX + e.token.key, JSON.stringify(rec)) } catch { /* 存储不可用：只在内存里锁 */ }
+  try { s.setItem(STORAGE_PREFIX + e.token.key, JSON.stringify(rec)) } catch (x) { console.warn('[writeLock] 写入 localStorage 失败，降级为内存锁', x) }
 }
 function removeStored(e: Entry) {
   const s = storage()
-  if (!s || e.sentAt === undefined) return
+  // 同步来的锁是别的标签页的：不代删对方的记录
+  if (!s || e.sentAt === undefined || e.origin === 'synced') return
   const k = STORAGE_PREFIX + e.token.key
   try {
     const raw = s.getItem(k)
@@ -322,7 +330,8 @@ function onStorage(ev: StorageEvent) {
   const cur = byKey.get(ev.key.slice(STORAGE_PREFIX.length))
   if (ev.newValue === null) {
     // 别的标签页删除了记录：只同步删除本标签从记录得来的锁（本标签自己发起的锁按自己的状态机走）
-    if (cur && cur.origin !== 'local') drop(cur)
+    // 别的标签页放锁：本标签按到期处理（放锁 + 强制重读）
+    if (cur && cur.origin !== 'local') expire(cur)
     return
   }
   const rec = parseStored(ev.newValue)
@@ -409,7 +418,13 @@ export function settle(token: LockToken, outcome: WriteOutcome): void {
   if (e.phase === 'held') { drop(e); return }
   if (e.outcome !== undefined) return
   e.outcome = outcome
-  if (outcome === 'unknown') { e.phase = 'unknown'; emit(); return }
+  if (outcome === 'unknown') {
+    e.phase = 'unknown'
+    emit()
+    // 原写已先结算（调用方 await 之后在 catch 里 settle）：afterSettled 当时还不是 unknown，这里补一次自动核对
+    if (e.sendSettled && verifierOf(e)) void verify(e.token.key)
+    return
+  }
   emit()
   if (!e.sent || e.sendSettled) drop(e)
 }
@@ -452,6 +467,7 @@ export function onForceReread(fn: (e: { keys: readonly string[]; projectId: stri
 export async function verify(keyOrTarget: string | LockTarget, signal?: AbortSignal): Promise<VerifyResult> {
   const e = typeof keyOrTarget === 'string' ? byKey.get(keyOrTarget) : lockKeysOf(keyOrTarget).map((k) => byKey.get(k)).find(Boolean)
   const fn = e ? verifierOf(e) : undefined
+  if (e?.origin === 'synced' && e.phase === 'unknown') return 'send-pending' // 别的标签页的锁：对方的写可能还在路上，本标签不核对
   if (!e || e.phase !== 'unknown' || !fn || e.verifying) return 'none'
   if (signal?.aborted) return 'aborted'
   if (!e.sendSettled) return 'send-pending'

@@ -212,6 +212,17 @@ describe('原写未结算不放锁；unknown 不被覆盖', () => {
     expect(lockOf(PA)).toBeNull()
     expect(stored()).toEqual([])
   })
+  it('真实顺序：先 markSent，调用方 await 后在 catch 里 settle(unknown)（原写已先结算）→ 自动核对一次', async () => {
+    const fn = vi.fn(async () => true)
+    const t = take()
+    const p = writeOnce(() => claim(t), async () => { throw new ApiError('timeout', '未收到控制屏应答') })
+    markSent(t, p, REC)
+    requireVerify(t, fn)
+    try { await p } catch { settle(t, 'unknown') }
+    await flush()
+    expect(fn).toHaveBeenCalledTimes(1)
+    expect(lockOf(PA)).toBeNull()
+  })
   it('截止只改标记，不放锁', () => {
     const t = take()
     claim(t)
@@ -468,6 +479,27 @@ describe('持久化（localStorage）', () => {
     toUnknown(async () => false)
     window.dispatchEvent(new StorageEvent('storage', { key: STORAGE_PREFIX + KEY, newValue: null }))
     expect(lockOf(PA)?.origin).toBe('local')
+  })
+  it('同步来的锁：verify 直接 send-pending、不读；到期放锁时不代删对方的记录', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
+    const fn = vi.fn(async () => true)
+    registerVerifier(201, fn)
+    const raw = JSON.stringify(rec({ op: 'other-tab', sentAt: Date.now() - (DEFAULT_TTL_MS - 100) }))
+    localStorage.setItem(STORAGE_PREFIX + KEY, raw)
+    window.dispatchEvent(new StorageEvent('storage', { key: STORAGE_PREFIX + KEY, newValue: raw }))
+    expect(await verify(KEY)).toBe('send-pending')
+    expect(fn).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(200)
+    expect(lockOf(PA)).toBeNull()
+    expect(localStorage.getItem(STORAGE_PREFIX + KEY)).toBe(raw)
+  })
+  it('别的标签页删除记录（放锁）：本标签按到期处理，发强制重读', () => {
+    const events: unknown[] = []
+    onForceReread((e) => events.push(e))
+    window.dispatchEvent(new StorageEvent('storage', { key: STORAGE_PREFIX + KEY, newValue: JSON.stringify(rec({ op: 'other-tab' })) }))
+    window.dispatchEvent(new StorageEvent('storage', { key: STORAGE_PREFIX + KEY, newValue: null }))
+    expect(lockOf(PA)).toBeNull()
+    expect(events).toEqual([{ keys: rec().keys, projectId: 'pa' }])
   })
   it('注册核对器不会去核对别的标签页同步来的锁（对方的写可能还在路上）', async () => {
     window.dispatchEvent(new StorageEvent('storage', { key: STORAGE_PREFIX + KEY, newValue: JSON.stringify(rec({ op: 'other-tab' })) }))
