@@ -252,14 +252,17 @@ export async function runOp<P, L>(o: OpSpec<P, L>): Promise<RunResult> {
     let outcome: Outcome
     let text: string
     let wrote = true
+    let overdue = false
     try {
       await within(sent, LIMITS.writeDeadlineMs, '等待控制屏应答')
       outcome = 'ok'
       text = '已下发，正在核对…'
     } catch (e) {
-      if (e instanceof Deadline) { markOverdue(token); outcome = 'unknown'; text = e.message }
+      if (e instanceof Deadline) { markOverdue(token); overdue = true; outcome = 'unknown'; text = e.message }
       else { const c = classify(e); outcome = c.outcome; text = c.text; wrote = c.sent && claimed }
     }
+    // 没认领就结束（beforeSend 没调到，比如发送前续期断网）：写入口一定没发出 → 按「未下发」，不说「已下发、结果未知」
+    if (outcome === 'unknown' && !claimed && !overdue) { outcome = 'fail'; text = `未下发：${text}`; wrote = false }
     if (outcome !== 'ok') say(outcome === 'unknown' ? `${o.subject} 下发结果未知：${text}` : `${o.subject} ${text}`, true)
     failed = outcome === 'fail'
     record({ outcome, text, readback: outcome === 'unknown' ? 'waiting' : 'pending' })

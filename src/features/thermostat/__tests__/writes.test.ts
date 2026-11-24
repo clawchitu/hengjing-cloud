@@ -322,3 +322,17 @@ describe('核对结论只在写锁认可后才进页面（#35 Codex 第二轮第
     expect(W.getResult('P1', 'R1')).toMatchObject({ readback: 'ok', verdict: 'unchanged', fields: { temperature: 'unchanged' } })
   })
 })
+
+describe('没认领就结束的结果未知', () => {
+  it('发送前（beforeSend 之前）断网 / 续期失败：一定没发出 → 按「未下发」结束、放锁，不显示「已下发」或「已到期」', async () => {
+    const x = spec({ send: async () => { throw new ApiError('network', '网络中断') } })
+    expect(await W.runOp(x.s)).toBe('fail')
+    await flush()
+    expect(x.toasts[0]).toBe('客厅 未下发：网络中断')
+    expect(L.lockOf(P1)).toBeNull()
+    const r = W.getResult('P1', 'R1')
+    expect(r).toMatchObject({ outcome: 'fail', text: '未下发：网络中断' })
+    expect(r?.ended).toBeUndefined()
+  })
+})
+

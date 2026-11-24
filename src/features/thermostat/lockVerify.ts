@@ -1,8 +1,9 @@
 // 温控下发接入共用写锁（src/api/writeLock.ts）的核对部分：201 / 206 的持久化核对数据，以及用 200 的读数比对
 // （src/api/writeLockVerify.ts 的 matchRoomSet / matchAllRoomsSwitch）。读取走当前数据源（真实接口为 ctrl 200，演示数据为内存）。
 import type { CtrlReply, WriteQuery } from '@/api/ctrl'
-import { registerVerifier, type SentRecord } from '@/api/writeLock'
-import { matchAllRoomsSwitch, matchRoomSet } from '@/api/writeLockVerify'
+import { registerVerifier, type MatchDetail, type SentRecord } from '@/api/writeLock'
+import { isNoChange, matchAllRoomsSwitch, matchRoomSet } from '@/api/writeLockVerify'
+import { validRoomId } from './model'
 import { roomsAsReply } from './model'
 import { thermostatSource } from './source'
 
@@ -13,9 +14,34 @@ export interface AllSwitch { on: boolean; roomIds: number[] }
 /** 206 的核对数据（带目标房间 id 集合，随记录落盘，刷新恢复后同样逐个检查） */
 export const record206 = (p: AllSwitch): SentRecord => ({ msg: 206, deviceId: null, target: { switch: p.on ? 1 : 0 }, roomIds: [...p.roomIds] })
 
-/** 201 / 206 写后核对：用 200 的原始读数逐字段比对（writeLockVerify.ts，四态） */
-export const match201 = (q: WriteQuery<201>, raw: Pick<CtrlReply<200>, 'data'>) => matchRoomSet(record201(q), raw)
-export const match206 = (p: AllSwitch, raw: Pick<CtrlReply<200>, 'data'>) => matchAllRoomsSwitch(record206(p), raw)
+type Reply200 = Pick<CtrlReply<200>, 'data'>
+const unverifiable = (fields: string[]): MatchDetail => ({ verdict: 'unverifiable', fields: Object.fromEntries(fields.map((f) => [f, 'unverifiable' as const])) })
+
+/**
+ * 回读里房间 ID 的歧义检查（在调用 #31 的共用比对器之前做；比对器按 find 取第一个匹配房间，重复时可能取到恰好一致的那条）：
+ * - 201：回读里目标设备 ID 出现不止一次 → 改了的字段全部无法核对；
+ * - 206：回读里有设备 ID 为 0 / 无效的房间（可能是没法标识的被控房间），或目标集合里的 ID 出现不止一次 → 无法核对。
+ * 有歧义返回无法核对的结论（锁保持到核对一致或到期），没有返回 null
+ */
+export function ambiguity(rec: Pick<SentRecord, 'msg' | 'deviceId' | 'target' | 'roomIds'>, reply: Reply200): MatchDetail | null {
+  const data = reply.data ?? []
+  const count = (id: number) => data.filter((r) => r.id === id).length
+  if (rec.msg === 201) {
+    if (rec.deviceId === null || count(rec.deviceId) <= 1) return null
+    return unverifiable(Object.entries(rec.target).filter(([k, v]) => !isNoChange(201, k, v)).map(([k]) => k))
+  }
+  if (rec.msg === 206) {
+    if (data.some((r) => !validRoomId(r.id)) || (rec.roomIds ?? []).some((id) => count(id) > 1)) return unverifiable(['switch'])
+  }
+  return null
+}
+/** 先查歧义，再交给共用比对器 */
+export const matchRoomSetChecked = (rec: Pick<SentRecord, 'msg' | 'deviceId' | 'target'>, reply: Reply200) => ambiguity(rec, reply) ?? matchRoomSet(rec, reply)
+export const matchAllRoomsSwitchChecked = (rec: Pick<SentRecord, 'msg' | 'deviceId' | 'target' | 'roomIds'>, reply: Reply200) => ambiguity(rec, reply) ?? matchAllRoomsSwitch(rec, reply)
+
+/** 201 / 206 写后核对：用 200 的原始读数逐字段比对（先查房间 ID 歧义，再用 writeLockVerify.ts 的四态比对） */
+export const match201 = (q: WriteQuery<201>, raw: Reply200) => matchRoomSetChecked(record201(q), raw)
+export const match206 = (p: AllSwitch, raw: Reply200) => matchAllRoomsSwitchChecked(record206(p), raw)
 export { roomsAsReply }
 
 /**
@@ -25,7 +51,7 @@ export { roomsAsReply }
  */
 export function registerThermostatVerifiers(): () => void {
   const read = async (projectId: string, signal: AbortSignal) => (await thermostatSource().roomsRaw(projectId, signal)).raw
-  const off201 = registerVerifier(201, async (rec, signal) => matchRoomSet(rec, await read(rec.projectId, signal)))
-  const off206 = registerVerifier(206, async (rec, signal) => matchAllRoomsSwitch(rec, await read(rec.projectId, signal)))
+  const off201 = registerVerifier(201, async (rec, signal) => matchRoomSetChecked(rec, await read(rec.projectId, signal)))
+  const off206 = registerVerifier(206, async (rec, signal) => matchAllRoomsSwitchChecked(rec, await read(rec.projectId, signal)))
   return () => { off201(); off206() }
 }

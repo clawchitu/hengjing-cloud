@@ -103,4 +103,12 @@ describe('刷新恢复的锁：锁提示逐字段四态', () => {
     // 页面首次读取 + 核对器读取 + 放锁后的重读
     await waitFor(() => expect(be.callsTo('/ctrl/room-temperature-data-get').length).toBeGreaterThanOrEqual(3))
   })
+
+  it('恢复锁核对时回读里目标设备 ID 重复（第一条恰好一致）：无法核对，锁保持', async () => {
+    await reloadWith('admin-1', { temperature: 26, eco: -1, switch: -1 }, () => reply200([{ ...ROOM, setTemp: 26 }, { ...ROOM, setTemp: 25.5 }]))
+    const bar = await waitFor(async () => { const b = await lockBar(); expect(b.querySelector('[data-field]')).toBeTruthy(); return b })
+    expect(items(bar)).toEqual(['设定温度：暂无回读，无法确认'])
+    await act(async () => { await new Promise((r) => setTimeout(r, 100)) })
+    expect(document.querySelector('[data-lock="unknown"]')).toBeTruthy()
+  })
 })

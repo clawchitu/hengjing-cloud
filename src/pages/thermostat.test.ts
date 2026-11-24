@@ -23,7 +23,7 @@ import { __resetSessionViewForTests } from '../data/session'
 import { __resetWritesForTests, LIMITS } from '../features/thermostat'
 import Layout from '../components/Layout'
 import { OrgGate } from '../app/OrgGate'
-import { __resetWriteLockForTests, acquire as acquireLock, release as releaseLock, STORAGE_PREFIX } from '../api/writeLock'
+import { __resetWriteLockForTests, acquire as acquireLock, release as releaseLock, STORAGE_PREFIX, verify as verifyLock } from '../api/writeLock'
 import Thermostat from './Thermostat'
 
 beforeAll(() => {
@@ -1104,6 +1104,86 @@ describe('#35 第二轮：206 目标集合、到期后草稿保留', () => {
     fireEvent.click(btn(card('客厅'), '放弃本次改动'))
     await flush()
     expect(card('客厅').querySelector('[data-pending]')).toBeNull()
+  })
+})
+
+describe('#35 第三轮：回读 ID 歧义、重新下发中止、跨项目', () => {
+  it('201 写后回读里目标设备 ID 重复（第一条恰好一致）：无法核对，不提示成功、锁保持、草稿保留', async () => {
+    backend({ '/ctrl/room-temperature-set': (c) => { ok201(c); rooms = [rooms[0], { ...ROOM }, OFF_ROOM]; return ok201NoApply() } })
+    await draftAndSend()
+    await confirmOk()
+    await waitFor(() => expect(within(card('客厅')).getAllByRole('alert').map((a) => a.textContent).join()).toContain('该项暂无回读，无法确认'))
+    expect(toasts()).not.toContain('已生效')
+    expect(document.querySelector('[data-lock="unknown"]')).toBeTruthy()
+    expect(card('客厅').querySelector('[data-pending]')).toBeTruthy()
+  })
+  it('206 写后回读里多出设备 ID 为 0 的房间（其余都一致）：无法核对，不提示全部已生效、锁保持', async () => {
+    backend({ '/ctrl/project-room-switch-set': (c) => { const r = ok206(c); rooms = [...rooms, { ...OFF_ROOM, id: 0, switch: 1 }]; return r } })
+    await openRooms()
+    fireEvent.click(screen.getByRole('button', { name: '全部开启' }))
+    await confirmOk()
+    await waitFor(() => expect(document.querySelector('[data-result="all"]')?.textContent).toContain('该项暂无回读，无法确认'))
+    expect(toasts()).not.toContain('已生效')
+    expect(document.querySelector('[data-lock="unknown"]')).toBeTruthy()
+  })
+
+  /** 下发温度 +0.5，设备未生效；把时钟拨过有效期再点「核对」（到期放锁 + 强制重读） */
+  async function expired() {
+    const be = backend({ '/ctrl/room-temperature-set': ok201NoApply })
+    await draftAndSend()
+    await confirmOk()
+    await waitFor(() => expect(document.querySelector('[data-lock="unknown"]')).toBeTruthy())
+    vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 3 * 60_000)
+    fireEvent.click(within(document.querySelector('[data-lock="unknown"]') as HTMLElement).getByRole('button', { name: '核对' }))
+    await waitFor(() => expect(document.querySelector('[data-lock]')).toBeNull())
+    await flush(80)
+    expect(card('客厅').querySelector('[data-pending]')?.textContent).toContain('上次下发未核对一致')
+    return be
+  }
+  for (const [what, next] of [['房间消失', [OFF_ROOM]], ['面板离线', [{ ...ROOM, isConnected: false }, OFF_ROOM]]] as const) {
+    it(`到期后重新下发、确认后预检读到${what}：本次未发出，恢复原来的待确认，草稿不被普通整理清除`, async () => {
+      const be = await expired()
+      fireEvent.click(btn(card('客厅'), '重新下发'))
+      await dialog()
+      rooms = [...next]
+      await confirmOk()
+      await waitFor(() => expect(toasts()).toContain('本次未下发'))
+      expect(writes(be)).toHaveLength(1)
+      await poll([...next])
+      await poll([...next])
+      expect(toasts()).not.toContain('未下发的修改已清除')
+      await poll([ROOM, OFF_ROOM])
+      expect(card('客厅').querySelector('[data-pending]')?.textContent).toContain('上次下发未核对一致：设定温度 25.5 → 26.0°C')
+    })
+  }
+
+  it('跨项目：A 下发未核对一致后切到 B（同一页面实例）编辑，A 的核对后来一致——不清 B 的草稿', async () => {
+    const P3 = { id: 'p3', code: '261124010', name: '第三个项目', app_code: '1', app_name: '通用版', online: true, control_screen_id: 'SCREEN-3' }
+    backend({
+      '/ctrl/room-temperature-set': ok201NoApply,
+      '/ctrl/projects': () => json({ project_entities: [P1, P2, P12, POFF, P3] }),
+      '/integrated-projects': () => json({ entities: [{ ...GROUPS[0], project_ids: [...GROUPS[0].project_ids, P3.id] }] }),
+    })
+    localStorage.setItem('hjc-project', P1.id)
+    await signIn('u', 'pw', true)
+    // 不经 Layout（Layout 按项目重挂页面）：同一个页面实例跨项目，才可能有迟到回调
+    client = createQueryClient()
+    render(createElement(QueryClientProvider, { client }, createElement(AppProvider, null,
+      createElement(MemoryRouter, { initialEntries: ['/thermostat'] },
+        createElement(Routes, null, createElement(Route, { element: createElement(OrgGate, null, createElement(Thermostat)), path: '/thermostat' }))))))
+    await screen.findByText('客厅')
+    fireEvent.click(btn(card('客厅'), '客厅 设定温度升高'))
+    fireEvent.click(btn(card('客厅'), '下发'))
+    await confirmOk()
+    await waitFor(() => expect(document.querySelector('[data-lock="unknown"]')).toBeTruthy())
+    act(() => { setStoredProjectId(P3.id) })
+    await waitFor(() => expect(document.querySelector('.page-head .sub')?.textContent).toContain('第三个项目'))
+    fireEvent.click(btn(card('客厅'), '客厅 设定温度降低'))
+    expect(card('客厅').textContent).toContain('待下发：设定温度 25.5 → 25.0°C')
+    rooms = [{ ...ROOM, setTemp: 26 }, OFF_ROOM] // A 的设备后来生效
+    await act(async () => { await verifyLock('screen:SCREEN-T') })
+    await flush(80)
+    expect(card('客厅').textContent).toContain('待下发：设定温度 25.5 → 25.0°C')
   })
 })
 

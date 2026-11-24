@@ -41,3 +41,18 @@ describe('比对（四态）', () => {
     expect(match206({ on: true, roomIds: [7] }, raw(room(), room({ key: '9', equipmentId: 9, on: false })))).toMatchObject({ verdict: 'applied' })
   })
 })
+
+describe('回读房间 ID 歧义（S9 在共用比对器之前检查）', () => {
+  it('201：目标设备 ID 在回读里重复（第一条恰好一致）→ 改了的字段无法核对；不重复照常比对', () => {
+    const q = buildRoomTemperatureSet(7, { temperature: 26 })
+    expect(match201(q, raw(room({ setTemp: 26 }), room({ setTemp: 25.5 })))).toEqual({ verdict: 'unverifiable', fields: { temperature: 'unverifiable' } })
+    expect(match201(q, raw(room({ setTemp: 26 }), room({ key: '8', equipmentId: 8 })))).toMatchObject({ verdict: 'applied' })
+  })
+  it('206：回读里有 ID 为 0 / 无效的房间，或目标 ID 重复 → 无法核对', () => {
+    const p = { on: true, roomIds: [7, 8] }
+    const r8 = room({ key: '8', equipmentId: 8 })
+    expect(match206(p, raw(room(), r8, room({ key: '0', equipmentId: 0 })))).toMatchObject({ verdict: 'unverifiable' })
+    expect(match206(p, raw(room(), r8, room({ on: false })))).toMatchObject({ verdict: 'unverifiable' })
+    expect(match206(p, raw(room(), r8))).toMatchObject({ verdict: 'applied' })
+  })
+})

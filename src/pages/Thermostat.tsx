@@ -183,10 +183,12 @@ function RoomCard({ room: r, ctx, range, selected, onSelect, draft, conflict, on
     // 下发开始：这份草稿进入「待确认」（与写锁分开维护）。只有写锁认可的核对全部一致（onApplied，含之后的自动再核对）、
     // 确定失败需回滚（fail），或用户点「放弃本次改动」才清；没发出（中止 / 被占）取消待确认、照常整理。
     // 待核对、回读失败、面板离线、目标缺失期间，以及写锁到期放开之后，普通轮询都不整理它（到期只恢复下发资格并强制重读）
+    // 重新下发（上次未核对一致）：本次没发出就恢复原来的待确认，不能因为这次中止就当作上次已了结
+    const wasPending = pending
     onPending(true)
     const out = await submit(p, { query: built.query, draft: now.draft }, okText, 'set', undefined, onDiscard)
     if (out === 'ok' || out === 'fail') onDiscard()
-    else if (out === 'aborted' || out === 'busy') onPending(false)
+    else if (out === 'aborted' || out === 'busy') onPending(wasPending)
   }
 
   async function toggle(v: boolean) {
@@ -387,10 +389,11 @@ export default function Thermostat() {
   const [draftState, setDraftState] = useState<{ pid: string; d: RoomDraft | null; pending?: boolean }>({ pid: '', d: null })
   const pid = project?.id ?? ''
   const rawDraft = draftState.pid === pid ? draftState.d : null
+  // 函数形式（放弃 / 核对一致后清除）只作用于本项目的草稿：迟到的回调（另一个项目那次渲染留下的）不动别的项目的草稿
   const setDraft = (u: RoomDraft | null | ((d: RoomDraft | null) => RoomDraft | null)) =>
     setDraftState((st) => {
-      const cur = st.pid === pid ? st.d : null
-      return { pid, d: typeof u === 'function' ? u(cur) : u }
+      if (typeof u === 'function') return st.pid === pid ? { pid, d: u(st.d) } : st
+      return { pid, d: u }
     })
   const list = rooms.data
   const statRoom = list?.find((r) => r.key === sel) ?? list?.[0]
