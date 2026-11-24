@@ -47,7 +47,7 @@ export type UnifiedState<S = unknown> =
   | ({ status: 'unverifiable'; before: S; after: S; mismatches: EchoMismatch[] } & Base)
   | ({ status: 'failure'; outcome: FailureOutcome; error: string; before?: S; after?: S | null; afterError?: string } & Base)
   /**
-   * 结果未知：应答结果未知且回读没核对一致（replied=false，「结果未确认，请刷新查看」），
+   * 结果未知：应答结果未知且回读没核对一致（replied=false，「已下发，结果未知，请刷新查看」），
    * 或 Reply success=true 但下发后回读失败（replied=true，「已下发，结果未知」）。不重试
    */
   | ({ status: 'unknown'; replied: boolean; error: string; cause: string; before: S; after: S | null; afterError?: string; mismatches: EchoMismatch[] } & Base)

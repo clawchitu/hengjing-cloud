@@ -38,6 +38,23 @@ describe('summarizeRooms（ctrl 200 → 回读快照）', () => {
     expect(summarizeRooms([])).toEqual({ rooms: 0, roomSwitch: null, roomTemp: null, perRoom: { roomSwitch: [], roomTemp: [] } })
   })
 
+  it('逐房间温度保留原始读数核对（不先四舍五入）：24.494 与 24.5 差 0.006 算一致', async () => {
+    const s = summarizeRooms([{ switch: 1, setTemp: 24.494 }])
+    expect(s.perRoom?.roomTemp).toEqual([24.494])
+    expect(s.roomTemp).toBe(24.49)
+    const { batch } = setup([P('a', '1')], { reads: { a: [{ rooms: 1, roomSwitch: 1, roomTemp: 26 }, s] } })
+    batch.prepare(['a'], { roomTemp: 24.5 })
+    expect((await batch.start()).rows[0].status).toBe('success')
+  })
+
+  it('replyOk：只有控制屏应答 success=true 才标记（进度据此显示「已下发，正在核对…」）', async () => {
+    let n = 0
+    const { batch } = setup([P('a', '1'), P('b', '2')], { send: async (_p, _q, o) => { if (!o.beforeSend()) throw new ApiError('write_blocked', 'x'); return n++ === 0 ? { success: false, msg: '设备忙' } : { success: true, msg: '' } } })
+    batch.prepare(['a', 'b'], { roomSwitch: 1 })
+    const done = await batch.start()
+    expect(done.rows.map((r) => r.replyOk)).toEqual([false, true])
+  })
+
   it('is_connected=false 的房间不参与核对，记 offline；系统开关 / 运行模式不给键', () => {
     const s = summarizeRooms([{ switch: 0, setTemp: 21.5, isConnected: false }, { switch: 1, setTemp: 24.5, isConnected: true }])
     expect(s).toEqual({ rooms: 2, roomSwitch: 1, roomTemp: 24.5, offline: 1, perRoom: { roomSwitch: [1], roomTemp: [24.5] } })
@@ -126,7 +143,7 @@ describe('start：逐个下发，三种结果，不重试', () => {
     expect(send).toHaveBeenCalledTimes(2)
   })
 
-  it('超时且回读不一致 → 结果未确认（unknown），不重试', async () => {
+  it('超时且回读不一致 → 结果未知（unknown），不重试', async () => {
     const { batch, send } = setup([P('a', '1')], {
       send: async () => { throw new ApiError('timeout', '请求超时') },
       reads: { a: [{ rooms: 1, roomSwitch: 1, roomTemp: 26 }, { rooms: 1, roomSwitch: 1, roomTemp: 26 }] },
@@ -135,7 +152,7 @@ describe('start：逐个下发，三种结果，不重试', () => {
     const done = await batch.start()
     expect(send).toHaveBeenCalledTimes(1)
     expect(done.rows[0].status).toBe('unknown')
-    expect(done.rows[0].state.status === 'unknown' && done.rows[0].state.error).toBe('结果未确认，请刷新查看')
+    expect(done.rows[0].state.status === 'unknown' && done.rows[0].state.error).toBe('已下发，结果未知，请刷新查看')
   })
 
   it('确认后项目离线了 → 该项目未下发；其他照常', async () => {
@@ -178,7 +195,7 @@ describe('start：逐个下发，三种结果，不重试', () => {
     expect(done.rows.map((r) => r.status)).toEqual(['not-sent', 'not-sent'])
   })
 
-  it('截止时：已发出未回应的立即标「结果未确认」，没发出的标「未下发（超时）」，不再等；截止后绝不再发写', async () => {
+  it('截止时：已发出未回应的立即标「已下发，结果未知」，没发出的标「未下发（超时）」，不再等；截止后绝不再发写', async () => {
     const hang = gated()
     const projects = [P('a', '1'), P('b', '2'), P('c', '3')]
     let sentA = false
@@ -195,7 +212,7 @@ describe('start：逐个下发，三种结果，不重试', () => {
     expect(sentA).toBe(true)
     expect(done.phase).toBe('done')
     expect(done.rows.map((r) => r.status)).toEqual(['unknown', 'not-sent', 'not-sent'])
-    expect(done.rows[0].note).toMatch(/结果未确认/)
+    expect(done.rows[0].note).toMatch(/已下发，结果未知/)
     expect(done.rows[1].note).toMatch(/未下发（超时）/)
     // a 迟到的应答不改结果；b、c 不会再发
     hang.release()

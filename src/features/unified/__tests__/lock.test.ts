@@ -85,12 +85,45 @@ describe('S12b 接入写锁', () => {
     const b = createUnifiedBatch({ getProjects: () => [P('u', 'S9')], readBack: async () => snap, send, log: () => {}, deadlineMs: 20 })
     b.prepare(['u'], { roomSwitch: 1 })
     const done = await b.start()
-    expect(done.rows[0].status).toBe('unknown') // 截止：结果未确认
+    expect(done.rows[0].status).toBe('unknown') // 截止：结果未知
     expect(L.lockOf({ id: 'u', controlScreenId: 'S9' })?.phase).toBe('sent') // 锁仍在
     finish({ success: true, msg: '' })
     await flush()
     expect(verifier).toHaveBeenCalled()
     expect(L.lockOf({ id: 'u', controlScreenId: 'S9' })).toBeNull()
+  })
+
+  it('截止后才到的 success=true、核对器回读不一致：锁按结果未知保持，不提前放', async () => {
+    L.configureWriteLock({ resolveProject: (id) => (id === 'v' ? { id: 'v', controlScreenId: 'SV2' } : null) })
+    const verifier = vi.fn(async () => false)
+    L.registerVerifier(203, verifier)
+    let finish!: (v: { success: boolean; msg: string }) => void
+    const send: BatchSender = (_p, _q, o) => { if (!o.beforeSend()) return Promise.reject(new ApiError('write_blocked', 'x')); return new Promise((r) => { finish = r }) }
+    const b = createUnifiedBatch({ getProjects: () => [P('v', 'SV2')], readBack: async () => snap, send, log: () => {}, deadlineMs: 20 })
+    b.prepare(['v'], { roomSwitch: 1 })
+    await b.start()
+    b.reset() // 页面拿到结果后立即 reset（取消订阅）
+    finish({ success: true, msg: '' })
+    await flush()
+    expect(verifier).toHaveBeenCalled()
+    expect(L.lockOf('screen:SV2')?.phase).toBe('unknown')
+  })
+
+  it('截止时已应答 success=true、回读还没完成：截止当下按结果未知结算，锁保持；之后回读迟到也不误放成 ok', async () => {
+    L.registerVerifier(203, async () => false)
+    let slow!: () => void
+    const gate = new Promise<void>((r) => { slow = r })
+    let n = 0
+    const send: BatchSender = async (_p, _q, o) => { if (!o.beforeSend()) throw new ApiError('write_blocked', 'x'); return { success: true, msg: '' } }
+    const b = createUnifiedBatch({ getProjects: () => [P('d', 'SD')], readBack: async () => { if (n++ === 1) await gate; return snap }, send, log: () => {}, deadlineMs: 30 })
+    b.prepare(['d'], { roomSwitch: 1 })
+    const done = await b.start()
+    expect(done.rows[0].status).toBe('unknown')
+    expect(L.lockOf('screen:SD')?.phase).toBe('unknown')
+    b.reset()
+    slow()
+    await flush()
+    expect(L.lockOf('screen:SD')?.phase).toBe('unknown')
   })
 
   it('结果未知：settle(unknown) 后锁保持（未核对时不放）', async () => {

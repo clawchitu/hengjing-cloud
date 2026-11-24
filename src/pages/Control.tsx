@@ -1,5 +1,5 @@
 // 统一控制（S12b）：对同一集成项目里选中的在线项目批量下发 ctrl 203。
-// 逐个项目走 S12a 的状态机（src/features/unified）：二次确认 → 下发前读 → 203 → 下发后读 → 成功 / 失败 / 结果未确认；不重试。
+// 逐个项目走 S12a 的状态机（src/features/unified）：二次确认 → 下发前读 → 203 → 下发后读 → 已生效 / 未变化 / 结果未知 / 无法核对 / 失败；不重试。
 // 确认弹窗在本组件里用 useConfirm() 取（分工第 7 条）；写入口拿到的是整个 Project（见 batch.ts）。
 // 改动文档：app_code 为 8、12 时房间温度设定不可用（房间开关仍可用）；最近一次执行结果只显示 项目、项目 ID、状态、操作时间。
 import { useEffect, useState, useSyncExternalStore, type ReactNode } from 'react'
@@ -361,7 +361,7 @@ export default function Control() {
       {/* 下发进度在结果卡片外面；卡片里继续显示上一次的结果 */}
       {run.phase === 'running' && (
         <div className="muted unified-progress" role="status" style={{ margin: '0 0 12px', fontSize: 13 }}>
-          <Icon icon={faSpinner} spin /> {run.rows.some((r) => r.state.status === 'sending' && r.state.step === 'read-after') ? TEXT.verifying : TEXT.sending}全部完成后更新下方结果
+          <Icon icon={faSpinner} spin /> {run.rows.some((r) => r.replyOk && r.state.status === 'sending' && r.state.step === 'read-after') ? TEXT.verifying : TEXT.sending}全部完成后更新下方结果
         </div>
       )}
       {/* 改动 6：结果卡片只有 项目、项目ID、状态、操作时间 四项，不放任何说明 */}

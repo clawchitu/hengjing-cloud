@@ -463,14 +463,14 @@ describe('控制器：结果未知（unknown）', () => {
     expect(logs.at(-1)).toMatchObject({ event: 'success', codes: ['UNKNOWN', 'VERIFIED'], errorKind: kind })
   })
 
-  it('超时且回读不一致 → unknown，提示结果未确认，带不一致字段；不重试', async () => {
+  it('超时且回读不一致 → unknown，提示已下发、结果未知，带不一致字段；不重试', async () => {
     const send = vi.fn(async () => { throw new ApiError('timeout', '未收到控制屏应答，下发结果未知') })
     const readBack = vi.fn(async () => BEFORE)
     const { ctl } = setup({ send, readBack })
     ctl.request({ roomTemp: 24, roomSwitch: 1 })
     const end = await ctl.confirm()
     expect(end).toMatchObject({ status: 'unknown', error: TEXT.unconfirmed, cause: '未收到控制屏应答，下发结果未知', mismatches: [{ field: 'roomTemp', kind: 'differ' }] })
-    expect(TEXT.unconfirmed).toBe('结果未确认，请刷新查看')
+    expect(TEXT.unconfirmed).toBe('已下发，结果未知，请刷新查看')
     await new Promise((r) => setTimeout(r, 20))
     await ctl.confirm()
     expect(send).toHaveBeenCalledTimes(1)

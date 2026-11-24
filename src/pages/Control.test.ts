@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 // 统一控制页面（S12b）：真实数据形状 + 假后端。覆盖 app_code 8/12 禁用温度、「保持不变」时温度区真正禁用（键盘也改不了）、
-// 离线不能下发、温度范围与步长、二次确认 → 成功 / 失败 / 结果未确认、失败不重试、下发前后各读一次。
+// 离线不能下发、温度范围与步长、二次确认 → 成功 / 失败 / 未变化 / 结果未知 / 无法核对、失败不重试、下发前后各读一次。
 // 只用假后端（fetch 被替换），不连任何真实服务，不调真实写接口。
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { QueryClientProvider } from '@tanstack/react-query'
@@ -427,7 +427,7 @@ describe('下发', () => {
     await click(okIn(await prepare()))
     const badge = await screen.findByText('结果未知', { selector: '[data-slot=badge]' }, { timeout: 3000 })
     expectFourCells(badge)
-    expect(await openNotes()).toContain('结果未确认，请刷新查看')
+    expect(await openNotes()).toContain('已下发，结果未知，请刷新查看')
     expect(be.callsTo('/ctrl/unified-ctrl-set')).toHaveLength(1)
   })
 

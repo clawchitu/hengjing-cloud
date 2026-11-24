@@ -90,7 +90,8 @@ export const TEXT = {
   badMode: '运行模式无效',
   projectChanged: '当前项目已变化，请重新确认',
   aborted: '已离开页面或切换项目，未下发',
-  unconfirmed: '结果未确认，请刷新查看',
+  /** 应答结果未知（超时、断网等）：请求已发出，统一按「已下发，结果未知」 */
+  unconfirmed: '已下发，结果未知，请刷新查看',
   verified: '已核对',
   readBeforeFailed: '下发前读取当前状态失败，未下发',
   readAfterFailedUnknown: '下发后回读失败，请稍后刷新核对',

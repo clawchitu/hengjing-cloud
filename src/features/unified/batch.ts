@@ -65,8 +65,10 @@ const same = (xs: Array<number | null>): number | null => (xs.length && xs.every
 export function summarizeRooms(rooms: ReadonlyArray<{ switch?: number; setTemp?: number; isConnected?: boolean }>): UnifiedSnapshot {
   const online = rooms.filter((r) => r.isConnected !== false)
   const sws = online.map((r) => num(r.switch))
-  const ts = online.map((r) => { const v = num(r.setTemp); return v === null ? null : Math.round(v * 100) / 100 })
-  const snap: UnifiedSnapshot = { rooms: rooms.length, roomSwitch: same(sws), roomTemp: same(ts), perRoom: { roomSwitch: sws, roomTemp: ts } }
+  // 逐房间温度用原始读数核对（按 0.01 容差）；汇总值四舍五入到两位，只用于显示和整体比较
+  const ts = online.map((r) => num(r.setTemp))
+  const shown = ts.map((v) => (v === null ? null : Math.round(v * 100) / 100))
+  const snap: UnifiedSnapshot = { rooms: rooms.length, roomSwitch: same(sws), roomTemp: same(shown), perRoom: { roomSwitch: sws, roomTemp: ts } }
   if (online.length < rooms.length) snap.offline = rooms.length - online.length
   return snap
 }
@@ -100,6 +102,8 @@ export interface BatchRow {
   note?: string
   /** 批次层面判定的失败且确定没执行（如登录状态异常） */
   notExecuted?: boolean
+  /** 控制屏已应答 success=true（进度里据此显示「已下发，正在核对…」） */
+  replyOk?: boolean
   state: UnifiedState<UnifiedSnapshot>
 }
 export type BatchPhase = 'idle' | 'confirming' | 'running' | 'done'
@@ -138,12 +142,12 @@ export const LOGIN_ABNORMAL_TEXT = '登录状态异常，请重新登录后下�
 /**
  * 批次截止：从开始下发起 35 秒（方案 S12 验收「35 秒内给出最终结果」）。到截止时：
  * - 还没发出的项目（含正在下发前读取、正在等令牌续期的）→ 未下发（超时），之后 beforeSend 一律拒绝，绝不再发写请求；
- * - 已经发出、还没回应的 → 立即标「结果未确认」，不再等它
+ * - 已经发出、还没回应的 → 立即标「已下发，结果未知」，不再等它
  * 截止只影响界面上的标注：写锁不在这里放，仍按原写结算、回读核对或锁的有效期（见 lock.ts）
  */
 export const BATCH_DEADLINE_MS = 35_000
 export const DEADLINE_NOT_SENT = '超过 35 秒截止时间，未下发（超时）'
-export const DEADLINE_UNKNOWN = '超过 35 秒截止时间仍未收到应答，结果未确认，请刷新查看；未自动重试'
+export const DEADLINE_UNKNOWN = '已下发，结果未知：超过 35 秒截止时间仍未收到应答，请刷新查看；未自动重试'
 export const DEADLINE_REPLIED_OK = '已下发，结果未知：下发后回读在 35 秒截止前未完成，请稍后刷新确认；未自动重试'
 export const DEADLINE_REPLIED_FAIL = '控制屏明确拒绝（未自动重试）；下发后回读在 35 秒截止前未完成'
 /** 下发前读到房间全部关着，这次又要设温度（且没同时开房间）：不发（后端答复⑦） */
@@ -206,7 +210,7 @@ export function createUnifiedBatch(deps: BatchDeps) {
   const emit = (patch: Partial<BatchState>) => {
     const rows = entries.map((e): BatchRow => ({
       id: e.p.id, code: e.p.code, name: e.p.name, at: e.at, state: e.ctl.getState(),
-      status: e.final?.status ?? rowStatus(e.ctl.getState(), e.started), note: e.final?.note, notExecuted: e.final?.notExecuted,
+      status: e.final?.status ?? rowStatus(e.ctl.getState(), e.started), note: e.final?.note, notExecuted: e.final?.notExecuted, replyOk: e.reply === 'ok',
     }))
     state = { ...state, rows, ...patch }
     for (const fn of subs) fn()
