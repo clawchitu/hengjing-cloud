@@ -7,7 +7,7 @@
 import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { ConfirmHost } from '@/components/ConfirmHost'
 import { Toaster } from '@/components/ui/sonner'
-import { ConfirmControllerContext as Ctl, createConfirmController, routeScope, showToast, type ConfirmOptions } from './feedback'
+import { ConfirmControllerContext as Ctl, createConfirmController, routeScope, showToast, type ConfirmOptions, type ExpireReason } from './feedback'
 import type { Project, Role, Scope, User } from '../api'
 import type { ApiError } from '../api/errors'
 import type { SessionInfo } from '../api/session'
@@ -18,6 +18,7 @@ type Auth = { username: string; role: Role }
 
 interface Feedback {
   toast: (text: string, err?: boolean) => void
+  /** 兼容入口：不绑定发起它的组件实例，只核对路由 / 会话。页面里用 app/feedback 的 useConfirm()（签名相同，随页面卸载失效） */
   confirm: (o: ConfirmOptions) => Promise<boolean>
 }
 
@@ -52,6 +53,13 @@ interface Ctx extends Feedback {
 }
 
 const C = createContext<Feedback>(null as unknown as Feedback)
+
+const EXPIRE_TEXT: Record<ExpireReason, string> = {
+  route: '路由已变化',
+  session: '登录状态已变化',
+  'owner-unmounted': '发起它的页面已卸载',
+  'project-changed': '当前项目已变化',
+}
 
 /** 没有可见项目时的占位，保证旧页面拿到的 project 不为空 */
 const NO_PROJECT: Project = Object.freeze({
@@ -88,10 +96,17 @@ export function useApp(): Ctx {
 
 export function AppProvider({ children }: { children: ReactNode }) {
   // 请求所属上下文：路由 + 会话（登录态、账号），见 app/feedback.ts「离开即失效」
-  const [ctl] = useState(() => createConfirmController(() => {
-    const v = getSessionView()
-    return `${routeScope()}|${v.authed ? v.userKey ?? '' : '-'}`
-  }))
+  const [ctl] = useState(() => createConfirmController(
+    () => {
+      const v = getSessionView()
+      return { route: routeScope(), session: v.authed ? v.userKey ?? '' : '-' }
+    },
+    // 失效判为 false 时不静默：留一行原因便于排查，并提示用户（会话变化时登出 / 过期已有各自的提示，不再叠加）
+    ({ title, reason, how }) => {
+      console.info(`[确认弹窗] 「${title}」已失效（${EXPIRE_TEXT[reason]}），${how === 'clicked' ? '点击确认时' : '已自动关闭，'}按取消处理`)
+      if (reason !== 'session') showToast('页面已变化，操作已取消', true)
+    },
+  ))
   useEffect(() => ctl.trackInput(document), [ctl])
   // Provider 卸载：未结算的确认按 false 结算，不悬空
   useEffect(() => () => ctl.cancel(), [ctl])

@@ -9,6 +9,7 @@ import { Switch } from '@/components/ui/switch'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { useApp } from '../app/store'
+import { useConfirm } from '../app/feedback'
 import * as api from '../api'
 import { DEW_MODES, isStandalone, type FreshAir as FA } from '../api'
 
@@ -30,7 +31,8 @@ function Ring({ pct }: { pct: number }) {
 }
 
 export default function FreshAir() {
-  const { projectId, project, toast, confirm } = useApp()
+  const { projectId, project, toast } = useApp()
+  const confirm = useConfirm()
   const clock = useClock()
   const [units, setUnits] = useAsync(() => api.getFreshAir(projectId), [projectId])
   const [curRaw, setCur] = useState('FA-01')

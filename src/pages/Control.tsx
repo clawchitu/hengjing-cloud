@@ -10,6 +10,7 @@ import { InputGroup, InputGroupInput } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger } from '@/components/ui/select'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { useApp } from '../app/store'
+import { useConfirm } from '../app/feedback'
 import { projectsInGroup, useDealerPick, useDealers } from '../data/org'
 import { DealersError } from '../components/DealersError'
 import * as api from '../api'
@@ -18,7 +19,8 @@ import { hasRooms } from '../api'
 const MODES = [['制冷', faSnowflake, '#0891b2'], ['制热', faSun, '#f97316'], ['除湿', faDropletSlash, '#10b981'], ['通风', faWind, '#0ea5e9'], ['自动', faRobot, '#8b5cf6'], ['不变', faMinus, '#94a3b8']] as const
 
 export default function Control() {
-  const { toast, confirm, scope, user } = useApp()
+  const { toast, scope, user } = useApp()
+  const confirm = useConfirm()
   const isAdmin = user.role === 'admin'
   const { projects } = scope
   // S6a：经销商默认值随列表异步到达（派生值）；经销商账号没有选择器，直接用账号范围内的全部集成项目

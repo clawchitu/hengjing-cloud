@@ -2,19 +2,44 @@
 // confirm() 的 Promise 约定（S9 / S10 / S12 的下发都靠它，见 app/feedback.ts）：确认 true、取消 / Esc false；
 // 打开中再次调用时前一个按取消结算；按钮只结算自己渲染出来的那次请求；离开（路由变化、登出、Provider 卸载）即按 false 结算；
 // 连续确认时焦点回到最初的触发器。演示数据模式，不连任何后端。
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { QueryClientProvider } from '@tanstack/react-query'
-import { createElement, useEffect } from 'react'
+import { createElement, Fragment, useEffect, useState } from 'react'
 import { BrowserRouter, Route, Routes, useNavigate } from 'react-router-dom'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { toast as sonner } from 'sonner'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { setConfig } from '../api/config'
 import { createQueryClient } from '../api/query'
 import { __resetSessionViewForTests, logout, mockSignIn } from '../data/session'
+import { __resetCurrentForTests } from '../data/org/current'
 import { AppProvider, useApp } from './store'
-import { createConfirmController, useCancelConfirmOnLeave } from './feedback'
+import { createConfirmController, useCancelConfirmOnLeave, useConfirm, type ConfirmOwner } from './feedback'
 
 type Confirm = ReturnType<typeof useApp>['confirm']
-const box: { confirm?: Confirm; nav?: (to: string) => void } = {}
+const box: {
+  confirm?: Confirm; nav?: (to: string) => void
+  ownerConfirm?: Confirm; sent: number; setOffline?: (v: boolean) => void; setProject?: (id: string) => void
+} = { sent: 0 }
+
+/** 用 useConfirm() 发起确认的页面；确认为 true 才“下发”（sent + 1） */
+function OwnerPage() {
+  const confirm = useConfirm()
+  useEffect(() => { box.ownerConfirm = (o) => confirm(o).then((ok) => { if (ok) box.sent++; return ok }) }, [confirm])
+  return createElement('div', null, '页面')
+}
+/** 模拟 Layout 的两种卸载页面方式：离线分支替换 Outlet、按 project.id 重挂（keyed=false 时页面不随项目重挂） */
+function MiniLayout({ keyed }: { keyed: boolean }) {
+  const { project, setProjectId } = useApp()
+  const [offline, setOffline] = useState(false)
+  useEffect(() => { box.setOffline = setOffline; box.setProject = (id) => { setProjectId(id) } }, [setProjectId])
+  if (offline) return createElement('div', null, '离线')
+  return keyed ? createElement(Fragment, { key: project.id }, createElement(OwnerPage)) : createElement(OwnerPage)
+}
+function mountOwner(keyed = true) {
+  return render(createElement(QueryClientProvider, { client: createQueryClient() }, createElement(AppProvider, null,
+    createElement(BrowserRouter, null, createElement(Probe), createElement(MiniLayout, { keyed })))))
+}
+const ownerOpen = async (o: Parameters<Confirm>[0]) => { let r!: ReturnType<typeof track>; await act(async () => { r = track(box.ownerConfirm!(o)) }); return r }
 
 function Probe() {
   const { confirm } = useApp()
@@ -50,10 +75,11 @@ beforeEach(() => {
   window.history.replaceState(null, '', '/a')
   setConfig({ apiBase: '/api', dataSource: 'mock' })
   localStorage.clear(); sessionStorage.clear()
-  __resetSessionViewForTests()
+  __resetSessionViewForTests(); __resetCurrentForTests()
   mockSignIn({ username: 'cosyhome', role: 'dealer' }, true)
 })
-afterEach(() => { cleanup(); setConfig(null); box.confirm = undefined; box.nav = undefined })
+// Sonner 的队列是模块级的、新挂载的 Toaster 会补发未关闭的 toast：每条用例后全部标记关闭，避免串到下一条
+afterEach(() => { sonner.dismiss(); cleanup(); setConfig(null); box.confirm = undefined; box.nav = undefined; box.ownerConfirm = undefined; box.sent = 0 })
 
 describe('confirm()', () => {
   it('点「确认」→ true，弹窗关闭', async () => {
@@ -204,7 +230,7 @@ describe('confirm()', () => {
 
   it('控制器：cancelStale 只关所属上下文已过期的请求', async () => {
     let scope = 'r1'
-    const c = createConfirmController(() => scope)
+    const c = createConfirmController(() => ({ route: scope, session: 's' }))
     const a = track(c.request({ title: 'A', body: '' }))
     c.cancelStale()
     await Promise.resolve()
@@ -241,5 +267,134 @@ describe('confirm()', () => {
     expect(b.value).toBe(false)
     expect(document.activeElement).toBe(trigger)
     trigger.remove()
+  })
+
+  it('所有者：弹窗打开后当前项目变离线（页面被离线分支替换卸载）→ false，不下发，弹窗关闭', async () => {
+    mountOwner()
+    const r = await ownerOpen({ title: '全部开启', body: 'x', okText: '确认下发' })
+    expect(screen.getByRole('alertdialog')).toBeTruthy()
+    await act(async () => { box.setOffline!(true) })
+    await flush()
+    expect(r).toEqual({ value: false, settled: 1 })
+    expect(box.sent).toBe(0)
+    expect(screen.queryByRole('alertdialog')).toBeNull()
+  })
+
+  it('所有者：当前项目变化（页面按 project.id 重挂）→ false，不下发；新实例发起的确认不受旧实例清理影响', async () => {
+    mountOwner(true)
+    const a = await ownerOpen({ title: 'A', body: 'x', okText: '确认 A' })
+    await act(async () => { box.setProject!('PRJ-10243') })
+    await flush()
+    expect(a).toEqual({ value: false, settled: 1 })
+    expect(screen.queryByRole('alertdialog')).toBeNull()
+    // 重挂后的新实例发起的确认：照常打开、照常结算为 true
+    const b = await ownerOpen({ title: 'B', body: 'y', okText: '确认 B' })
+    await flush()
+    expect(b.settled).toBe(0)
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: '确认 B' })) })
+    await flush()
+    expect(b).toEqual({ value: true, settled: 1 })
+    expect(box.sent).toBe(1)
+  })
+
+  it('所有者：页面不随项目重挂时，当前项目变化也让它发起的确认失效（false、关闭）', async () => {
+    mountOwner(false)
+    const a = await ownerOpen({ title: 'A', body: 'x', okText: '确认 A' })
+    await act(async () => { box.setProject!('PRJ-10243') })
+    await flush()
+    expect(a).toEqual({ value: false, settled: 1 })
+    expect(box.sent).toBe(0)
+    expect(screen.queryByRole('alertdialog')).toBeNull()
+  })
+
+  it('控制器：所有者已卸载或项目已变时 settle(true) 同步得到 false；cancelOwner 只取消自己的请求', async () => {
+    const c = createConfirmController(() => ({ route: 'r', session: 's' }))
+    const ownerA: ConfirmOwner = { alive: true, projectId: 'p1' }
+    const ownerB: ConfirmOwner = { alive: true, projectId: 'p1' }
+    const a = track(c.request({ title: 'A', body: '' }, ownerA))
+    ownerA.alive = false // 卸载清理已执行，界面还没来得及关
+    c.settle(c.getState().req!.id, true, false)
+    const b = track(c.request({ title: 'B', body: '' }, ownerB))
+    ownerB.projectId = 'p2'
+    c.settle(c.getState().req!.id, true, false)
+    const d = track(c.request({ title: 'D', body: '' }, { alive: true, projectId: 'p1' }))
+    c.cancelOwner(ownerA) // 旧实例的清理：不动别人发起的请求
+    c.cancelOwner(ownerB)
+    const dId = c.getState().req!.id
+    c.settle(dId, true, false)
+    await Promise.resolve()
+    expect(a).toEqual({ value: false, settled: 1 })
+    expect(b).toEqual({ value: false, settled: 1 })
+    expect(d).toEqual({ value: true, settled: 1 })
+  })
+
+  it('边界：React Router 同路径只改 query 的导航会生成新 key → 确认失效', async () => {
+    mount(true)
+    const a = await open({ title: 'A', body: 'x', okText: '确认 A' })
+    await act(async () => { box.nav!('/a?tab=2') })
+    await flush()
+    expect(a).toEqual({ value: false, settled: 1 })
+  })
+
+  it('边界：脚本 replaceState 保留 key 和 pathname（只改 query / hash）检测不到，确认照常有效（已在 feedback.ts 写明）', async () => {
+    mount(true)
+    const a = await open({ title: 'A', body: 'x', okText: '确认 A' })
+    window.history.replaceState(window.history.state, '', '/a?tab=3#x')
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: '确认 A' })) })
+    await flush()
+    expect(a).toEqual({ value: true, settled: 1 })
+  })
+
+  describe('失效判为 false 时不静默', () => {
+    const toastText = () => document.querySelector('[data-sonner-toaster]')?.textContent ?? ''
+
+    it('点了确认但页面已变（历史条目已变）：console.info 写明原因，并提示「页面已变化，操作已取消」', async () => {
+      const info = vi.spyOn(console, 'info').mockImplementation(() => {})
+      mount(true)
+      const r = await open({ title: '确认下发统一控制指令', body: 'x', okText: '确认下发' })
+      const ok = screen.getByRole('button', { name: '确认下发' })
+      window.history.pushState({ key: 'other', idx: 9 }, '', '/b')
+      ok.dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 1 }))
+      await flush()
+      expect(r.value).toBe(false)
+      expect(info).toHaveBeenCalledWith('[确认弹窗] 「确认下发统一控制指令」已失效（路由已变化），点击确认时按取消处理')
+      await waitFor(() => expect(toastText()).toContain('页面已变化，操作已取消'))
+      info.mockRestore()
+    })
+
+    it('发起它的页面卸载、弹窗被自动关闭：同样记录并提示', async () => {
+      const info = vi.spyOn(console, 'info').mockImplementation(() => {})
+      mountOwner()
+      await ownerOpen({ title: '全部开启', body: 'x', okText: '确认下发' })
+      await act(async () => { box.setOffline!(true) })
+      await flush()
+      expect(info).toHaveBeenCalledWith('[确认弹窗] 「全部开启」已失效（发起它的页面已卸载），已自动关闭，按取消处理')
+      await waitFor(() => expect(toastText()).toContain('页面已变化，操作已取消'))
+      info.mockRestore()
+    })
+
+    it('会话变化（登出）：只记录原因，不叠加「页面已变化」提示', async () => {
+      const info = vi.spyOn(console, 'info').mockImplementation(() => {})
+      mount()
+      await open({ title: '确认下发', body: 'x' })
+      await act(async () => { logout() })
+      await flush()
+      await flush()
+      expect(info).toHaveBeenCalledWith('[确认弹窗] 「确认下发」已失效（登录状态已变化），已自动关闭，按取消处理')
+      expect(toastText()).not.toContain('页面已变化')
+      info.mockRestore()
+    })
+
+    it('正常取消 / Esc / Provider 卸载：不记录、不提示', async () => {
+      const info = vi.spyOn(console, 'info').mockImplementation(() => {})
+      const { unmount } = mount()
+      await open({ title: 'A', body: 'a' })
+      await act(async () => { fireEvent.click(screen.getByRole('button', { name: '取消' })) })
+      await open({ title: 'B', body: 'b' })
+      unmount()
+      await flush()
+      expect(info).not.toHaveBeenCalled()
+      info.mockRestore()
+    })
   })
 })
