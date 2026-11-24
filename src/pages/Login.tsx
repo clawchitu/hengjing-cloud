@@ -1,13 +1,19 @@
 import type React from 'react'
 import { useMemo, useState } from 'react'
-import { useLocation, useNavigate } from 'react-router-dom'
 import { faEyeSlash, faEye, faChartLine, faSliders, faShieldHalved, faLock, faThermometerHalf, faWind, faDroplet, faCube } from '@fortawesome/free-solid-svg-icons'
 import { faUser as faUserR } from '@fortawesome/free-regular-svg-icons'
 import { Icon, LogoMark } from '../components/legacy'
 import { Checkbox } from '@/components/ui/checkbox'
 import { InputGroup, InputGroupInput } from '@/components/ui/input'
+import { useForm, type FieldErrors } from 'react-hook-form'
+import { zodResolver } from '@hookform/resolvers/zod'
+import { Form, FormControl, FormField, FormItem, FormLabel } from '@/components/ui/form'
 import { useApp } from '../app/store'
 import * as api from '../api'
+import { isMockMode } from '../api/config'
+import { isApiError } from '../api/errors'
+import { signIn } from '../api/session'
+import { loginDefaults, loginSchema, type LoginValues } from './loginSchema'
 
 // deterministic pseudo random
 function rng(seed: number) { return () => ((seed = (seed * 16807) % 2147483647) / 2147483647) }
@@ -100,28 +106,36 @@ function NightScene() {
 
 export default function Login() {
   const { login, toast } = useApp()
-  const nav = useNavigate()
-  const loc = useLocation() as { state?: { from?: string } }
-  const [u, setU] = useState('')
-  const [pw, setPw] = useState('')
   const [show, setShow] = useState(false)
-  const [remember, setRemember] = useState(true)
-  const [busy, setBusy] = useState(false)
+  const form = useForm<LoginValues>({ resolver: zodResolver(loginSchema), defaultValues: loginDefaults })
+  const busy = form.formState.isSubmitting
 
-  const submit = async (e: React.FormEvent) => {
-    e.preventDefault()
-    if (!u.trim() || !pw) return toast('请输入用户名和密码', true)
-    setBusy(true)
+  // 跳转由 main.tsx 的 LoginRoute 在登录态变化后统一处理（回原路径或首页）
+  const done = () => toast('登录成功，欢迎回来')
+
+  const onSubmit = async ({ account, password, remember }: LoginValues) => {
+    if (!isMockMode()) {
+      try {
+        await signIn(account, password, remember)
+      } catch (e) {
+        // 后端文案（密码错误、经销商未配置集成功能等）原样提示；令牌类技术细节已在 errors.ts 统一成中文
+        return toast(isApiError(e) ? e.message : '登录失败，请重试', true)
+      }
+      return done()
+    }
     let auth
     try {
-      auth = await api.login(u.trim(), pw)
+      auth = await api.login(account, password)
     } catch {
-      setBusy(false)
       return toast('用户名或密码错误', true)
     }
     login(auth, remember)
-    toast('登录成功，欢迎回来')
-    nav(loc.state?.from && loc.state.from !== '/login' ? loc.state.from : '/home', { replace: true })
+    done()
+  }
+  // 校验不通过时沿用原来的提示方式和文案（toast），不在输入框下方插入文字，界面不变
+  const onInvalid = (errs: FieldErrors<LoginValues>) => {
+    const empty = errs.account?.type === 'too_small' || errs.password?.type === 'too_small'
+    toast(empty ? '请输入用户名和密码' : errs.account?.message ?? errs.password?.message ?? '请输入用户名和密码', true)
   }
 
   return (
@@ -144,24 +158,36 @@ export default function Login() {
         </div>
       </div>
       <div className="login-right">
-        <form className="login-form" onSubmit={submit}>
-          <h1>欢迎登录</h1>
-          <div className="hint">请输入您的账号信息以访问管理平台</div>
-          <label>用户名</label>
-          <InputGroup variant="field" className="mb-5"><Icon icon={faUserR} /><InputGroupInput className="text-[13.5px] text-foreground" value={u} onChange={(e) => setU(e.target.value)} placeholder="请输入用户名" autoComplete="username" /></InputGroup>
-          <label>密码</label>
-          <InputGroup variant="field" className="mb-5">
-            <Icon icon={faLock} />
-            <InputGroupInput className="text-[13.5px] text-foreground" type={show ? 'text' : 'password'} value={pw} onChange={(e) => setPw(e.target.value)} placeholder="请输入密码" autoComplete="current-password" style={{ letterSpacing: show ? 0 : 4 }} />
-            <button type="button" className="border-0 bg-transparent p-0 text-faint" onClick={() => setShow((s) => !s)}><Icon icon={show ? faEye : faEyeSlash} /></button>
-          </InputGroup>
-          <div className="login-row">
-            <label><Checkbox checked={remember} onCheckedChange={(v) => setRemember(v === true)} />记住我</label>
-            <a className="cyan" onClick={() => toast('已向绑定手机发送重置链接')} style={{ cursor: 'pointer' }}>忘记密码?</a>
-          </div>
-          <button className="btn-login" disabled={busy}>{busy ? '登录中…' : '登 录'}</button>
-          <div className="login-ver">平台版本 <b>v3.6.2</b> · 技术支持 400-820-1234</div>
-        </form>
+        <Form {...form}>
+          <form className="login-form" onSubmit={form.handleSubmit(onSubmit, onInvalid)} noValidate>
+            <h1>欢迎登录</h1>
+            <div className="hint">请输入您的账号信息以访问管理平台</div>
+            <FormField control={form.control} name="account" render={({ field }) => (
+              <FormItem>
+                <FormLabel>用户名</FormLabel>
+                <InputGroup variant="field" className="mb-5"><Icon icon={faUserR} /><FormControl><InputGroupInput className="text-[13.5px] text-foreground" {...field} placeholder="请输入用户名" autoComplete="username" /></FormControl></InputGroup>
+              </FormItem>
+            )} />
+            <FormField control={form.control} name="password" render={({ field }) => (
+              <FormItem>
+                <FormLabel>密码</FormLabel>
+                <InputGroup variant="field" className="mb-5">
+                  <Icon icon={faLock} />
+                  <FormControl><InputGroupInput className="text-[13.5px] text-foreground" {...field} type={show ? 'text' : 'password'} placeholder="请输入密码" autoComplete="current-password" style={{ letterSpacing: show ? 0 : 4 }} /></FormControl>
+                  <button type="button" className="border-0 bg-transparent p-0 text-faint" onClick={() => setShow((s) => !s)}><Icon icon={show ? faEye : faEyeSlash} /></button>
+                </InputGroup>
+              </FormItem>
+            )} />
+            <div className="login-row">
+              <FormField control={form.control} name="remember" render={({ field }) => (
+                <label><Checkbox name={field.name} ref={field.ref} checked={field.value} onCheckedChange={(v) => field.onChange(v === true)} onBlur={field.onBlur} />记住我</label>
+              )} />
+              <a className="cyan" onClick={() => toast('已向绑定手机发送重置链接')} style={{ cursor: 'pointer' }}>忘记密码?</a>
+            </div>
+            <button className="btn-login" disabled={busy}>{busy ? '登录中…' : '登 录'}</button>
+            <div className="login-ver">平台版本 <b>v3.6.2</b> · 技术支持 400-820-1234</div>
+          </form>
+        </Form>
       </div>
     </div>
   )

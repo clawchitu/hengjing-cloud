@@ -1,4 +1,4 @@
-// 登录、当前用户、退出。登录态与页面的对接在 S5 做；这里只提供接口函数。
+// 登录、当前用户、退出的接口函数。登录态（状态机、can()、主动续期）见 session.ts。
 import { request } from './http'
 import { clearTokens, readTokens, tokensFromResponse, writeTokens } from './tokens'
 
@@ -21,21 +21,28 @@ let currentUserId = ''
 export const getCurrentUserId = () => currentUserId
 export const setCurrentUserId = (id: string) => { currentUserId = id }
 
-/** POST /auth/login。恒境云按负责人答复传 isdp=true */
-export async function login(mobile: string, password: string, opts: { remember?: boolean; isdp?: boolean } = {}) {
+/**
+ * POST /auth/login。恒境云一律传 isdp=true（负责人答复；没有集成功能的账号在登录时就被拒，
+ * 后端返回 500 code 13，文案原样提示）。
+ */
+export async function login(mobile: string, password: string, opts: { remember?: boolean; store?: boolean } = {}) {
   const r = await request<{ access_token?: string; refresh_token?: string; expires_in?: number }>('/auth/login', {
     auth: false,
-    body: { mobile, password, isdp: opts.isdp ?? true },
+    body: { mobile, password, isdp: true },
   })
   const t = tokensFromResponse(r)
-  writeTokens(t, opts.remember ?? false)
+  // store=false：由调用方确认本次登录仍然有效后再写（session.ts）
+  if (opts.store !== false) writeTokens(t, opts.remember ?? false)
   return t
 }
 
-/** GET /me。结果只放内存 */
-export async function me(signal?: AbortSignal) {
-  const r = await request<MeResponse>('/me', { method: 'GET', signal })
-  if (r.user_entity?.id) setCurrentUserId(r.user_entity.id)
+/**
+ * GET /me。结果只放内存。
+ * accessToken：用指定令牌查（不读存储、不续期）；track=false：不更新 getCurrentUserId()，由调用方决定。
+ */
+export async function me(opts: { signal?: AbortSignal; accessToken?: string; track?: boolean } = {}) {
+  const r = await request<MeResponse>('/me', { method: 'GET', signal: opts.signal, accessToken: opts.accessToken })
+  if (opts.track !== false && r.user_entity?.id) setCurrentUserId(r.user_entity.id)
   return r
 }
 
@@ -49,12 +56,17 @@ export function can(paths: readonly string[], route: string): boolean {
   })
 }
 
-/** POST /auth/invalidate；不论成败都清本地登录态 */
+/**
+ * POST /auth/invalidate；不论成败本地登录态都已清掉。
+ * 先取出令牌并立即清本地，再用取出的令牌调 invalidate：退出途中重新登录的新会话不受影响。
+ */
 export async function logout() {
+  const t = readTokens()
+  const uid = currentUserId
+  clearTokens()
+  currentUserId = ''
+  if (!t) return
   try {
-    if (readTokens()) await request('/auth/invalidate', { body: { user_id: currentUserId } })
-  } catch { /* 退出时忽略 */ } finally {
-    clearTokens()
-    currentUserId = ''
-  }
+    await request('/auth/invalidate', { body: { user_id: uid }, accessToken: t.accessToken })
+  } catch { /* 退出时忽略 */ }
 }

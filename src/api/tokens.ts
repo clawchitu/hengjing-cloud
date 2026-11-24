@@ -56,6 +56,16 @@ export function tokensFromResponse(r: { access_token?: string; refresh_token?: s
   return { accessToken: r.access_token, refreshToken: r.refresh_token, expiresAt: now + sec * 1000 }
 }
 
+/** access_token（JWT）里的 sub，用来判断两个令牌是不是同一个用户；解析不了返回 null */
+export function jwtSub(token: string | null | undefined): string | null {
+  try {
+    const p = token?.split('.')[1]
+    if (!p) return null
+    const json = JSON.parse(atob(p.replace(/-/g, '+').replace(/_/g, '/'))) as { sub?: unknown }
+    return typeof json.sub === 'string' ? json.sub : null
+  } catch { return null }
+}
+
 // 错误信息与日志脱敏时，把当前令牌原文也当作敏感串
 registerSecrets(() => {
   const t = readTokens()

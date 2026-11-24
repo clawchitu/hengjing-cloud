@@ -119,8 +119,18 @@ describe('令牌续期', () => {
     expect(expired).toHaveBeenCalledTimes(1)
   })
 
-  it('续期时断网：不清登录态', async () => {
+  it('续期时断网：同样按过期处理（续期失败一律回登录页）', async () => {
     login('A1', 'R1', 10_000)
+    const expired = vi.fn()
+    onSessionExpired(expired)
+    vi.stubGlobal('fetch', () => Promise.reject(new TypeError('fetch failed')))
+    await expect(request('/x')).rejects.toMatchObject({ kind: 'unauthenticated' })
+    expect(readTokens()).toBeNull()
+    expect(expired).toHaveBeenCalledTimes(1)
+  })
+
+  it('普通请求断网（令牌没到续期窗口）：不续期、不清登录态', async () => {
+    login()
     vi.stubGlobal('fetch', () => Promise.reject(new TypeError('fetch failed')))
     await expect(request('/x')).rejects.toMatchObject({ kind: 'network' })
     expect(readTokens()?.refreshToken).toBe('R1')
@@ -136,7 +146,7 @@ describe('令牌续期', () => {
     expect(readTokens()?.refreshToken).toBe('NEWR')
   })
 
-  it('刷新途中重新登录：旧刷新失败不清新会话', async () => {
+  it('刷新途中重新登录：旧刷新失败不清新会话，直接用新会话的令牌', async () => {
     login()
     const expired = vi.fn()
     onSessionExpired(expired)
@@ -144,15 +154,16 @@ describe('令牌续期', () => {
       writeTokens({ accessToken: 'NEW', refreshToken: 'NEWR', expiresAt: Date.now() + HOUR })
       return json({ code: 16, message: 'invalid refresh_token' }, 401)
     } })
-    await expect(refreshSession()).rejects.toMatchObject({ kind: 'unauthenticated' })
+    await expect(refreshSession()).resolves.toMatchObject({ accessToken: 'NEW' })
     expect(readTokens()?.refreshToken).toBe('NEWR')
     expect(expired).not.toHaveBeenCalled()
   })
 
-  it('refresh 返回 200 但缺令牌 → server 错误', async () => {
+  it('refresh 返回 200 但缺令牌 → 续期失败，按过期处理', async () => {
     login()
     fakeBackend({ '/auth/refresh': () => json({}) })
-    await expect(refreshSession()).rejects.toMatchObject({ kind: 'server' })
+    await expect(refreshSession()).rejects.toMatchObject({ kind: 'unauthenticated', cause: { kind: 'server' } })
+    expect(readTokens()).toBeNull()
   })
 
   it('无权限（no permission）不触发续期', async () => {

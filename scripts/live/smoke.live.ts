@@ -16,10 +16,10 @@ if (getConfig().apiEnv !== 'test') throw new Error('联调脚本只允许连测�
 interface CtrlProject { id: string; name?: string; online?: boolean }
 
 describe('测试环境只读联调', () => {
-  it('平台账号：login(isdp=true) → me → ctrl/projects → ctrl 205 读 → refresh', async () => {
+  it('平台账号：login → me → ctrl/projects → ctrl 205 读 → refresh', async () => {
     clearTokens()
     const acct = readAccount('hengjing-admin')
-    await login(acct.mobile, acct.password, { isdp: true })
+    await login(acct.mobile, acct.password)
     const m = await me()
     expect(m.user_entity?.id).toBeTruthy()
     expect(isDealer(m.user_entity)).toBe(false)
@@ -51,8 +51,8 @@ describe('测试环境只读联调', () => {
   it('经销商账号：login → me(type=1) → projects', async () => {
     clearTokens()
     const acct = readAccount('hengjing-dealer')
-    // 测试经销商账号传 isdp=true 会被拒（实测记录 Q3），后端修好前临时传 false
-    await login(acct.mobile, acct.password, { isdp: false })
+    // 后端已修好（11/24）：经销商账号传 isdp=true 也能登录
+    await login(acct.mobile, acct.password)
     const m = await me()
     expect(isDealer(m.user_entity)).toBe(true)
     const r = await request<{ project_entities?: unknown[] }>('/projects', { body: {} })
