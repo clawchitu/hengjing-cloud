@@ -424,3 +424,4 @@ CI（GitHub Actions，每个 PR 触发）：`oxlint` → `tsc -b` → `vitest` �
 - 城市选择用 /wx/city-list（测试服只有无锡、苏州，正式服全量；返回城市名，天气接口接受城市名）；经销商需开 /wx/city-list 权限（负责人 11/24 10:13）。
 - 城市选择照数据平台 WeatherRecord.vue：/wx/city-list 返回 city_names，与本地全国省市级联数据（cosydata_fable/src/utils/cascader_disdrict.js）取交集做省→市二级选择；露点复用 utils/dewPoint.js。
 - 项目列表与在线筛选用 POST /v1/ctrl/projects（{only_online:true} 只返回在线；条目带 online:true，缺失即离线；字段比 /projects 多 mode、app_version 等）（后端 11/24 10:22，已实测）。
+- app_code 8 暂不用本平台，不测；主要支持 1 与 12（负责人 11/24 10:37）。
