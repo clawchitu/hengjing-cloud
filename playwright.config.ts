@@ -5,9 +5,12 @@ export default defineConfig({
   testDir: './e2e',
   snapshotPathTemplate: '{testDir}/__screenshots__/{testFilePath}/{arg}{ext}',
   fullyParallel: true,
+  forbidOnly: !!process.env.CI,
   retries: 0,
   reporter: [['list'], ['html', { open: 'never' }]],
-  expect: { toHaveScreenshot: { maxDiffPixelRatio: 0, animations: 'disabled', caret: 'hide' } },
+  // threshold: 0 = 逐像素颜色严格比较（默认 0.2 会放过整片换底色）；
+  // 只用 maxDiffPixels 给极少量抗锯齿像素留余地。基线与比对都在同一镜像里做。
+  expect: { toHaveScreenshot: { threshold: 0, maxDiffPixels: 50, animations: 'disabled', caret: 'hide' } },
   use: {
     baseURL: 'http://localhost:4173',
     viewport: { width: 1440, height: 900 },
