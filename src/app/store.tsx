@@ -15,7 +15,7 @@ import { can, getSessionView, logout, mockSignIn, useSession, useSessionBoot } f
 import { useCurrentProject, useOrgScope, useResetOnAccountChange, type LoadStatus, type SetProjectResult } from '../data/org'
 import { getStoredProjectId } from '../data/org/current'
 import { useQueryClient } from '@tanstack/react-query'
-import { setupUnifiedWriteLock } from '../features/unified/lock'
+import { registerAllVerifiers } from './writeLockSetup'
 
 type Auth = { username: string; role: Role }
 
@@ -125,7 +125,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   useResetOnAccountChange()
   // 写锁（#28）：应用初始化时注入 resolveProject（S6a 组织范围的同步查询）；核对器统一在 writeLockSetup 注册。同一个 QueryClient 只接一次
   const qc = useQueryClient()
-  useState(() => { setupUnifiedWriteLock(qc); return null })
+  useState(() => { registerAllVerifiers(qc); return null })
   const sess = useSession()
   const prevAuthed = useRef(sess.authed)
   useEffect(() => {
