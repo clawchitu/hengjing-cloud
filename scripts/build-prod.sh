@@ -23,9 +23,14 @@ mkdir -p "$OUT_DIR"
 OUT_DIR="$(cd "$OUT_DIR" && pwd)"   # 转绝对路径，后面会 cd 进子目录
 
 case "$API_BASE" in
-  /api|http://*|https://*) ;;
-  *) echo "API_BASE 只能是 /api 或 http(s):// 开头的完整地址：$API_BASE" >&2; exit 1 ;;
+  /api) ;;
+  https://*) ;;
+  *) echo "API_BASE 只能是 /api 或 https:// 开头的完整地址：$API_BASE" >&2; exit 1 ;;
 esac
+if [[ "$API_BASE" == https://* ]] && [[ ! "$API_BASE" =~ ^https://[A-Za-z0-9.-]+\.[A-Za-z]{2,}(:[0-9]+)?(/[A-Za-z0-9._~-]+)*$ ]]; then
+  echo "API_BASE 不是有效的 https 地址：$API_BASE" >&2; exit 1
+fi
+case "$API_BASE" in *test.cosyhome.com.cn*) echo "生产包不能指向测试环境：$API_BASE" >&2; exit 1 ;; esac
 if [[ ! "$API_BASE" =~ ^[A-Za-z0-9:/._~-]+$ ]]; then echo "API_BASE 含非法字符：$API_BASE" >&2; exit 1; fi
 
 VERSION="$(node -p "require('./package.json').version")"
@@ -38,12 +43,15 @@ NAME="hengjing-cloud-${VERSION}-${COMMIT}${DIRTY}"
 command -v zip >/dev/null || { echo "需要 zip 命令" >&2; exit 1; }
 
 echo "==> 构建（npm ci 请事先执行；Node >= 22.12）"
-# 构建时变量不写入任何后端地址；运行时配置全部在 config.js。
-env -u VITE_API_BASE -u VITE_API_ENV -u VITE_DATA_SOURCE -u VITE_WRITE_MODE -u VITE_WRITE_PROJECT_CODES \
+# 构建时默认值也按生产写死（进程环境变量优先于 .env 文件），这样即使部署后 config.js 没加载，
+# 前端回退到的构建默认值同样是：生产环境、禁止一切下发。
+VITE_API_BASE="$API_BASE" VITE_API_ENV=prod VITE_DATA_SOURCE=real \
+VITE_WRITE_MODE=off VITE_WRITE_PROJECT_CODES="" \
   npm run build
 
 [ -f dist/index.html ] || { echo "dist/index.html 不存在，构建失败" >&2; exit 1; }
 
+case "$OUT_DIR/" in "$ROOT/dist/"*) echo "OUT_DIR 不能放在 dist 里" >&2; exit 1 ;; esac
 STAGE="$OUT_DIR/$NAME"
 rm -rf "$STAGE"
 mkdir -p "$STAGE"
