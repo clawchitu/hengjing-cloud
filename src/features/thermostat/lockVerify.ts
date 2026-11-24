@@ -8,12 +8,14 @@ import { thermostatSource } from './source'
 
 /** 201 的核对数据：设备 id 与温度、节能、开关三个可改字段（-1 = 不改，比对时跳过） */
 export const record201 = (q: WriteQuery<201>): SentRecord => ({ msg: 201, deviceId: q.equipmentId, target: { temperature: q.temperature, eco: q.eco, switch: q.switch } })
-/** 206 的核对数据 */
-export const record206 = (on: boolean): SentRecord => ({ msg: 206, deviceId: null, target: { switch: on ? 1 : 0 } })
+/** 206（全部开关）要下发的内容：开 / 关，以及确认后预检读到的目标房间 id 集合（核对时逐个检查，回读缺了的按无法核对） */
+export interface AllSwitch { on: boolean; roomIds: number[] }
+/** 206 的核对数据（带目标房间 id 集合，随记录落盘，刷新恢复后同样逐个检查） */
+export const record206 = (p: AllSwitch): SentRecord => ({ msg: 206, deviceId: null, target: { switch: p.on ? 1 : 0 }, roomIds: [...p.roomIds] })
 
 /** 201 / 206 写后核对：用 200 的原始读数逐字段比对（writeLockVerify.ts，四态） */
 export const match201 = (q: WriteQuery<201>, raw: Pick<CtrlReply<200>, 'data'>) => matchRoomSet(record201(q), raw)
-export const match206 = (on: boolean, raw: Pick<CtrlReply<200>, 'data'>) => matchAllRoomsSwitch(record206(on), raw)
+export const match206 = (p: AllSwitch, raw: Pick<CtrlReply<200>, 'data'>) => matchAllRoomsSwitch(record206(p), raw)
 export { roomsAsReply }
 
 /**

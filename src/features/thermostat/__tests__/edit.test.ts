@@ -174,9 +174,21 @@ describe('201 Query：只发改了的标量，其余 -1，end_modes 用这份读
 })
 
 describe('下发结果分类', () => {
-  it('确定没生效才算失败：写防护、参数、未登录 / 无权限、503、success=false', () => {
-    for (const k of ['write_blocked', 'bad_request', 'unauthenticated', 'forbidden', 'unavailable', 'ctrl'] as const) expect(classify(new ApiError(k, 'x')).outcome).toBe('fail')
+  it('确定没生效才算失败（复用统一控制 outcomeOf）：写防护、本地参数、未登录、503 + code 14 → 未下发；success=false、网关无权限、后端参数错误 → 下发失败', () => {
+    for (const e of [new ApiError('write_blocked', 'x'), new ApiError('bad_request', 'x'), new ApiError('unauthenticated', 'x', { status: 401 }), new ApiError('unavailable', 'x', { status: 503, code: 14 })]) {
+      expect(classify(e)).toMatchObject({ outcome: 'fail', sent: false })
+      expect(classify(e).text).toMatch(/^未下发：/)
+    }
+    for (const e of [new ApiError('ctrl', 'x'), new ApiError('forbidden', 'x', { status: 403 }), new ApiError('bad_request', 'x', { status: 400 })]) {
+      expect(classify(e)).toMatchObject({ outcome: 'fail', sent: true })
+      expect(classify(e).text).toMatch(/^下发失败：/)
+    }
     expect(classify(new ApiError('write_blocked', '名单外')).text).toBe('未下发：名单外')
+  })
+  it('503 不带 code 14（网关纯文本 503、无 code、别的 code）：结果未知，不算失败（请求可能已到后端）', () => {
+    for (const e of [new ApiError('unavailable', 'Service Unavailable', { status: 503 }), new ApiError('unavailable', 'x', { status: 503, code: 2 }), new ApiError('unavailable', 'x')]) {
+      expect(classify(e)).toMatchObject({ outcome: 'unknown', sent: true })
+    }
   })
   it('超时、断网、500、回复无法解析、中止、未知异常：结果未知（不说下发失败）', () => {
     for (const k of ['timeout', 'network', 'server', 'aborted'] as const) expect(classify(new ApiError(k, 'x')).outcome).toBe('unknown')

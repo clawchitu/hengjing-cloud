@@ -42,6 +42,7 @@
 .te-bar.fail { background: #fff1f2; border: 1px solid #fecdd3; color: #9f1239; }
 .te-bar b { color: var(--text); font-weight: 600; }
 .te-bar [data-slot=button] { height: 30px; padding: 0 14px; font-size: 13px; }
+.te-bar .lock-fields { margin: 4px 0 0; padding-left: 18px; list-style: disc; }
 .room.busy .room-sets > div, .room.busy .modes-row { opacity: .6; }
 .modes-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 

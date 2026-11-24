@@ -13,7 +13,7 @@ const raw = (...rs: RoomView[]) => roomsAsReply(rs)
 describe('核对数据', () => {
   it('201：设备 id 与温度、节能、开关（-1 = 不改）；206：开关', () => {
     expect(record201(buildRoomTemperatureSet(7, { temperature: 26 }))).toEqual({ msg: 201, deviceId: 7, target: { temperature: 26, eco: -1, switch: -1 } })
-    expect(record206(false)).toEqual({ msg: 206, deviceId: null, target: { switch: 0 } })
+    expect(record206({ on: false, roomIds: [7, 8] })).toEqual({ msg: 206, deviceId: null, target: { switch: 0 }, roomIds: [7, 8] })
   })
   it('读数转换：开 → 1、关 → 0；读不到的设定温度 / 节能填 NaN（比对时算无效读数）', () => {
     const r = raw(room({ on: false, setTemp: null, eco: null })).data[0]
@@ -33,7 +33,11 @@ describe('比对（四态）', () => {
     expect(match201(buildRoomTemperatureSet(7, { eco: 1 }), raw(room({ eco: 1, connected: false })))).toMatchObject({ verdict: 'unknown' })
   })
   it('206：所有房间都是目标开关 → 已生效；有不等的 → 未变化', () => {
-    expect(match206(false, raw(room({ on: false }), room({ key: '8', equipmentId: 8, on: false })))).toMatchObject({ verdict: 'applied' })
-    expect(match206(true, raw(room(), room({ key: '8', equipmentId: 8, on: false })))).toMatchObject({ verdict: 'unchanged' })
+    expect(match206({ on: false, roomIds: [7, 8] }, raw(room({ on: false }), room({ key: '8', equipmentId: 8, on: false })))).toMatchObject({ verdict: 'applied' })
+    expect(match206({ on: true, roomIds: [7, 8] }, raw(room(), room({ key: '8', equipmentId: 8, on: false })))).toMatchObject({ verdict: 'unchanged' })
+  })
+  it('206：按确认后预检的目标房间逐个检查——回读缺了其中一个 → 无法核对（不因现存房间一致就判已生效）；多出来的房间不看', () => {
+    expect(match206({ on: true, roomIds: [7, 8] }, raw(room()))).toMatchObject({ verdict: 'unverifiable' })
+    expect(match206({ on: true, roomIds: [7] }, raw(room(), room({ key: '9', equipmentId: 9, on: false })))).toMatchObject({ verdict: 'applied' })
   })
 })

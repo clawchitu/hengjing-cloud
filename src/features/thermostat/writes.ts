@@ -19,13 +19,12 @@
 // 展示隔离：结果按 sessionKey（账号 + 会话代次）存，toast 只在会话与当前项目都没变时弹；新会话看不到旧会话的结果。
 import { useSyncExternalStore } from 'react'
 import { isApiError } from '@/api/errors'
-import { subscribeSession } from '@/api/session'
 import {
-  acquire, claim, lockKeysOf, lockOf, lockVersion, markOverdue, markSent, release, requireVerify, settle, subscribe as subscribeLock,
+  acquire, claim, currentAccount, lockKeysOf, lockOf, lockVersion, markOverdue, markSent, release, requireVerify, settle, subscribe as subscribeLock,
   type FieldResult, type LockInfo, type LockTarget, type MatchResult, type SentRecord,
 } from '@/api/writeLock'
 import { getStoredProjectId } from '@/data/org/current'
-import { getSessionView } from '@/data/session'
+import { outcomeOf } from '@/features/unified/machine'
 
 export type Stage = 'preflight' | 'sending' | 'verifying'
 export type Outcome = 'ok' | 'fail' | 'unknown'
@@ -56,25 +55,12 @@ export const WRITE_DEADLINE_MS = 45_000
 export const LIMITS = { preflightMs: PREFLIGHT_MS, writeDeadlineMs: WRITE_DEADLINE_MS }
 
 // ---------------------------------------------------------------------------
-// 会话代次（展示隔离用）：账号变化（含变为未登录）就加一。订阅回调里更新并通知；渲染期间读取只计算、不通知
+// 会话代次（展示隔离用）：直接用写锁模块的账号与会话代次（登录、恢复、同号重登、退出换代；令牌续期不换代），
+// 与 claim 的判断同一套，不再自己维护一份。换代时写锁会通知订阅者（useWrites 订阅了写锁），界面随之重算
 
-let sessionGen = 0
-let lastUserKey: string | null | undefined
-let unsubSession: (() => void) | null = null
-function syncSession(): boolean {
-  const k = getSessionView().userKey
-  if (k === lastUserKey) return false
-  lastUserKey = k
-  sessionGen += 1
-  return true
-}
-function watchSession() {
-  if (!unsubSession) unsubSession = subscribeSession(() => { if (syncSession()) emit() })
-}
 export function currentSessionKey(): string {
-  watchSession()
-  syncSession()
-  return `${lastUserKey ?? 'anon'}#${sessionGen}`
+  const a = currentAccount()
+  return `${a.user ?? 'anon'}#${a.gen}`
 }
 
 // 当前项目：存储里的选择 + 页面报告的实际解析结果（回退到第一个项目时不写存储）
@@ -97,14 +83,18 @@ export function clearResult(projectId: string, target: string) {
 }
 
 /**
- * 下发失败的分类。确定没有生效的才算「失败」：写防护、参数错误、未登录 / 无权限、控制屏未连接（503，消息没发出去）、
- * 控制屏明确回复 success=false。其余（超时、断网、500、回复无法解析、中止、期限到）指令都可能已到控制屏，一律「结果未知」
+ * 下发失败的分类：复用统一控制的 outcomeOf（src/features/unified/machine.ts，与 #24 写入口同一口径），只有确定的才算「失败」：
+ * - 未下发（not-sent）：写防护拦截、写消息校验不过、未登录（401，网关在转发前就拒了）、控制屏未连接（只认 503 且 gRPC code 14）；
+ * - 明确被拒（rejected）：控制屏回复 success=false、网关无权限、后端参数错误。
+ * 其余一律「结果未知」：超时、断网、500、回复无法解析、中止、期限到，以及不带 code 14 的 503（网关纯文本 503 等，请求可能已到
+ * 后端）——这时锁保持，由写锁核对或到期。sent = 请求可能到过后端（确定失败后据此决定要不要回读刷新界面）
  */
-const DEFINITE_FAIL = new Set(['write_blocked', 'bad_request', 'unauthenticated', 'forbidden', 'unavailable', 'ctrl'])
 export function classify(e: unknown): { outcome: 'fail' | 'unknown'; text: string; sent: boolean } {
   const err = isApiError(e) ? e : null
   const msg = err?.message || (e instanceof Error ? e.message : '') || '未知错误'
-  if (err && DEFINITE_FAIL.has(err.kind)) return { outcome: 'fail', text: err.kind === 'write_blocked' ? `未下发：${msg}` : `下发失败：${msg}`, sent: err.kind !== 'write_blocked' }
+  const o = outcomeOf(e)
+  if (o === 'not-sent') return { outcome: 'fail', text: `未下发：${msg}`, sent: false }
+  if (o === 'rejected') return { outcome: 'fail', text: `下发失败：${msg}`, sent: true }
   return { outcome: 'unknown', text: msg, sent: true }
 }
 
@@ -266,7 +256,7 @@ export function useWrites(project: LockTarget | null): { lock: LockInfo | null; 
   const id = project?.id ?? ''
   return { lock: project ? lockOf(project) : null, running: running.get(id) ?? null, result: (t) => getResult(id, t) }
 }
-function subscribe(fn: () => void) { watchSession(); subs.add(fn); return () => { subs.delete(fn) } }
+function subscribe(fn: () => void) { subs.add(fn); return () => { subs.delete(fn) } }
 const getVersion = () => version
 /** 仅供测试 */
 export const __versionForTests = () => version
@@ -279,8 +269,6 @@ export { lockKeysOf }
 export function __resetWritesForTests() {
   running = new Map()
   results = new Map()
-  unsubSession = null
-  lastUserKey = undefined
   resolvedProject = undefined
   LIMITS.preflightMs = PREFLIGHT_MS
   LIMITS.writeDeadlineMs = WRITE_DEADLINE_MS

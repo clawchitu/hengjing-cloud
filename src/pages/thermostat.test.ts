@@ -735,7 +735,7 @@ describe('下发状态机：确认后新读、写后新读、会话、期限', (
     await confirmOk()
     const lockBar = () => document.querySelector('[data-lock="unknown"]') as HTMLElement
     await waitFor(() => expect(lockBar()).toBeTruthy())
-    expect(lockBar().textContent).toContain('上次下发（客厅）结果未知')
+    expect(lockBar().textContent).toContain('上次下发（客厅）：结果未知')
     expect(lockBar().textContent).toContain('上一条指令尚未结束')
     expect((within(lockBar()).getByRole('button', { name: '核对' }) as HTMLButtonElement).disabled).toBe(true)
     expect((screen.getByRole('button', { name: '全部开启' }) as HTMLButtonElement).disabled).toBe(true)
@@ -936,5 +936,97 @@ describe('共用写锁（按控制屏）', () => {
     act(() => { window.dispatchEvent(new StorageEvent('storage', { key: STORAGE_PREFIX + key, newValue: null })) })
     await waitFor(() => expect(be.callsTo('/ctrl/room-temperature-data-get').length).toBeGreaterThan(reads))
     expect(document.querySelector('[data-lock]')).toBeNull()
+  })
+})
+
+describe('#35 评审修正', () => {
+  it('写接口 503 不带 code 14（网关纯文本 503 / JSON 无 code）：结果未知，不说失败，锁保持、草稿保留；503 + code 14 才是未下发、放锁、草稿回退', async () => {
+    const plain503 = () => new Response('Service Unavailable', { status: 503, headers: { 'content-type': 'text/plain' } })
+    for (const make of [plain503, () => json({ message: 'upstream unavailable' }, 503)]) {
+      const be = backend({ '/ctrl/room-temperature-set': make })
+      await draftAndSend()
+      await confirmOk()
+      await waitFor(() => expect(toasts()).toContain('客厅 下发结果未知'))
+      expect(toasts()).not.toContain('下发失败')
+      expect(toasts()).not.toContain('未下发')
+      expect(writes(be)).toHaveLength(1)
+      await waitFor(() => expect(document.querySelector('[data-lock="unknown"]')).toBeTruthy())
+      expect(card('客厅').textContent).toContain('设定温度 25.5 → 26.0°C') // 草稿保留
+      expect((screen.getByRole('button', { name: '全部开启' }) as HTMLButtonElement).disabled).toBe(true)
+      cleanup(); vi.unstubAllGlobals(); __resetWritesForTests(); __resetWriteLockForTests(); toastLog = []; localStorage.clear()
+      __resetHttpForTests(); __resetSessionForTests(); __resetSessionViewForTests(); __resetCurrentForTests(); clearTokens()
+    }
+    const be = backend({ '/ctrl/room-temperature-set': () => json({ code: 14, message: '控制屏消息发送失败' }, 503) })
+    await draftAndSend()
+    await confirmOk()
+    await waitFor(() => expect(toasts()).toMatch(/客厅 未下发：/))
+    expect(writes(be)).toHaveLength(1)
+    await waitFor(() => expect((screen.getByRole('button', { name: '全部开启' }) as HTMLButtonElement).disabled).toBe(false))
+    expect(document.querySelector('[data-lock]')).toBeNull()
+    expect(within(card('客厅')).getByLabelText('客厅 设定温度').textContent).toBe('25.5°C') // 草稿回退
+  })
+
+  it('206 全部开启：记录确认后预检的目标房间 id 集合；回读只剩部分房间（其余都一致）→ 无法核对，不提示全部已生效、锁保持，记录带 roomIds', async () => {
+    const be = backend({ '/ctrl/project-room-switch-set': (c) => { const r = ok206(c); rooms = rooms.slice(0, 1); return r } })
+    await openRooms()
+    fireEvent.click(screen.getByRole('button', { name: '全部开启' }))
+    await confirmOk()
+    await waitFor(() => expect(writes(be)).toHaveLength(1))
+    const bar = await waitFor(() => { const b = document.querySelector('[data-result="all"]') as HTMLElement; expect(b?.textContent).toContain('该项暂无回读，无法确认'); return b })
+    expect(bar.textContent).not.toContain('已生效')
+    expect(toasts()).not.toContain('已生效')
+    expect(document.querySelector('[data-lock="unknown"]')).toBeTruthy()
+    const stored = JSON.parse(localStorage.getItem(STORAGE_PREFIX + 'screen:SCREEN-T')!)
+    expect(stored).toMatchObject({ msg: 206, target: { switch: 1 }, roomIds: [ROOM.id, OFF_ROOM.id] })
+  })
+
+  it('草稿冻结：已下发待核对期间，面板离线、目标房间缺失、回读失败、读到部分一致都不整理 / 清除草稿；写锁核对一致后才清，之后不复活', async () => {
+    let readFail = false
+    backend({
+      '/ctrl/room-temperature-set': ok201NoApply,
+      '/ctrl/room-temperature-data-get': () => (readFail ? json({ code: 13, message: 'internal' }, 500) : reply200(rooms)),
+    })
+    await draftAndSend()
+    await confirmOk()
+    await waitFor(() => expect(within(card('客厅')).getAllByRole('alert').map((a) => a.textContent).join()).toContain('指令已下发，设备状态暂未变化'))
+    const kept = () => expect(card('客厅').textContent).toContain('设定温度 25.5 → 26.0°C')
+    kept()
+    await poll([{ ...ROOM, isConnected: false }, OFF_ROOM]) // 面板离线
+    kept()
+    await poll([OFF_ROOM]) // 目标房间缺失
+    expect(card('客厅')).toBeUndefined()
+    await poll([ROOM, OFF_ROOM])
+    kept()
+    readFail = true
+    await poll([ROOM, OFF_ROOM]) // 回读失败（有旧数据）
+    kept()
+    readFail = false
+    await poll([{ ...ROOM, switch: 0 }, OFF_ROOM]) // 房间关闭（不能设置）
+    expect(toasts()).not.toContain('未下发的修改已清除')
+    await poll([ROOM, OFF_ROOM])
+    kept()
+    expect(document.querySelector('[data-lock="unknown"]')).toBeTruthy()
+    // 设备生效后核对一致：写锁放开，草稿才清；面板值再变回去，旧改动不复活
+    rooms = [{ ...ROOM, setTemp: 26 }, OFF_ROOM]
+    fireEvent.click(within(document.querySelector('[data-lock="unknown"]') as HTMLElement).getByRole('button', { name: '核对' }))
+    await waitFor(() => expect(document.querySelector('[data-lock]')).toBeNull())
+    await waitFor(() => expect(toasts()).toContain('客厅 已生效'))
+    await poll([ROOM, OFF_ROOM])
+    expect(card('客厅').textContent).not.toContain('待下发')
+    expect(within(card('客厅')).getByLabelText('客厅 设定温度').textContent).toBe('25.5°C')
+  })
+
+  it('未发出（确认后预检不一致）：草稿解冻，照常整理（之后同屏别的项目在下发，也不按冻结对待）', async () => {
+    const be = backend({ '/ctrl/room-temperature-set': ok201 })
+    await draftAndSend()
+    rooms = [{ ...ROOM, endModes: [ENDS[0]] }, OFF_ROOM] // 末端变了：预检不一致，不写
+    await confirmOk()
+    await waitFor(() => expect(toasts()).toContain('本次未下发'))
+    expect(writes(be)).toHaveLength(0)
+    const other = acquireLock({ id: P2.id, controlScreenId: P2.control_screen_id }, '另一个项目')
+    expect(other.ok).toBe(true)
+    await poll([{ ...ROOM, endModes: [ENDS[0]], switch: 0 }, OFF_ROOM])
+    expect(toasts()).toContain('未下发的修改已清除')
+    act(() => { if (other.ok) releaseLock(other.token) })
   })
 })

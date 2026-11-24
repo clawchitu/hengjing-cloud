@@ -42,7 +42,8 @@ beforeEach(() => {
   userKey = 'user:A'; storedProject = 'P1'
   localStorage.clear()
   W.__resetWritesForTests()
-  L.__resetWriteLockForTests(() => ({ user: 'u1', gen: 1 }))
+  // 会话代次用写锁模块的（writes.ts 的 currentSessionKey = 写锁的账号 + 代次）：换账号即换代
+  L.__resetWriteLockForTests(() => ({ user: userKey, gen: 1 }))
   L.configureWriteLock({ resolveProject: (id) => (id === 'P1' ? P1 : id === 'P2' ? P2 : null) })
 })
 afterEach(() => { vi.useRealTimers() })
@@ -131,9 +132,16 @@ describe('预检', () => {
     let acct = { user: 'u1', gen: 1 }
     L.__resetWriteLockForTests(() => acct)
     L.configureWriteLock({ resolveProject: () => P1 })
-    const { s, calls } = spec({ preflight: async () => { acct = { user: 'u1', gen: 2 }; return { ok: true, payload: 26 } } })
-    expect(await W.runOp(s)).toBe('fail') // beforeSend 里 claim 不过：写入口不发，按未下发结束
-    expect(calls).toEqual([])
+    // 预检后换代：会话键与写锁同一套代次，预检结束时就发现会话变了 → 中止，不写
+    const a = spec({ preflight: async () => { acct = { user: 'u1', gen: 2 }; return { ok: true, payload: 26 } } })
+    expect(await W.runOp(a.s)).toBe('aborted')
+    expect(a.calls).toEqual([])
+    expect(L.lockOf(P1)).toBeNull()
+    // 写入口等令牌期间换代（beforeSend 之前）：beforeSend 里会话 / claim 不过 → 写入口不发，按未下发结束
+    acct = { user: 'u1', gen: 2 }
+    const b = spec({ send: async (_p, bs) => { acct = { user: 'u1', gen: 3 }; if (!bs()) throw new ApiError('write_blocked', '发送前复核未通过，未下发'); b.calls.push('send') } })
+    expect(await W.runOp(b.s)).toBe('fail')
+    expect(b.calls).toEqual(['preflight'])
     expect(L.lockOf(P1)).toBeNull()
   })
 })
