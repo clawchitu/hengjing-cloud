@@ -298,6 +298,66 @@ describe('start：逐个下发，三种结果，不重试', () => {
     expect(t2.wire).toEqual(['a'])
   })
 
+  it('确认后强制刷新一次项目列表：最新结果里离线 → 不下发；每批只拉一次', async () => {
+    const a = P('a', '1'), b = P('b', '2')
+    const refresh = vi.fn(async () => [{ ...a, online: false }, b])
+    const w = fakeWire()
+    const batch = createUnifiedBatch({ getProjects: () => [a, b], readBack: async () => ({ rooms: 1, roomSwitch: 0, roomTemp: 26 }), send: w.send, log: () => {}, refreshProjects: refresh })
+    batch.prepare(['a', 'b'], { roomSwitch: 1 })
+    const done = await batch.start()
+    expect(refresh).toHaveBeenCalledTimes(1)
+    expect(w.wire).toEqual(['b'])
+    expect(done.rows.map((r) => r.status)).toEqual(['not-sent', 'success'])
+  })
+
+  it('刷新项目列表失败：整批不下发、不回读', async () => {
+    const readBack = vi.fn(async () => ({ rooms: 1, roomSwitch: 0, roomTemp: 26 }))
+    const w = fakeWire()
+    const batch = createUnifiedBatch({ getProjects: () => [P('a', '1')], readBack, send: w.send, log: () => {}, refreshProjects: async () => { throw new Error('503') } })
+    batch.prepare(['a'], { roomSwitch: 1 })
+    const done = await batch.start()
+    expect(w.wire).toEqual([])
+    expect(readBack).not.toHaveBeenCalled()
+    expect(done.rows[0].status).toBe('not-sent')
+    expect(done.rows[0].note).toMatch(/刷新项目在线状态失败/)
+  })
+
+  it('账号绑定：确认后等令牌续期期间换了账号 → 不发写', async () => {
+    const token = gated()
+    let acct = 'u1'
+    const wire: string[] = []
+    const send = vi.fn<BatchSender>(async (_p, _q, o) => { await token.gate; if (!o.beforeSend()) throw new ApiError('write_blocked', 'x'); wire.push('a'); return { success: true, msg: '' } })
+    const batch = createUnifiedBatch({ getProjects: () => [P('a', '1')], readBack: async () => ({ rooms: 1, roomSwitch: 0, roomTemp: 26 }), send, log: () => {}, getAccount: () => acct })
+    batch.prepare(['a'], { roomSwitch: 1 })
+    const p = batch.start()
+    await vi.waitFor(() => expect(send).toHaveBeenCalled())
+    acct = 'u2'
+    token.release()
+    await p
+    expect(wire).toEqual([])
+    // 账号没变则照发
+    acct = 'u1'
+    batch.reset(); batch.prepare(['a'], { roomSwitch: 1 })
+    const p2 = batch.start(); token.release(); await p2
+    expect(wire).toEqual(['a'])
+  })
+
+  it('取消信号：beforeSend 最先检查，页面卸载（abort）后信号已中止', async () => {
+    const token = gated()
+    let sig!: AbortSignal
+    const verdicts: boolean[] = []
+    const send = vi.fn<BatchSender>(async (_p, _q, o) => { sig = o.signal; await token.gate; verdicts.push(o.beforeSend()); throw new ApiError('write_blocked', 'x') })
+    const batch = createUnifiedBatch({ getProjects: () => [P('a', '1')], readBack: async () => ({ rooms: 1, roomSwitch: 0, roomTemp: 26 }), send, log: () => {} })
+    batch.prepare(['a'], { roomSwitch: 1 })
+    const p = batch.start()
+    await vi.waitFor(() => expect(send).toHaveBeenCalled())
+    batch.abort()
+    expect(sig.aborted).toBe(true)
+    token.release()
+    await p
+    expect(verdicts).toEqual([false])
+  })
+
   it('beforeSend：等令牌续期期间项目离线 / 页面卸载 → 不发写', async () => {
     for (const how of ['offline', 'unmount'] as const) {
       const token = gated()

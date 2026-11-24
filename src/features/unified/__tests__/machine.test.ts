@@ -445,7 +445,9 @@ describe('控制器：结果未知（unknown）', () => {
 
   it.each([
     ['服务端 500', new ApiError('server', '内部错误', { status: 500, code: 13 }), 'unknown'],
-    ['控制屏 503', new ApiError('unavailable', '控制屏消息发送失败', { status: 503, code: 14 }), 'unknown'],
+    // 负责人决定：503 + code 14「控制屏未连接」后端没转发，确定未下发；没有 code 14 的 503 仍按结果未知
+    ['控制屏未连接 503 code 14', new ApiError('unavailable', '控制屏未连接', { status: 503, code: 14 }), 'not-sent'],
+    ['503 无 code', new ApiError('unavailable', '服务不可用', { status: 503 }), 'unknown'],
     ['后端返回取消 code 1', new ApiError('aborted', '请求已取消', { status: 499, code: 1 }), 'unknown'],
     ['发出后被取消（无状态 aborted）', new ApiError('aborted', '请求已取消'), 'unknown'],
     ['普通异常', new Error('boom'), 'unknown'],

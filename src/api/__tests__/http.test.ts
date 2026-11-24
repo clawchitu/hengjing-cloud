@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { setConfig } from '../config'
-import { __resetHttpForTests, onSessionExpired, refreshSession, request, requestWrite, WRITE_AUTH_TEXT, WRITE_RECHECK_TEXT } from '../http'
+import { __resetHttpForTests, onSessionExpired, refreshSession, request, requestWrite, WRITE_AUTH_TEXT, WRITE_CANCELLED_TEXT, WRITE_OFFLINE_TEXT, WRITE_RECHECK_TEXT } from '../http'
 import { clearTokens, readTokens, writeTokens } from '../tokens'
 import { fakeBackend, json, text } from './helpers'
 
@@ -240,5 +240,29 @@ describe('写请求：不重放、发送前同步复核（S12b）', () => {
       expect(order).toEqual(['check'])
       expect(be.callsTo(route), what).toHaveLength(0)
     }
+  })
+
+  it('等待令牌续期期间被取消（signal 中止）：最先检查信号，写请求的 fetch 0 次，beforeSend 不再调用', async () => {
+    login('A1', 'R1', 10_000)
+    let release!: () => void
+    const gate = new Promise<void>((r) => { release = r })
+    const refresh = rotatingRefresh(0)
+    const be = fakeBackend({ [route]: () => json({ body: '' }), '/auth/refresh': async (c) => { await gate; return refresh(c) } })
+    const ac = new AbortController()
+    const beforeSend = vi.fn(() => true)
+    const p = requestWrite('ctrl-206', [P], { body: 'x' }, { signal: ac.signal, beforeSend })
+    await vi.waitFor(() => expect(be.callsTo('/auth/refresh')).toHaveLength(1))
+    ac.abort()
+    release()
+    await expect(p).rejects.toMatchObject({ kind: 'write_blocked', message: WRITE_CANCELLED_TEXT })
+    expect(beforeSend).not.toHaveBeenCalled()
+    expect(be.callsTo(route)).toHaveLength(0)
+  })
+
+  it('503 code 14（控制屏未连接）：提示「控制屏未连接，未下发」，带 code 14，只发一次', async () => {
+    login()
+    const be = fakeBackend({ [route]: () => json({ code: 14, message: 'no stream' }, 503) })
+    await expect(requestWrite('ctrl-206', [P], { body: 'x' })).rejects.toMatchObject({ kind: 'unavailable', code: 14, message: WRITE_OFFLINE_TEXT })
+    expect(be.callsTo(route)).toHaveLength(1)
   })
 })

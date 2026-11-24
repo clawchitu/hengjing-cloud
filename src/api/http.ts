@@ -226,6 +226,10 @@ function plainWriteBody(body: unknown): Record<string, unknown> {
 
 /** 写请求收到未认证（401 / token err）时的提示：不重放，按「没执行」结束 */
 export const WRITE_AUTH_TEXT = '登录状态已更新，请重新下发'
+/** 发送前取消信号已中止 */
+export const WRITE_CANCELLED_TEXT = '已取消，未下发'
+/** 控制屏未连接（503 code 14）：后端没有转发，确定没执行 */
+export const WRITE_OFFLINE_TEXT = '控制屏未连接，未下发'
 /** beforeSend 不通过时的提示 */
 export const WRITE_RECHECK_TEXT = '发送前复核未通过，未下发'
 
@@ -248,6 +252,9 @@ export async function requestWrite<T>(op: WriteOp, projects: readonly WriteProje
   try {
     return await writeOnce<T>(WRITE_ROUTES[op], { ...opts, method: 'POST', body: payload })
   } catch (e) {
+    if (e instanceof ApiError && e.kind === 'unavailable' && e.code === 14) {
+      throw new ApiError('unavailable', WRITE_OFFLINE_TEXT, { status: e.status, code: 14, cause: e })
+    }
     if (e instanceof ApiError && (e.kind === 'timeout' || e.kind === 'network')) {
       const text = e.kind === 'timeout' ? '未收到控制屏应答，下发结果未知' : e.status === 502 ? '后端连接失败，下发结果未知' : '网络中断，下发结果未知'
       throw new ApiError(e.kind, text, { status: e.status, code: e.code, cause: e })
@@ -269,6 +276,8 @@ async function writeOnce<T>(path: string, opts: WriteOptions & { method: 'POST';
     throw err
   }
   const check = () => {
+    // 最先看取消信号：已中止就不调 fetch
+    if (rest.signal?.aborted) throw new ApiError('write_blocked', WRITE_CANCELLED_TEXT)
     let ok = false
     try { ok = beforeSend ? beforeSend() === true : true } catch { ok = false }
     if (!ok) throw new ApiError('write_blocked', WRITE_RECHECK_TEXT)

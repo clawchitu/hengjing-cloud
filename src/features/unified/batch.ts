@@ -64,7 +64,7 @@ export async function readUnifiedSnapshot(projectId: string, signal: AbortSignal
  * beforeSend：写入口在令牌就绪后、真正 fetch 前同步调用，返回 false 就不发（见 http.ts requestWrite）。
  * 自己实现的下发函数（演示数据、测试）也必须在「发出」前调用它
  */
-export type BatchSender = (project: BatchProject, query: WriteQuery<203>, opts: { beforeSend: () => boolean }) => Promise<CtrlReply<203>>
+export type BatchSender = (project: BatchProject, query: WriteQuery<203>, opts: { beforeSend: () => boolean; signal: AbortSignal }) => Promise<CtrlReply<203>>
 export const defaultBatchSender: BatchSender = (project, query, opts) => writeCtrl(203, project, query, { beforeSend: opts.beforeSend })
 
 export type RowStatus = 'waiting' | 'sending' | 'success' | 'failure' | 'unknown' | 'not-sent'
@@ -98,7 +98,17 @@ export interface BatchDeps {
   now?: () => Date
   /** 批次截止（毫秒，默认 35 秒）：见 BATCH_DEADLINE_MS */
   deadlineMs?: number
+  /**
+   * 确认后、整批开始前强制重新拉一次项目列表（每批一次）；beforeSend 和发送前复核都用这份最新结果。
+   * 拉取失败整批不下发。不传则用 getProjects()（只用于测试）
+   */
+  refreshProjects?: (signal: AbortSignal) => Promise<readonly BatchProject[]>
+  /** 当前登录账号（user id，没有就用令牌 sub；演示模式为演示账号名）。确认时记下，beforeSend 核对 */
+  getAccount?: () => string | null
 }
+
+export const REFRESH_FAILED_TEXT = '确认后刷新项目在线状态失败，整批未下发'
+export const ACCOUNT_CHANGED_TEXT = '登录账号已变化，未下发'
 
 /**
  * 批次截止：从开始下发起 35 秒（方案 S12 验收「35 秒内给出最终结果」）。到截止时：
@@ -154,6 +164,12 @@ export function createUnifiedBatch(deps: BatchDeps) {
   let expired = false
   /** 批次序号：每次 prepare 加一 */
   let batchSeq = 0
+  /** 本批确认后拉到的最新项目列表 */
+  let fresh: readonly BatchProject[] | null = null
+  /** 本批确认时的账号 */
+  let account: string | null = null
+  /** 本批的取消信号：abort()（页面卸载）时中止 */
+  let ac = new AbortController()
   let running: Promise<BatchState> | null = null
   const subs = new Set<() => void>()
 
@@ -165,16 +181,20 @@ export function createUnifiedBatch(deps: BatchDeps) {
     state = { ...state, rows, ...patch }
     for (const fn of subs) fn()
   }
-  const find = (id: string) => deps.getProjects().find((p) => p.id === id)
+  const find = (id: string) => (fresh ?? deps.getProjects()).find((p) => p.id === id)
 
   /**
    * 发送前复核（同步）：批次没被终止（页面卸载）、没过截止时间、项目仍在列表里、code 没变、仍在线。
    * 通过就记下「已发出」
    */
   const recheck = (e: Entry, wp: WriteProject) => () => {
+    // 最先看取消信号
+    if (ac.signal.aborted) return false
     // 这一项已有定论（截止时冻结）、或已不属于当前批次：一律不发
     if (e.final || e.batch !== batchSeq || !entries.includes(e)) return false
     if (stopped || expired || now().getTime() >= deadlineAt) return false
+    // 账号绑定：确认时的账号与当前存储里的账号一致才发
+    if (deps.getAccount && (account === null || deps.getAccount() !== account)) return false
     const cur = find(wp.id)
     if (!cur || cur.code !== wp.code || cur.online !== true) return false
     e.sent = true
@@ -188,7 +208,7 @@ export function createUnifiedBatch(deps: BatchDeps) {
     if (q.roomTemp !== -1 && q.roomSwitch !== 1 && e.before && e.before.rooms > 0 && e.before.roomSwitch === 0) {
       return Promise.reject(new ApiError('write_blocked', ROOMS_OFF_TEXT))
     }
-    const out = send(p, q, { beforeSend: recheck(e, wp) })
+    const out = send(p, q, { beforeSend: recheck(e, wp), signal: ac.signal })
     out.then((r) => { if (e.sent) e.reply = r?.success === true ? 'ok' : 'rejected' },
       (err) => { if (e.sent) e.reply = outcomeOf(err) === 'unknown' ? 'error' : 'rejected' })
     return out
@@ -207,6 +227,8 @@ export function createUnifiedBatch(deps: BatchDeps) {
       if (state.phase === 'running' || state.phase === 'confirming') return state
       clear()
       stopped = false
+      fresh = null
+      ac = new AbortController()
       batchSeq++
       const uniq = [...new Set(ids)]
       if (!uniq.length) { emit({ phase: 'idle', errors: [TEXT.noProject], items: [] }); return state }
@@ -281,7 +303,20 @@ export function createUnifiedBatch(deps: BatchDeps) {
         onDeadline()
       }, Math.max(0, deadlineAt - now().getTime()))
       emit({ phase: 'running' })
+      account = deps.getAccount ? deps.getAccount() : null
       const run = async () => {
+        // 确认后、整批开始前强制刷新一次在线状态（每批一次）
+        if (deps.refreshProjects) {
+          try {
+            const list = await Promise.race([deps.refreshProjects(ac.signal), deadline.then(() => { throw new Error('deadline') })])
+            fresh = list
+          } catch {
+            if (!expired) for (const e of entries) { e.final = { status: 'not-sent', note: stopped ? TEXT.aborted : REFRESH_FAILED_TEXT }; e.started = true; e.at ??= stamp(now()); e.ctl.abort() }
+            clearTimeout(timer)
+            emit({ phase: 'done' })
+            return state
+          }
+        }
         for (const e of entries) {
           if (stopped || expired) break
           e.started = true
@@ -304,6 +339,7 @@ export function createUnifiedBatch(deps: BatchDeps) {
     /** 页面卸载：还没发出的终止，后面的不再开始 */
     abort() {
       stopped = true
+      ac.abort()
       for (const e of entries) e.ctl.abort()
     },
 

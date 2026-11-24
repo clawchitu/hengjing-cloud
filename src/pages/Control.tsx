@@ -15,7 +15,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger } from '@/components/u
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { useApp } from '../app/store'
 import { useConfirm } from '../app/feedback'
-import { projectsInGroup, useDealerPick, useDealers } from '../data/org'
+import { orgSource, projectsInGroup, useDealerPick, useDealers } from '../data/org'
+import { useSession } from '../data/session'
 import { DealersError } from '../components/DealersError'
 import { useQueries, useQueryClient } from '@tanstack/react-query'
 import { isMockMode } from '../api/config'
@@ -133,6 +134,7 @@ export default function Control() {
   // 在真正发起下发的组件里取 confirm（分工第 7 条）：本组件卸载、换路由、换项目时确认自动失效
   const confirm = useConfirm()
   const queryClient = useQueryClient()
+  const session = useSession()
   const isAdmin = user.role === 'admin'
   const { projects } = scope
   const mock = isMockMode()
@@ -165,6 +167,10 @@ export default function Control() {
     readBack: readSnap,
     // 演示下发同写入口一样，先过 beforeSend
     send: mock ? (p, q, o) => (o.beforeSend() ? api.mockUnifiedSend(p, q) : Promise.reject(new ApiError('write_blocked', WRITE_RECHECK_TEXT))) : undefined,
+    // 确认后、整批开始前强制重新拉一次项目列表（每批一次，直接调数据源，不经 S6a 的 hooks 缓存）
+    refreshProjects: (signal) => orgSource().projects({ user: session.user, dealerAccount: session.dealerAccount }, {}, signal),
+    // 账号绑定：确认时记下，发送前核对
+    getAccount: () => (mock ? user.username || null : getCurrentUserId() || jwtSub(readTokens()?.accessToken) || null),
   })
   const busy = run.phase === 'confirming' || run.phase === 'running'
 
@@ -322,18 +328,22 @@ export default function Control() {
           <div className="pv-row"><span>温度设定</span><b className={'num ' + (tempOff ? 'w' : '')}>{tempOff ? '不变' : temp.toFixed(1) + '°C'}</b></div>
           <div className="pv-row"><span>执行方式</span><b className="w">立即执行</b></div>
           <div className="pv-warn"><Icon icon={faTriangleExclamation} /> 将覆盖所选项目内用户的本地设置，请谨慎操作。</div>
-          <button className="btn-send" onClick={send} disabled={busy}><Icon icon={run.phase === 'running' ? faSpinner : faPaperPlane} spin={run.phase === 'running'} />{run.phase === 'running' ? TEXT.sending : TEXT.confirmOk}</button>
+          <button className="btn-send" onClick={send} disabled={busy}><Icon icon={run.phase === 'running' ? faSpinner : faPaperPlane} spin={run.phase === 'running'} />{run.phase === 'running' ? '下发中…' : TEXT.confirmOk}</button>
         </div>
       </div>
 
+      {/* 下发进度在结果卡片外面；卡片里继续显示上一次的结果 */}
+      {run.phase === 'running' && (
+        <div className="muted unified-progress" role="status" style={{ margin: '0 0 12px', fontSize: 13 }}>
+          <Icon icon={faSpinner} spin /> {TEXT.sending}全部完成后更新下方结果
+        </div>
+      )}
       {/* 改动 6：结果卡片只有 项目、项目ID、状态、操作时间 四项，不放任何说明 */}
       <Card pad={false} role="region" aria-label="最近一次执行结果">
         <CardHeader pad style={{ marginBottom: 0, paddingBottom: 14 }}>
           <div><CardTitle>最近一次执行结果</CardTitle></div>
         </CardHeader>
-        {run.phase === 'running' ? (
-          <div className="muted" role="status" style={{ padding: '18px 22px 22px', fontSize: 13 }}><Icon icon={faSpinner} spin /> {TEXT.sending}完成后显示全部结果</div>
-        ) : !last || last.length === 0 ? (
+        {!last || last.length === 0 ? (
           <div className="faint" style={{ padding: '18px 22px 22px', fontSize: 13, textAlign: 'center' }}>暂无执行记录</div>
         ) : (
           <Table>

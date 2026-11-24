@@ -132,6 +132,8 @@ export function outcomeOf(e: unknown): Outcome {
   if (!isApiError(e)) return 'unknown'
   // 未认证（401 / 网关 token err）：网关在转给控制屏之前就拒了，确定没执行。写入口不重放，按「未执行」结束
   if (e.kind === 'unauthenticated') return 'not-sent'
+  // 控制屏未连接（503 + gRPC code 14）：后端没有可用的连接，没转给控制屏（第二道防线）
+  if (e.kind === 'unavailable' && e.code === 14) return 'not-sent'
   if (e.status === undefined && LOCAL_NOT_SENT.has(e.kind)) return 'not-sent'
   if (e.kind === 'ctrl' || (e.status !== undefined && REJECTED.has(e.kind))) return 'rejected'
   return 'unknown'

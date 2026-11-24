@@ -260,6 +260,51 @@ describe('下发', () => {
     expect(await openNotes()).toContain('登录状态已更新，请重新下发')
   })
 
+  it('真实数据源：页面打开时在线，确认后刷新的项目列表里已离线 → 不下发（203 为 0），显示未下发', async () => {
+    let n = 0
+    const be = backend({
+      '/ctrl/projects': () => json({ project_entities: n++ === 0 ? PROJECTS : PROJECTS.map((p) => (p.id === 'p1' ? { ...p, online: undefined } : p)) }),
+      '/ctrl/room-temperature-data-get': () => rooms(1, 26),
+      '/ctrl/unified-ctrl-set': () => reply(true),
+    })
+    const dlg = await prepare()
+    const before = be.callsTo('/ctrl/projects').length
+    await click(okIn(dlg))
+    await screen.findByText('未下发', { selector: '[data-slot=badge]' }, { timeout: 3000 })
+    expect(be.callsTo('/ctrl/projects').length - before).toBe(1) // 每批强制刷新一次
+    expect(be.callsTo('/ctrl/unified-ctrl-set')).toHaveLength(0)
+    expect(await openNotes()).toContain('项目离线，不能下发')
+  })
+
+  it('控制屏未连接（503 code 14）→ 失败（未执行），提示「控制屏未连接，未下发」，不重试', async () => {
+    const be = backend({ '/ctrl/room-temperature-data-get': () => rooms(1, 26), '/ctrl/unified-ctrl-set': () => json({ code: 14, message: 'no stream' }, 503) })
+    await click(okIn(await prepare()))
+    await screen.findByText('失败（未执行）', { selector: '[data-slot=badge]' }, { timeout: 3000 })
+    expect(be.callsTo('/ctrl/unified-ctrl-set')).toHaveLength(1)
+    expect(await openNotes()).toContain('控制屏未连接，未下发')
+  })
+
+  it('下发还没返回时：结果卡片仍是上一次的内容、没有说明；进度在卡片外；按钮「下发中…」禁用', async () => {
+    let release!: () => void
+    const gate = new Promise<void>((r) => { release = r })
+    const be = backend({ '/ctrl/room-temperature-data-get': () => rooms(1, 26), '/ctrl/unified-ctrl-set': async () => { await gate; return reply(true) } })
+    const dlg = await prepare()
+    const card = () => document.querySelector<HTMLElement>('[aria-label="最近一次执行结果"]')!
+    const cardBefore = card().textContent
+    expect(cardBefore).toBe('最近一次执行结果暂无执行记录')
+    await click(okIn(dlg))
+    await waitFor(() => expect(be.callsTo('/ctrl/unified-ctrl-set')).toHaveLength(1))
+    expect(card().textContent).toBe(cardBefore)
+    const progress = screen.getByRole('status')
+    expect(progress.textContent).toContain('正在下发')
+    expect(card().contains(progress)).toBe(false)
+    const btn = screen.getByRole('button', { name: '下发中…' })
+    expect(btn.hasAttribute('disabled')).toBe(true)
+    release()
+    await screen.findByText('成功', { selector: '[data-slot=badge]' }, { timeout: 3000 })
+    expect(screen.queryByRole('status')).toBeNull()
+  })
+
   it('500 且回读不一致 → 结果未确认，提示刷新查看，不重试', async () => {
     const be = backend({ '/ctrl/room-temperature-data-get': () => rooms(0, 26), '/ctrl/unified-ctrl-set': () => text('oops', 500) })
     await click(okIn(await prepare()))
