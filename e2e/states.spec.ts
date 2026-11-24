@@ -10,14 +10,19 @@ const topSearch = (page: Page) => page.getByPlaceholder('搜索项目名称 / �
 const hitRows = (page: Page) => page.getByRole('listbox', { name: '项目搜索结果' }).getByRole('option')
 
 test.describe('经销商 首页', () => {
+  // 常用项目数量：演示数据按本地计数（hjc-mock-select-counts）取前 4 个。「演示计数」开关已去掉（方案 1.2），
+  // 这里在页面加载前直接写入计数：0 个、2 个；≥4 个用经销商账号的初始计数（5 个，显示 4 个）
+  const COUNTS: Record<string, Record<string, number> | null> = { '0': {}, '2': { 'PRJ-10241': 6, 'PRJ-10252': 2 }, '4+': null }
   for (const [v, tag] of [['0', '0'], ['2', '2'], ['4+', '4plus']] as const) {
     test(`常用项目 ${v}`, async ({ page, login }) => {
       await login('dealer')
+      const counts = COUNTS[v]
+      if (counts) await page.addInitScript((c) => localStorage.setItem('hjc-mock-select-counts', JSON.stringify({ cosyhome: c })), counts)
       await page.goto('/home')
       await tick(page, 1500)
-      await page.locator('.demo-seg').getByRole('button', { name: v, exact: true }).click()
-      await tick(page)
       if (v === '0') await expect(page.getByText('暂无常用项目')).toBeVisible()
+      await expect(page.locator('.proj-card')).toHaveCount(v === '0' ? 0 : v === '2' ? 2 : 4)
+      await expect(page.getByText('演示计数')).toHaveCount(0)
       await shot(page, `dealer-home-fav-${tag}`)
     })
   }
@@ -101,52 +106,67 @@ test.describe('统一控制', () => {
 })
 
 test.describe('管理员 集成项目', () => {
+  // 经销商选择是可搜索下拉（Popover + Command，S6b）：触发器是按钮，弹层里是搜索框和经销商列表（选项的 data-value 是经销商编号）
+  const dealerTrigger = (page: Page) => page.getByRole('button', { name: /^经销商/ })
+  const dealerList = (page: Page) => page.getByRole('listbox', { name: '经销商' })
+  const dealerSearch = (page: Page) => page.getByRole('combobox', { name: '搜索经销商' })
+
   test('逐个切换经销商', async ({ page, login }) => {
     await login('admin')
     await page.goto('/groups')
     await tick(page, 1500)
-    // 经销商下拉是 Radix Select：展开后读出全部选项，再逐个点选（选项上的 data-value 是经销商编码）
-    const trigger = page.getByRole('combobox', { name: '经销商' })
-    await trigger.click()
+    await dealerTrigger(page).click()
     await tick(page, 100)
-    const opts = await page.getByRole('option').evaluateAll((o) => o.map((x) => x.getAttribute('data-value') ?? ''))
+    const opts = await dealerList(page).getByRole('option').evaluateAll((o) => o.map((x) => x.getAttribute('data-value') ?? ''))
     await page.keyboard.press('Escape')
     await tick(page, 100)
-    expect(opts.length).toBeGreaterThanOrEqual(2)
+    expect(opts).toEqual(['DLR-001', 'DLR-002', 'DLR-003'])
     for (const d of opts) {
-      await trigger.click()
+      await dealerTrigger(page).click()
       await tick(page, 100)
-      await page.locator(`[role=option][data-value="${d}"]`).click()
+      await dealerList(page).locator(`[role=option][data-value="${d}"]`).click()
       await tick(page)
-      await expect(page.getByRole('listbox')).toHaveCount(0)
+      await expect(dealerList(page)).toHaveCount(0)
+      await page.mouse.move(0, 0)
       await shot(page, `admin-groups-${d}`)
     }
   })
 
-  test('经销商搜索：命中与空态', async ({ page, login }) => {
+  test('经销商下拉：展开、搜索命中与空态', async ({ page, login }) => {
     await login('admin')
     await page.goto('/groups')
     await tick(page, 1500)
-    const q = page.getByPlaceholder('搜索经销商名称 / 编码 / 区域')
-    await q.fill('南京')
+    await dealerTrigger(page).click()
     await tick(page)
-    // 只剩一个经销商且已自动选中（下拉收起时选项不在 DOM 里，用计数文案和触发器文字断言）
-    await expect(page.getByText('匹配 1 / 3 个经销商')).toBeVisible()
-    await expect(page.getByRole('combobox', { name: '经销商' })).toContainText('南京')
-    await expect(page.getByText('河西府住宅组').first()).toBeVisible()
+    // 打开时焦点在搜索框，高亮当前经销商
+    await expect(dealerSearch(page)).toBeFocused()
+    await expect(dealerList(page).getByRole('option')).toHaveCount(3)
+    await expect(dealerList(page).locator('[aria-selected="true"]')).toHaveText(/上海恒境暖通/)
+    await page.mouse.move(0, 0)
+    await shot(page, 'admin-groups-dealer-open')
+    await dealerSearch(page).fill('南京')
+    await tick(page)
+    await expect(dealerList(page).getByRole('option')).toHaveText(['南京舒适家系统集成有限公司江苏'])
     await shot(page, 'admin-groups-dealer-search')
-    await q.fill('杭州')
+    await page.keyboard.press('Enter')
     await tick(page)
-    await expect(page.getByText('西溪蝶园别墅组').first()).toBeVisible()
-    await q.fill('zzz')
+    await expect(dealerList(page)).toHaveCount(0)
+    await expect(dealerTrigger(page)).toContainText('南京')
+    await expect(page.getByText('河西府住宅组').first()).toBeVisible()
+    await dealerTrigger(page).click()
     await tick(page)
-    await expect(page.getByText('匹配 0 / 3')).toBeVisible()
-    await expect(page.getByText('没有与「zzz」匹配的经销商')).toBeVisible()
-    await expect(page.locator('.grp-card')).toHaveCount(0)
+    await dealerSearch(page).fill('zzz')
+    await tick(page)
+    await expect(dealerList(page).getByRole('option')).toHaveCount(0)
+    await expect(page.getByText('未找到匹配的经销商')).toBeVisible()
     await shot(page, 'admin-groups-dealer-search-empty')
-    await q.fill('')
+    // 没有命中时回车不改选择；Esc 关闭
+    await page.keyboard.press('Enter')
+    await page.keyboard.press('Escape')
     await tick(page)
-    await expect(page.locator('.grp-card').first()).toBeVisible()
+    await expect(dealerList(page)).toHaveCount(0)
+    await expect(dealerTrigger(page)).toContainText('南京')
+    await expect(page.locator('.grp-card').first()).toContainText('河西府住宅组')
   })
 
   test('顶栏搜索可见所有经销商的项目', async ({ page, login }) => {

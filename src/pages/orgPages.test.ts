@@ -114,7 +114,7 @@ describe('Groups（真实数据形状）', () => {
     backend({ '/distributors': async () => { await d.gate; return json({ distributor_entities: [{ id: 'D1', name: '科希家研发苏州main' }] }) } })
     await signIn('u', 'pw', true)
     mount(createElement(Groups))
-    expect((await screen.findAllByText('暂无集成项目')).length).toBeGreaterThan(0)
+    expect(await screen.findByText('正在加载经销商…', { selector: 'b' })).toBeTruthy()
     await act(async () => { d.release() })
     await screen.findByText('测试项目0829')
     expect(screen.getByText(/科希家研发苏州main/, { selector: '.sub' })).toBeTruthy()
@@ -292,7 +292,7 @@ describe('/distributors 失败但其他成功', () => {
 
 describe('Home（真实平台账号、组织范围为空）', () => {
   it('不显示演示数据的常用项目卡片，也不会把演示 id 写进当前项目存储', async () => {
-    backend({ '/integrated-projects': () => json({}), '/ctrl/projects': () => json({}) })
+    backend({ '/integrated-projects': () => json({}), '/ctrl/projects': () => json({}), '/projects/frequent': () => json({}), '/me': () => json({ user_entity: { id: 'admin-1', name: '测试' }, permission_paths: ['/v1/projects/frequent'] }) })
     await signIn('u', 'pw', true)
     const { container } = mount(createElement(Home))
     await screen.findByText('暂无常用项目', {}, { timeout: 3000 })
@@ -386,7 +386,7 @@ describe('Groups「查看数据」：按经销商取的集成项目比全量缓�
     be.hold() // 让后台刷新先挂着：失败提示必须是同步给出的，不等刷新
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     await clickView('新加的项目')
-    expect(toasts()).toContain('项目列表已更新，请稍后重试')
+    expect(toasts()).toContain('项目列表正在刷新，请稍后重试')
     expect(toasts()).not.toContain('已进入')
     expect(screen.queryByText('传感器页内容')).toBeNull()
     expect(localStorage.getItem('hjc-project')).toBeNull()

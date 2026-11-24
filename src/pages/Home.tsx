@@ -1,12 +1,13 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { faLocationDot, faChevronDown, faRotateRight, faDroplet, faWind, faTemperatureLow, faGauge, faEye, faSun, faCloudSun, faCloudRain, faCloud, faMoon, faUmbrella, faLeaf, faLayerGroup, faBuilding, faSignal, faPlugCircleXmark, faArrowRight, faStar, faTemperatureHalf, faClock } from '@fortawesome/free-solid-svg-icons'
-import { Chart, Icon, Seg, axis, tooltip, useAsync } from '../components/legacy'
+import { faLocationDot, faChevronDown, faRotateRight, faDroplet, faWind, faTemperatureLow, faGauge, faEye, faSun, faCloudSun, faCloudRain, faCloud, faMoon, faUmbrella, faLayerGroup, faBuilding, faSignal, faPlugCircleXmark, faArrowRight, faStar, faTriangleExclamation } from '@fortawesome/free-solid-svg-icons'
+import { Chart, Icon, axis, tooltip, useAsync } from '../components/legacy'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { useApp } from '../app/store'
-import { whenProjectSet } from '../data/org'
+import { useFrequentProjects, useOrgStat, whenProjectSet, type FrequentProject, type Project } from '../data/org'
+import { defaultText } from '../api/errors'
 import * as api from '../api'
 
 const WX: Record<string, [typeof faSun, string]> = { sun: [faSun, '#f59e0b'], cloudsun: [faCloudSun, '#f59e0b'], rain: [faCloudRain, '#0ea5e9'], cloud: [faCloud, '#94a3b8'], moon: [faMoon, '#818cf8'] }
@@ -26,11 +27,11 @@ function BigSun() {
 
 export default function Home() {
   const nav = useNavigate()
-  const { toast, setProjectId, user, scope, selectTick } = useApp()
+  const { toast, setProjectId, user } = useApp()
   const [w] = useAsync(() => api.getWeather('上海'), [])
-  const [preset, setPreset] = useState<'' | '0' | '2' | '4+'>('')
-  const [favs, setFavs] = useState<Awaited<ReturnType<typeof api.getFrequentProjects>>>()
-  useEffect(() => { let live = true; api.getFrequentProjects(user).then((r) => live && setFavs(r)); return () => { live = false } }, [user, selectTick, preset])
+  // 统计卡：/integrated-projects/stat（演示数据、无权限或失败时按可见范围算，口径相同）；常用项目：/projects/frequent，只留可见范围里的
+  const stat = useOrgStat()
+  const favs = useFrequentProjects(4)
   const [spin, setSpin] = useState(false)
   // 交付包（__HJC_MOCK__ = false）没有天气接口：不等天气，整块显示「暂无天气数据」
   if (__HJC_MOCK__ && !w) return <div className="page" />
@@ -48,9 +49,12 @@ export default function Home() {
       { name: '湿度 %', type: 'line' as const, yAxisIndex: 1, smooth: true, data: w.hourHum, showSymbol: false, lineStyle: { color: '#06b6d4', width: 2, type: 'dotted' as const }, itemStyle: { color: '#06b6d4' } },
     ],
   }
-  const { groups, projects } = scope
-  const online = projects.filter((p) => p.online).length
-  const seed = (v: '0' | '2' | '4+') => { api.seedFrequent(user, v); setPreset(v); toast(`演示：常用项目计数已重置为「${v === '4+' ? '≥4 个' : v + ' 个'}」`) }
+  const st = stat.data
+  const n = (v: number | undefined) => (v === undefined ? '—' : v)
+  // 有在线状态未知的项目时（只在前端回退计算时出现），在线 / 离线只能给出范围：在线 ≥ 已知在线，离线 ≤ 已知离线 + 未知
+  const unknown = st?.unknown ?? 0
+  const range = (v: number | undefined, sign: '≥' | '≤') => (v === undefined ? '—' : unknown ? `${sign}${sign === '≥' ? v : v + unknown}` : v)
+  const open = (p: Project) => whenProjectSet(setProjectId(p.id), () => { if (!p.online) toast(`${p.name} 当前离线，显示最后在线数据`, true); nav('/sensors') }, (t) => toast(t, true))
   const now = new Date()
   const hour = now.getHours()
   const greet = hour < 11 ? '上午好' : hour < 13 ? '中午好' : hour < 18 ? '下午好' : '晚上好'
@@ -117,33 +121,44 @@ export default function Home() {
         <Card style={{ marginBottom: 20 }}><CardHeader><div><CardTitle>天气</CardTitle><CardDescription>暂无天气数据</CardDescription></div></CardHeader></Card>
       )}
 
-      <div className="hj-grid g4" style={{ marginBottom: 20 }}>
-        <Card className="stat" pad={false}><div className="si" style={{ background: '#ecfeff', color: '#0891b2' }}><Icon icon={faLayerGroup} /></div><div><span>集成项目</span><b className="num">{groups.length}</b></div></Card>
-        <Card className="stat" pad={false}><div className="si" style={{ background: '#eff6ff', color: '#2563eb' }}><Icon icon={faBuilding} /></div><div><span>项目总数</span><b className="num">{projects.length}</b></div></Card>
-        <Card className="stat" pad={false}><div className="si" style={{ background: '#ecfdf5', color: '#059669' }}><Icon icon={faSignal} /></div><div><span>在线项目</span><b className="num">{online}<small> / {projects.length}</small></b></div></Card>
-        <Card className="stat" pad={false}><div className="si" style={{ background: '#fff1f2', color: '#e11d48' }}><Icon icon={faPlugCircleXmark} /></div><div><span>离线项目</span><b className="num">{projects.length - online}<small> / {projects.length}</small></b></div></Card>
+      <div className="hj-grid g4" style={{ marginBottom: unknown ? 8 : 20 }}>
+        <Card className="stat" pad={false}><div className="si" style={{ background: '#ecfeff', color: '#0891b2' }}><Icon icon={faLayerGroup} /></div><div><span>集成项目</span><b className="num">{n(st?.groups)}</b></div></Card>
+        <Card className="stat" pad={false}><div className="si" style={{ background: '#eff6ff', color: '#2563eb' }}><Icon icon={faBuilding} /></div><div><span>项目总数</span><b className="num">{n(st?.projects)}</b></div></Card>
+        <Card className="stat" pad={false}><div className="si" style={{ background: '#ecfdf5', color: '#059669' }}><Icon icon={faSignal} /></div><div><span>在线项目</span><b className="num">{range(st?.online, '≥')}<small> / {n(st?.projects)}</small></b></div></Card>
+        <Card className="stat" pad={false}><div className="si" style={{ background: '#fff1f2', color: '#e11d48' }}><Icon icon={faPlugCircleXmark} /></div><div><span>离线项目</span><b className="num">{range(st?.offline, '≤')}<small> / {n(st?.projects)}</small></b></div></Card>
       </div>
+      {/* 只在前端回退计算、且有关联项目不在项目列表里时出现（演示数据不会出现）：这些项目在线状态未知，不算在线也不算离线 */}
+      {!!unknown && <div role="status" className="orange" style={{ fontSize: 12.5, marginBottom: 20 }}>数据不完整：{unknown} 个项目在线状态未知（集成项目关联了，但不在项目列表中），在线 / 离线数为范围</div>}
 
       <Card>
+        {/* 「演示计数」开关去掉（方案 1.2）；卡片里的温湿度 / CO₂ 与「最后在线」接口无此字段（Q9 ③④），去掉 */}
         <CardHeader><div><CardTitle>常用项目</CardTitle><CardDescription>按您切换当前项目的次数统计，显示最常用的 4 个</CardDescription></div>
-          <div className="row" style={{ gap: 14 }}>
-            {__HJC_MOCK__ && <span className="demo-seg"><small>演示计数</small><Seg value={preset} options={['0', '2', '4+']} onChange={(v) => seed(v as '0' | '2' | '4+')} /></span>}
-            <Button variant="link" onClick={() => nav('/groups')}>全部项目 <Icon icon={faArrowRight} /></Button>
-          </div></CardHeader>
-        {favs && favs.length === 0 && <div className="empty-fav"><Icon icon={faStar} /><b>暂无常用项目</b><small>在「集成项目」或顶部搜索中选择项目后，这里会显示您最常用的项目</small></div>}
-        <div className="hj-grid g4">
-          {(favs ?? []).map(({ project: p, count }) => (
-            <div key={p.id} className="proj-card" title={`已选择 ${count} 次`} onClick={() => whenProjectSet(setProjectId(p.id), () => { if (!p.online) toast(`${p.name} 当前离线，显示最后在线数据`, true); nav('/sensors') }, () => toast('项目列表已更新，请稍后重试', true))}>
-              <div className="pc-h"><Badge variant={p.online ? 'green' : 'gray'} style={{ color: p.online ? undefined : 'var(--muted)' }}>{p.online ? '在线' : '离线'}</Badge><span className="faint num" style={{ fontSize: 12 }}>{p.id}</span></div>
-              <h4>{p.name}</h4>
-              <div className="pc-loc">{p.city} · {p.district} · {p.kind}</div>
-              {p.online ? (
-                <div className="pc-m num"><span><Icon icon={faTemperatureHalf} style={{ color: '#f97316' }} /> {p.temp}°</span><span><Icon icon={faDroplet} style={{ color: '#06b6d4' }} /> {p.humidity}%</span><span><Icon icon={faLeaf} style={{ color: '#10b981' }} /> {p.co2}ppm</span></div>
-              ) : <div className="pc-m faint"><span><Icon icon={faClock} /> 最后在线 {p.lastOnlineAgo}</span></div>}
-            </div>
-          ))}
-        </div>
+          <Button variant="link" onClick={() => nav('/groups')}>全部项目 <Icon icon={faArrowRight} /></Button></CardHeader>
+        <Favorites favs={favs} onOpen={open} />
       </Card>
+    </div>
+  )
+}
+
+function Favorites({ favs, onOpen }: { favs: ReturnType<typeof useFrequentProjects>; onOpen: (p: Project) => void }) {
+  if (!favs.permitted) return <div className="empty-fav" role="status"><Icon icon={faStar} /><b>常用项目暂不可用</b><small>当前账号未开通常用项目功能，可在「集成项目」或顶部搜索中选择项目</small></div>
+  if (favs.status === 'loading') return null
+  if (favs.status === 'error') return (
+    <div className="empty-fav" role="alert"><Icon icon={faTriangleExclamation} /><b>常用项目加载失败</b><small>{favs.error?.message || defaultText('server')}</small>
+      <Button variant="link" onClick={favs.refetch}>重试</Button></div>
+  )
+  if (favs.isEmpty) return <div className="empty-fav"><Icon icon={faStar} /><b>暂无常用项目</b><small>在「集成项目」或顶部搜索中选择项目后，这里会显示您最常用的项目</small></div>
+  return <div className="hj-grid g4">{favs.data.map((f) => <FavCard key={f.project.id} fav={f} onOpen={onOpen} />)}</div>
+}
+
+function FavCard({ fav: { project: p, count }, onOpen }: { fav: FrequentProject; onOpen: (p: Project) => void }) {
+  // 真实接口只有行政区划码，城市 / 区县名为空：只拼有值的部分
+  const loc = [p.city, p.district, p.kind || p.appName].filter(Boolean).join(' · ')
+  return (
+    <div className="proj-card" title={count === undefined ? undefined : `已选择 ${count} 次`} onClick={() => onOpen(p)}>
+      <div className="pc-h"><Badge variant={p.online ? 'green' : 'gray'} style={{ color: p.online ? undefined : 'var(--muted)' }}>{p.online ? '在线' : '离线'}</Badge><span className="faint num" style={{ fontSize: 12 }}>{p.code}</span></div>
+      <h4>{p.name}</h4>
+      {loc && <div className="pc-loc">{loc}</div>}
     </div>
   )
 }

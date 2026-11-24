@@ -1,6 +1,8 @@
-// 组织数据的读接口：经销商、集成项目、项目列表、应用。全部是只读 POST，经 http.ts 的 request()。
+// 组织数据的读接口：经销商、集成项目（含统计）、项目列表、常用项目、应用，经 http.ts 的 request()；
+// 另有切换项目时的点击上报（/project/click/{id}，只记次数，不是下发接口）。
 // 响应保持后端 snake_case，只声明用到的字段；映射成页面视图模型在 src/data/org/map.ts。
 // 依据：docs/api/接口文档.md 第 4、6、7 节，docs/plan-v1.md 1.2 节与文末后端答复。
+import { ApiError } from './errors'
 import { request } from './http'
 
 /** ProjectEntity（/ctrl/projects 返回，比 /projects 多 mode、app_version 等） */
@@ -88,4 +90,42 @@ export async function getDistributors(opts: Opts = {}): Promise<DistributorEntit
 export async function getApps(opts: Opts = {}): Promise<AppEntity[]> {
   const r = await request<{ app_entities?: AppEntity[] }>('/apps', { body: {}, signal: opts.signal })
   return Array.isArray(r.app_entities) ? r.app_entities : []
+}
+
+/** int64 在网关 JSON 里是字符串（实测 {"total":"3"}）；缺失、非法为 0 */
+const int64 = (v: unknown) => { const n = Number(v); return Number.isFinite(n) && n > 0 ? Math.trunc(n) : 0 }
+
+export interface IntegratedProjectStat { total: number; projectTotal: number; projectOnline: number; projectOffline: number }
+
+/**
+ * POST /integrated-projects/stat：首页 4 张统计卡（接口文档 6.1）。数据权限同 /integrated-projects
+ * （经销商账号限定为本级及下级）；同一项目被多个集成项目包含时只算一次。
+ */
+export async function getIntegratedProjectStat(opts: Opts = {}): Promise<IntegratedProjectStat> {
+  const r = await request<{ total?: unknown; project_total?: unknown; project_online?: unknown; project_offline?: unknown }>('/integrated-projects/stat', { body: {}, signal: opts.signal })
+  const projectTotal = int64(r.project_total), projectOnline = Math.min(int64(r.project_online), projectTotal)
+  // project_offline 文档定义为 project_total - project_online；缺失时按定义算
+  const projectOffline = r.project_offline === undefined ? projectTotal - projectOnline : int64(r.project_offline)
+  return { total: int64(r.total), projectTotal, projectOnline, projectOffline }
+}
+
+/**
+ * POST /projects/frequent { limit }：当前用户点击次数最多的项目，按次数降序（接口文档第 5 节）。
+ * 没有点击记录时实测返回 {}。limit <= 0 时后端默认 4。
+ */
+export async function getFrequentProjects(limit: number, opts: Opts = {}): Promise<ProjectEntity[]> {
+  const r = await request<{ project_entities?: ProjectEntity[] }>('/projects/frequent', { body: { limit }, signal: opts.signal })
+  return Array.isArray(r.project_entities) ? r.project_entities : []
+}
+
+/** 后端实体 id 只含字母、数字、下划线和连字符（ObjectId 是 24 位十六进制）；其他值不拼进路径 */
+const SAFE_ID = /^[A-Za-z0-9_-]{1,64}$/
+
+/**
+ * POST /project/click/{id}，body {}：切换当前项目时上报一次点击（常用项目按它统计）。
+ * 只记点击次数、不涉及设备，不是下发接口（guard.ts 的 isWritePath 不会把它判成写接口）。
+ */
+export async function reportProjectClick(id: string, opts: Opts = {}): Promise<void> {
+  if (!SAFE_ID.test(id)) throw new ApiError('bad_request', `项目 id 不合法：${JSON.stringify(id)}`)
+  await request<unknown>(`/project/click/${id}`, { body: {}, signal: opts.signal })
 }

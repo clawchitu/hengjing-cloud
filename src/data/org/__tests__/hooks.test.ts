@@ -85,8 +85,8 @@ describe('mock 数据源（e2e 截图走这里）', () => {
     expect(result.current.project?.id).toBe('PRJ-10252')
     // 不在可见范围里的 id 不写进存储（演示 id、管理员才看得到的项目等）
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    // 不在可见范围里：同步返回 false，不写存储
-    act(() => { expect(result.current.setProjectId('PRJ-50101')).toBe(false) })
+    // 不在可见范围里：同步返回 'refreshing'（失败），不写存储
+    act(() => { expect(result.current.setProjectId('PRJ-50101')).toBe('refreshing') })
     expect(localStorage.getItem(PROJECT_KEY)).toBe('PRJ-10252')
     expect(result.current.project?.id).toBe('PRJ-10252')
     warn.mockRestore()
@@ -196,7 +196,7 @@ describe('真实数据源', () => {
     expect(localStorage.getItem(PROJECT_KEY)).toBe('p3')
     // 后端 id 不在可见范围（不在任何集成项目里）→ 忽略
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    act(() => { expect(result.current.setProjectId('not-visible')).toBe(false) })
+    act(() => { expect(result.current.setProjectId('not-visible')).toBe('refreshing') })
     expect(localStorage.getItem(PROJECT_KEY)).toBe('p3')
     warn.mockRestore()
   })
