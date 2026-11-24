@@ -1,7 +1,7 @@
 // ctrl 207 AirSensorGet → 页面用的传感器视图模型（纯函数）。
 // 65536 = 设备没有该数据（无探头 / 未初始化，后端 11/24 答复）→ 该项为 null，实时卡片隐藏该项（统计区显示哪些指标由 208 的有效数据决定）；
 // 离线传感器（is_connected 不为 true）的读数不可信，一律为 null，卡片显示「—」。
-import { reading } from '../../api/values'
+import { hourlyReading } from '../../api/values'
 import { limitsOf, validReading, type Readings } from './stats'
 
 export interface AirSensor extends Readings {
@@ -32,7 +32,8 @@ export function toAirSensors(data: readonly AirSensorData[]): AirSensor[] {
     if (seen.has(key)) key = `${id}#${i}`
     seen.add(key)
     const online = d.isConnected === true
-    const v = (x: number | undefined) => (online ? reading(x) : null)
+    // 65536、-100（无效数据）都过滤，与 208 同一口径；其他负温度、负露点照常显示
+    const v = (x: number | undefined) => (online ? hourlyReading(x) : null)
     return {
       id, key, online,
       name: d.name?.trim() || `传感器 ${id || i + 1}`,

@@ -32,7 +32,7 @@ export const METRICS: MetricDef[] = [
 ]
 const out = (l: Limits, v: number) => v > l.hi || (l.lo !== undefined && v < l.lo)
 /** 达标率口径（经 Fable 复核，11/24）：落在标准范围内的有效小时数 ÷ 有效小时数，三档都按小时值算 */
-const PCT_HINT = '统计时段内，小时读数落在标准范围内的时间占比；无数据的小时不计入。'
+const PCT_HINT = '统计时段内，小时读数落在标准范围内的时间占比；无数据的小时不计入。温度标准范围分冬夏（5–10 月为夏季），季节按统计窗口结束时刻判定。'
 const fmtN = (v: number, d: number) => v.toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d })
 
 /** shared: fetch stats for one device through the 24h API or the shared daily API */
@@ -65,7 +65,8 @@ function summaryCsv(o: { project: Project | null; sensor: AirSensor | undefined;
     ['指标', '平均值', '最大值', '最小值', '标准范围', '达标率', '有效小时数', '应有小时数'],
   ]
   for (const { m, lim, r } of o.rows) {
-    const f = (v: number | undefined) => (v === undefined ? '—' : v.toFixed(m.digits))
+    // 数值以数值类型输出（负温度不会被公式防护加 '），保留页面上的小数位
+    const f = (v: number | undefined): CsvCell => (v === undefined ? '—' : { num: v, digits: m.digits })
     lines.push([m.label, f(r?.avg), f(r?.max), f(r?.min), limitsText(lim, m.digits), r ? `${r.pct}%` : '—', r?.n ?? 0, o.expected])
   }
   return toCsv(lines)
@@ -201,7 +202,8 @@ export default function Sensors() {
   const tag = (t: string) => t === '良好' ? 'green' as const : t === '离线' ? 'gray' as const : 'orange' as const
   const msg = hoursMessage(hours, cur)
   const chartMsg = msg ?? (!metric || (series && !series.hasData) ? '该时段暂无数据' : null)
-  const tableMsg = msg ?? (rows.every((x) => x.r === null) ? '该时段暂无统计数据' : null)
+  // 只有没有任何可展示的指标时才用整表空态；有指标但没有有效小时的照常出行（「—」+「有效 0/M 小时」），导出照常
+  const tableMsg = msg ?? (rows.length === 0 ? '该时段暂无统计数据' : null)
   const onExport = () => {
     if (!ready) return
     const name = safeFileName(`空气质量统计_${cur?.name ?? ''}_${range}`, 'csv')
@@ -273,7 +275,7 @@ export default function Sensors() {
                     {r ? <div className="row" style={{ gap: 10 }}><div className="bar"><i style={{ width: r.pct + '%', background: r.pct < 95 ? '#f59e0b' : undefined }} /></div><span className="num" style={{ width: 36, textAlign: 'right' }}>{r.pct}%</span></div>
                       : <span className="num muted">—</span>}
                     {/* 有效小时不到应有小时数一半：照样显示达标率，提示数据不全 */}
-                    {r && r.n * 2 < expected && <div className="faint num" style={{ fontSize: 11.5, marginTop: 4 }}>有效 {r.n}/{expected} 小时</div>}
+                    {(r?.n ?? 0) * 2 < expected && <div className="faint num" style={{ fontSize: 11.5, marginTop: 4 }}>有效 {r?.n ?? 0}/{expected} 小时</div>}
                   </TableCell>
                 </TableRow>
               ))}

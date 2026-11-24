@@ -176,7 +176,7 @@ describe('数据与统计', () => {
     const heads = [...summaryTable().querySelectorAll('th')].map((th) => th.textContent)
     expect(heads).toEqual(['指标', '平均值', '最大值', '最小值', '标准范围', '达标率'])
     // 达标率表头带口径说明（键盘可聚焦，读屏可读）
-    expect(within(summaryTable()).getByRole('img', { name: '达标率口径：统计时段内，小时读数落在标准范围内的时间占比；无数据的小时不计入。' }).tabIndex).toBe(0)
+    expect(within(summaryTable()).getByRole('img', { name: '达标率口径：统计时段内，小时读数落在标准范围内的时间占比；无数据的小时不计入。温度标准范围分冬夏（5–10 月为夏季），季节按统计窗口结束时刻判定。' }).tabIndex).toBe(0)
     expect(document.body.textContent).not.toMatch(/超标时长|超标天数/)
   })
 
@@ -195,7 +195,8 @@ describe('数据与统计', () => {
     const cells = [...t.closest('tr')!.querySelectorAll('td')].map((td) => td.textContent)
     expect(cells).toEqual(['温度 (°C)', '25.5', '27.0', '25.0', '24 – 26', '76%'])
     const co2 = [...within(summaryTable()).getByText('CO₂ (ppm)').closest('tr')!.querySelectorAll('td')].map((td) => td.textContent)
-    expect(co2).toEqual(['CO₂ (ppm)', '—', '—', '—', '≤ 800', '—'])
+    // 装了探头但没有有效小时：照常出行，达标率「—」，灰字「有效 0/24 小时」
+    expect(co2).toEqual(['CO₂ (ppm)', '—', '—', '—', '≤ 800', '—有效 0/24 小时'])
     expect(within(summaryTable()).queryByText('PM2.5 (μg/m³)')).toBeNull()
   })
 
@@ -274,7 +275,7 @@ describe('数据与统计', () => {
     const csv = lines.join('\n')
     expect(csv).toContain('温度 (°C),25.0,25.0,25.0,18 – 22,0%,1,24')
     expect(csv).toContain('CO₂ (ppm),900,900,900,≤ 800,0%,1,24')
-    expect(csv).toContain('达标率口径,统计时段内，小时读数落在标准范围内的时间占比；无数据的小时不计入。')
+    expect(csv).toContain('达标率口径,统计时段内，小时读数落在标准范围内的时间占比；无数据的小时不计入。温度标准范围分冬夏（5–10 月为夏季），季节按统计窗口结束时刻判定。')
     expect(lines).toContain('指标,平均值,最大值,最小值,标准范围,达标率,有效小时数,应有小时数')
     expect(csv).not.toContain('超标')
   })
@@ -356,13 +357,25 @@ describe('三态', () => {
     await screen.findByTestId('chart')
   })
 
-  it('208 成功但没有数据：图和汇总显示「暂无数据」', async () => {
+  it('208 成功但所有指标都没有有效小时：图显示「暂无数据」；汇总照常出行（「—」+「有效 0/24 小时」），导出可用', async () => {
     backend({ '/ctrl/air-sensor-get': () => body207([KC2]), '/ctrl/air-sensor-data-hour-get': () => body208([hourRec(KC2.id, 0, { temperature: 65536, humidity: -100, dewPoint: 65536, co2: 65536, pm25: 65536 })]) })
     await signIn('u', 'pw', true)
     mount()
     await screen.findByText('该时段暂无数据')
-    expect(within(summaryTable()).getByText('该时段暂无统计数据')).toBeTruthy()
-    expect(within(summaryTable()).queryByText('温度 (°C)')).toBeNull()
+    expect(within(summaryTable()).queryByText('该时段暂无统计数据')).toBeNull()
+    const cells = [...within(summaryTable()).getByText('温度 (°C)').closest('tr')!.querySelectorAll('td')].map((td) => td.textContent)
+    expect(cells).toEqual(['温度 (°C)', '—', '—', '—', '18 – 22', '—有效 0/24 小时'])
+    expect(within(summaryTable()).getAllByText('有效 0/24 小时')).toHaveLength(5)
+    expect((screen.getByRole('button', { name: '导出' }) as HTMLButtonElement).disabled).toBe(false)
+  })
+
+  it('没有任何可展示的指标（207 全无数据、208 也没有）：整表空态，导出禁用', async () => {
+    const none = { ...KC2, temperature: 65536, humidity: 65536, dewPoint: 65536, pm25: 65536, co2: 65536 }
+    backend({ '/ctrl/air-sensor-get': () => body207([none]), '/ctrl/air-sensor-data-hour-get': () => body208([]) })
+    await signIn('u', 'pw', true)
+    mount()
+    await screen.findByText('KC2', { selector: 'b' })
+    expect(await within(summaryTable()).findByText('该时段暂无统计数据')).toBeTruthy()
     expect((screen.getByRole('button', { name: '导出' }) as HTMLButtonElement).disabled).toBe(true)
   })
 })
@@ -557,6 +570,79 @@ describe('轮询（假定时器，跨多个周期）', () => {
     expect(all[3].endTime - all[0].endTime).toBeGreaterThanOrEqual(3 * HOURS_POLL_MS)
     expect(all[3].endTime - all[0].endTime).toBeLessThan(3 * HOURS_POLL_MS + 10_000)
     h.unmount()
+  })
+})
+
+describe('207 真实解码形状：-100 过滤，合法负值保留', () => {
+  it('温度 / PM2.5 为 -100 不显示（卡片、KPI）；露点 -3.5 照常显示', async () => {
+    backend({ '/ctrl/air-sensor-get': () => body207([{ ...KC2, temperature: -100, pm25: -100, dewPoint: -3.5 }]), '/ctrl/air-sensor-data-hour-get': () => body208([]) })
+    await signIn('u', 'pw', true)
+    mount()
+    const card = (await screen.findByText('KC2', { selector: 'b' })).closest('.sensor') as HTMLElement
+    expect(within(card).queryByText('温度')).toBeNull()
+    expect(within(card).queryByText('PM2.5')).toBeNull()
+    expect(within(card).getByText('-3.5°')).toBeTruthy()
+    expect(screen.queryByText('平均 温度')).toBeNull()
+    expect(screen.queryByText('平均 PM2.5')).toBeNull()
+    const kpi = screen.getByText('平均 露点').closest('.kpi') as HTMLElement
+    expect(kpi.querySelector('.k-val')!.textContent).toBe('-3.5°C')
+    expect(document.body.textContent).not.toMatch(/-100/)
+  })
+
+  it('导出负温度：CSV 里是数值（不加 \' 前缀）', async () => {
+    let blob: Blob | undefined
+    vi.stubGlobal('URL', Object.assign(URL, { createObjectURL: (b: Blob) => { blob = b; return 'blob:x' }, revokeObjectURL: () => {} }))
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+    backend({ '/ctrl/air-sensor-get': () => body207([{ ...KC2, temperature: -3.5 }]), '/ctrl/air-sensor-data-hour-get': () => body208([hourRec(KC2.id, 0, { temperature: -3.5, dewPoint: -12 })]) })
+    await signIn('u', 'pw', true)
+    mount()
+    await screen.findByTestId('chart')
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: '导出' })) })
+    const csv = await blob!.text()
+    expect(csv).toContain('温度 (°C),-3.5,-3.5,-3.5,18 – 22,0%,1,24')
+    expect(csv).toContain('露点 (°C),-12.0,-12.0,-12.0,≤ 17.0,100%,1,24')
+  })
+})
+
+describe('一份 208 的 503 让同项目其他 208 缓存作废后，切回时主动重取', () => {
+  const r503 = () => json({ code: 14, message: '控制屏消息发送失败' }, 503)
+
+  it('设备 A 缓存 → 切 B 遇 503 → 切回 A：A 重新请求并显示新数据，不卡在加载中', async () => {
+    const A = { ...KC2, id: 1, name: '客厅' }
+    const B = { ...KC2, id: 2, name: '书房' }
+    let aCalls = 0
+    backend({
+      '/ctrl/air-sensor-get': () => body207([A, B]),
+      '/ctrl/air-sensor-data-hour-get': (c) => (q208(c).deviceId === 2 ? r503() : body208([hourRec(1, 0, { temperature: ++aCalls === 1 ? 20 : 21 })])),
+    })
+    await signIn('u', 'pw', true)
+    mount()
+    await screen.findByTestId('chart')
+    await act(async () => { fireEvent.click(screen.getByText('书房', { selector: 'b' }).closest('.sensor')!) })
+    expect(await screen.findAllByText('控制屏未连接')).toHaveLength(2)
+    await act(async () => { fireEvent.click(screen.getByText('客厅', { selector: 'b' }).closest('.sensor')!) })
+    await screen.findByTestId('chart')
+    expect(aCalls).toBe(2)
+    const row = within(summaryTable()).getByText('温度 (°C)').closest('tr')!
+    expect(row.querySelectorAll('td')[1].textContent).toBe('21.0')
+  })
+
+  it('不同范围：24 小时缓存 → 切 7 日遇 503 → 切回 24 小时：重新请求并显示', async () => {
+    let n24 = 0
+    backend({
+      '/ctrl/air-sensor-get': () => body207([KC2]),
+      '/ctrl/air-sensor-data-hour-get': (c) => (q208(c).startTime < cst('2026-11-23T00:00:00') ? r503() : body208([hourRec(KC2.id, 0, { temperature: ++n24 === 1 ? 20 : 21 })])),
+    })
+    await signIn('u', 'pw', true)
+    mount()
+    await screen.findByTestId('chart')
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: '7日' })) })
+    expect(await screen.findAllByText('控制屏未连接')).toHaveLength(2)
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: '24小时' })) })
+    await screen.findByTestId('chart')
+    expect(n24).toBe(2)
+    const row = within(summaryTable()).getByText('温度 (°C)').closest('tr')!
+    expect(row.querySelectorAll('td')[1].textContent).toBe('21.0')
   })
 })
 

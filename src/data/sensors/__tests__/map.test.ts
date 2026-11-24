@@ -25,6 +25,13 @@ describe('toAirSensors', () => {
     expect(t).toMatchObject({ hum: null, co2: null, temp: -3, dew: -8 })
   })
 
+  it('-100（无效数据）过滤，与 208 同一口径；合法负温度 / 负露点保留', () => {
+    const [s] = toAirSensors([{ ...KC2, temperature: -100, dewPoint: -100, pm25: -100 }])
+    expect(s).toMatchObject({ temp: null, dew: null, pm25: null, hum: 55, co2: 580 })
+    const [t] = toAirSensors([{ ...KC2, temperature: -2.5, dewPoint: -15 }])
+    expect(t).toMatchObject({ temp: -2.5, dew: -15 })
+  })
+
   it('离线（is_connected 缺省 / false）：读数一律 null', () => {
     const [a, b] = toAirSensors([{ ...KC2, isConnected: false }, { id: 3, name: 'x', temperature: 20 }])
     expect(a).toMatchObject({ online: false, temp: null, hum: null, dew: null, pm25: null, co2: null })

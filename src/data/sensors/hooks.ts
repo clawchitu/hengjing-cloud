@@ -9,7 +9,7 @@
 // 503 之后旧数据作废（同 S11 src/data/connections.ts 的请求序号方案）：每次真正发出的请求（含重试）分配递增序号，
 // 503 记下该项目的失效序号，只有序号更大的成功结果才显示；之间遇到 500 / 超时只显示错误，不恢复 503 之前的读数。
 import { useQuery } from '@tanstack/react-query'
-import { useCallback } from 'react'
+import { useCallback, useEffect } from 'react'
 import { ApiError, isApiError } from '../../api/errors'
 import { queryKeys } from '../../api/query'
 import { can } from '../session'
@@ -133,6 +133,10 @@ export function useSensorHours(project: SensorProject | null, sensor: Pick<AirSe
   })
   const qRefetch = q.refetch
   const retry = useCallback(() => { void qRefetch() }, [qRefetch])
+  // 别的设备 / 范围的 208 返回 503 会让本项目所有 208 缓存作废；切回一份「新鲜」但已作废的缓存时，
+  // staleTime 内 TanStack 不会自己请求，这里主动重取一次（本查询自身出错时不重取，避免循环）
+  const cachedButInvalid = active && permitted && q.data !== undefined && !valid('hours', pid, q.data) && !q.isFetching && !q.isError
+  useEffect(() => { if (cachedButInvalid) void qRefetch() }, [cachedButInvalid, qRefetch])
   if (!active) return { kind: 'idle' }
   if (!permitted) return { kind: 'forbidden' }
   const err = q.error ? toApiError(q.error) : null

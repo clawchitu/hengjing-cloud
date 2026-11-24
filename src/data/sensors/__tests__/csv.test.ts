@@ -19,6 +19,10 @@ describe('csvCell', () => {
     expect(csvCell('\tx')).toBe("'\tx")
     expect(csvCell(-2.5)).toBe('-2.5')
     expect(csvCell(NaN)).toBe('')
+    // 带小数位的数值：按数值输出、保留小数位，负数不加前缀
+    expect(csvCell({ num: -3.5, digits: 1 })).toBe('-3.5')
+    expect(csvCell({ num: 25, digits: 1 })).toBe('25.0')
+    expect(csvCell({ num: NaN, digits: 1 })).toBe('')
   })
 
   it('toCsv：BOM + CRLF', () => {

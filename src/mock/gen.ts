@@ -176,12 +176,21 @@ export function seriesDaily(seed: string, base: Base, days: number): DayPoint[] 
 const NO_DATA = 65536
 const MOCK_SENSOR_ID0 = 1001
 
+const HOUR = 3_600_000
+const CST = 8 * HOUR
+/**
+ * 演示温度按季节：基础数据是夏季的 25–27℃；北京时间 11–4 月（冬季）整体降 4.5℃，落在冬季标准 18–22℃ 附近，
+ * 免得冬季（截图时钟为 1 月）演示环境温度全部标红。季节划分与 src/data/sensors/stats.ts 的 seasonOf 一致（5–10 月为夏季）
+ */
+const seasonalTemp = (t: number, ms: number) => { const m = new Date(ms + CST).getUTCMonth() + 1; return m >= 5 && m <= 10 ? t : r1(t - 4.5) }
+
 /** 传感器列表，按 ctrl 207 的 Reply 形状：无探头的字段为 65536，离线的 is_connected=false */
 export function airSensorsFor(projectId: string) {
+  const now = Date.now()
   return sensorsFor(projectId).map((s, i) => ({
     id: MOCK_SENSOR_ID0 + i,
     name: s.room,
-    temperature: s.online ? s.temp : 0,
+    temperature: s.online ? seasonalTemp(s.temp, now) : 0,
     humidity: s.online ? s.hum : 0,
     dewPoint: s.online ? s.dew : 0,
     pm25: s.pm25 === undefined ? NO_DATA : s.online ? s.pm25 : 0,
@@ -190,8 +199,6 @@ export function airSensorsFor(projectId: string) {
   }))
 }
 
-const HOUR = 3_600_000
-const CST = 8 * HOUR
 /** 按时间戳确定的噪声（同一小时在 24 小时 / 7 日 / 30 日里取到同一个值） */
 const noise = (seed: string, ts: number) => rng(`${seed}:${ts}`)() - 0.5
 
@@ -208,7 +215,7 @@ export function airSensorHoursFor(projectId: string, deviceId: number, start: nu
     const v = (k: MetricKey, base: number | undefined) => (base === undefined ? NO_DATA : round(k, base + AMP[k] * shape + noise(seed + k, ts) * AMP[k] * 0.4))
     out.push({
       id: deviceId, date: ts, hour: h,
-      temperature: v('temp', s.temp), floorTemperature: 0, humidity: v('hum', s.hum), dewPoint: v('dew', s.dew),
+      temperature: v('temp', seasonalTemp(s.temp, ts)), floorTemperature: 0, humidity: v('hum', s.hum), dewPoint: v('dew', s.dew),
       co2: v('co2', s.co2), pm25: v('pm25', s.pm25),
     })
   }
