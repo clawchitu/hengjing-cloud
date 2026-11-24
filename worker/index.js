@@ -7,8 +7,8 @@
 //     cosyhome → role "dealer"（经销商），密码 = BASIC_PASS 密钥（钥匙串 "hvac-demo-basic"）
 //     hjadmin  → role "admin"（管理员），密码 = ADMIN_PASS 密钥（钥匙串 "hvac-demo-admin"）
 //
-// 转发规则：只允许 GET / HEAD / POST；只转 Authorization / Content-Type 和请求体；路径里有编码过的分隔符
-// （%2F %5C %2E）或反斜杠一律拒绝；不跟随重定向；去掉上游的 Set-Cookie、CORS 头、Location 和指纹头，
+// 转发规则：只允许 GET / HEAD / POST；只转 Authorization / Content-Type 和请求体；路径按字符白名单校验
+// （[A-Za-z0-9._~/-]，出现 % 即拒绝；空段、. 段、.. 段也拒绝）；不跟随重定向；去掉上游的 Set-Cookie、CORS 头、Location 和指纹头，
 // 加 nosniff 与 CSP sandbox；超时返回 504。不记录请求体、令牌或上游错误详情。
 
 /** 允许的上游（不接受任意目标，防开放代理）。键是 API_UPSTREAM 的取值，值是对应环境 */
@@ -54,14 +54,28 @@ function crossSite(req, url) {
   return !!origin && origin !== url.origin
 }
 
-/** 把 /api/xxx?q 改写成 上游/xxx?q；越出上游路径前缀时返回 null */
-export function upstreamUrl(upstream, url) {
+/** 路径字符白名单（解码前）：出现 %、反斜杠、分号等任何其他字符都拒绝 */
+const SAFE_PATH = /^[A-Za-z0-9._~/-]+$/
+
+/** 请求行里的原始路径（不经 URL 解析器规范化，用来识别 . 和 .. 段） */
+export const rawPathOf = (rawUrl) => rawUrl.replace(/^[a-z][a-z0-9+.-]*:\/\/[^/?#]*/i, '').split(/[?#]/)[0] || '/'
+
+/** /api 之后的路径是否安全：只含白名单字符；按 / 切分后没有空段、. 段、.. 段 */
+function safeRest(rest) {
+  if (!rest.startsWith('/') || !SAFE_PATH.test(rest)) return false
+  return rest.slice(1).split('/').every((seg) => seg !== '' && seg !== '.' && seg !== '..')
+}
+
+/**
+ * 把 /api/xxx?q 改写成 上游/xxx?q。rawPath 是请求行里未规范化的路径（默认取 url.pathname）；
+ * 原始路径和解析后的路径都必须通过 safeRest，否则返回 null（不转发）
+ */
+export function upstreamUrl(upstream, url, rawPath = url.pathname) {
+  if (!rawPath.startsWith('/api/') || !url.pathname.startsWith('/api/')) return null
   const rest = url.pathname.slice('/api'.length)
-  if (!rest.startsWith('/') || rest === '/') return null
-  // 上游或其前置网关可能先解码再规范化路径，编码过的分隔符和点一律不放行
-  if (/%2f|%5c|%2e|\\/i.test(rest)) return null
+  if (!safeRest(rawPath.slice('/api'.length)) || !safeRest(rest)) return null
   const base = new URL(upstream)
-  const target = new URL(base.href + rest + url.search)
+  const target = new URL(base.href.replace(/\/+$/, '') + rest + url.search)
   const prefix = base.pathname.replace(/\/+$/, '') + '/'
   if (target.origin !== base.origin || !target.pathname.startsWith(prefix)) return null
   return target
@@ -72,7 +86,7 @@ export async function proxy(req, env, url) {
   if (!Object.hasOwn(ALLOWED_UPSTREAMS, upstream)) return json(500, { code: 13, message: '代理上游未配置' })
   if (!ALLOWED_METHODS.has(req.method)) return json(405, { code: 12, message: '不支持的请求方法' }, { Allow: 'GET, HEAD, POST' })
   if (crossSite(req, url)) return json(403, { code: 7, message: '拒绝跨站请求' })
-  const target = upstreamUrl(upstream, url)
+  const target = upstreamUrl(upstream, url, rawPathOf(req.url))
   if (!target) return json(404, { code: 5, message: '接口不存在' })
 
   const headers = new Headers()

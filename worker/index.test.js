@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import worker, { upstreamUrl, UPSTREAM_TIMEOUT_MS } from './index.js'
+import worker, { rawPathOf, upstreamUrl, UPSTREAM_TIMEOUT_MS } from './index.js'
 
 const UP = 'https://test.cosyhome.com.cn:9443/v1'
 const SITE = 'https://hvac-demo.haoqianglyu.com'
@@ -29,13 +29,31 @@ describe('路径改写', () => {
     expect(upstreamUrl(UP, new URL(SITE + '/api/ctrl/projects')).href).toBe(UP + '/ctrl/projects')
   })
 
-  it('越出上游 /v1/ 前缀、编码分隔符、反斜杠一律拒绝', () => {
+  it('路径字符白名单：出现 %、分号、反斜杠等一律拒绝', () => {
     for (const p of ['/api', '/api/', '/api/%2e%2e/admin', '/api/%2E%2E/%2e%2e/x', '/api/.%2e/x',
-      '/api/%2F..%2F..%2Fadmin', '/api/..%2fadmin', '/api/%5c..%5cx', '/api/me%2Fx', '/api/a%2Eb', '/api/a%5Cb']) {
-      expect(upstreamUrl(UP, new URL(SITE + p)), p).toBeNull()
+      '/api/%2F..%2F..%2Fadmin', '/api/..%2fadmin', '/api/%5c..%5cx', '/api/me%2Fx', '/api/a%2Eb', '/api/a%5Cb',
+      '/api/%252e%252e%252fadmin', '/api/%25', '/api/me%00', '/api/%00/x', '/api/..;/admin', '/api/me;x=1', '/api/a b', '/api/a@b', '/api/a:b']) {
+      expect(upstreamUrl(UP, new URL(SITE + p), p), p).toBeNull()
     }
-    // //evil.com 拼在上游路径后面仍是上游主机
-    expect(upstreamUrl(UP, new URL(SITE + '/api//evil.com/x')).origin).toBe('https://test.cosyhome.com.cn:9443')
+  })
+
+  it('空段、. 段、.. 段一律拒绝（按原始路径判断，不依赖 URL 解析器的规范化）', () => {
+    for (const raw of ['/api//evil.com/x', '/api/me/', '/api/a//b', '/api/./me', '/api/../admin', '/api/a/../../admin', '/api/me/.', '/api/me/..', '/api/.', '/api/..']) {
+      expect(upstreamUrl(UP, new URL(SITE + raw), raw), raw).toBeNull()
+    }
+    // 解析后的路径同样校验（例如 /api/x/../me 被解析器规范化成 /api/me，但原始路径含 .. 仍拒绝）
+    expect(upstreamUrl(UP, new URL(SITE + '/api/x/../me'), '/api/x/../me')).toBeNull()
+  })
+
+  it('原始路径取自请求行，不经规范化', () => {
+    expect(rawPathOf(SITE + '/api/../admin?q=1')).toBe('/api/../admin')
+    expect(rawPathOf(SITE + '/api/me#x')).toBe('/api/me')
+    expect(rawPathOf(SITE)).toBe('/')
+  })
+
+  it('合法字符放行：字母数字 . _ ~ -', () => {
+    expect(upstreamUrl(UP, new URL(SITE + '/api/ctrl/unified-ctrls-send')).href).toBe(UP + '/ctrl/unified-ctrls-send')
+    expect(upstreamUrl(UP, new URL(SITE + '/api/a.b_c~d/E9')).href).toBe(UP + '/a.b_c~d/E9')
   })
 
   it('转发请求：方法、Authorization、Content-Type、请求体原样，其他头不转', async () => {
@@ -72,8 +90,8 @@ describe('路径改写', () => {
 })
 
 describe('方法与编码路径', () => {
-  it('编码分隔符的请求 404，不发请求', async () => {
-    for (const p of ['/api/%2F..%2F..%2Fadmin', '/api/..%2fadmin', '/api/%5c..%5cx']) {
+  it('不安全路径 404，不发请求', async () => {
+    for (const p of ['/api/%2F..%2F..%2Fadmin', '/api/..%2fadmin', '/api/%5c..%5cx', '/api/%252e%252e%252fadmin', '/api/..;/admin', '/api/me%00', '/api//me', '/api/me/']) {
       const calls = stubUpstream()
       expect((await worker.fetch(new Request(SITE + p), realEnv())).status, p).toBe(404)
       expect(calls).toHaveLength(0)

@@ -233,7 +233,8 @@ export async function requestWrite<T>(op: WriteOp, projects: readonly WriteProje
     return await authed<T>(WRITE_ROUTES[op], { ...opts, method: 'POST', body: payload })
   } catch (e) {
     if (e instanceof ApiError && (e.kind === 'timeout' || e.kind === 'network')) {
-      throw new ApiError(e.kind, e.kind === 'timeout' ? '未收到控制屏应答，下发结果未知' : '网络中断，下发结果未知', { status: e.status, code: e.code, cause: e })
+      const text = e.kind === 'timeout' ? '未收到控制屏应答，下发结果未知' : e.status === 502 ? '后端连接失败，下发结果未知' : '网络中断，下发结果未知'
+      throw new ApiError(e.kind, text, { status: e.status, code: e.code, cause: e })
     }
     throw e
   }

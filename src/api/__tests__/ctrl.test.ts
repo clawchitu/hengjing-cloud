@@ -140,7 +140,7 @@ describe('callCtrl', () => {
     setConfig({ apiBase: '/api', apiEnv: 'test' })
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({ message: '后端连接失败' }), { status: 502, headers: { 'Content-Type': 'application/json' } }))
     vi.stubGlobal('fetch', fetchMock)
-    await expect(writeCtrl(201, P1, buildRoomTemperatureSet(1, { temperature: 26 }))).rejects.toMatchObject({ kind: 'network', message: '网络中断，下发结果未知' })
+    await expect(writeCtrl(201, P1, buildRoomTemperatureSet(1, { temperature: 26 }))).rejects.toMatchObject({ kind: 'network', message: '后端连接失败，下发结果未知' })
     expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 
