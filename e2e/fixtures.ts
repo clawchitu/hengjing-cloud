@@ -49,4 +49,15 @@ export async function shot(page: Page, name: string, opts: { h1?: boolean } = {}
   await expect.soft(page).toHaveScreenshot(`${name}.png`, { fullPage: true })
 }
 
+/**
+ * 等某条 toast 出现。Sonner 在 setTimeout(0) 里才把 toast 加进列表，假时钟暂停时这个定时器不会自己触发；
+ * 触发 toast 的操作又可能是异步的（等接口返回），所以反复推进 1ms 直到出现
+ */
+export async function expectToast(page: Page, text: string) {
+  await expect(async () => {
+    await page.clock.runFor(1)
+    await expect(page.locator('[data-sonner-toast]').filter({ hasText: text })).toBeVisible({ timeout: 100 })
+  }).toPass({ timeout: 5000 })
+}
+
 export { expect }

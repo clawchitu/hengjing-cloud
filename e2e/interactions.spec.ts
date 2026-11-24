@@ -1,6 +1,6 @@
 // 交互断言（不截图）：Button 键盘可用、焦点可见；Table 行悬停色与特殊行底色的优先级、无滚动包裹层。
 import type { Locator, Page } from '@playwright/test'
-import { expect, settle, test } from './fixtures'
+import { expect, expectToast, settle, test } from './fixtures'
 
 const HOVER = 'rgb(250, 252, 254)' // #fafcfe
 
@@ -42,7 +42,7 @@ test.describe('Button 键盘', () => {
       await tabTo(page, btn)
       await expectFocusVisible(btn)
       await page.keyboard.press(key)
-      await expect(page.locator('.toast').filter({ hasText: '已导出：' })).toBeVisible()
+      await expectToast(page, '已导出：')
     })
 
     test(`primary 按钮：${key} 触发 onClick，焦点可见`, async ({ page, login }) => {
@@ -52,7 +52,7 @@ test.describe('Button 键盘', () => {
       await tabTo(page, btn)
       await expectFocusVisible(btn)
       await page.keyboard.press(key)
-      await expect(page.locator('.toast').filter({ hasText: '检测完成' })).toBeVisible()
+      await expectToast(page, '检测完成')
     })
 
     test(`link 按钮：${key} 触发 onClick，焦点可见`, async ({ page, login }) => {

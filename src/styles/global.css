@@ -143,18 +143,10 @@ tbody[data-slot="table-body"] > tr:hover > td { background: #fafcfe; }
 .kpi .k-foot { font-size: 11.5px; color: var(--faint); }
 .k-ico { width: 30px; height: 30px; border-radius: 8px; display: grid; place-items: center; font-size: 13px; }
 
-/* modal + toast */
-.mask { position: fixed; inset: 0; background: rgba(15,23,42,.45); display: grid; place-items: center; z-index: 100; animation: fade .15s; }
-.modal { width: 440px; background: #fff; border-radius: 16px; box-shadow: 0 20px 60px rgba(2,6,23,.3); padding: 22px 24px; animation: pop .18s; }
-.modal h3 { margin: 0 0 6px; font-size: 17px; display: flex; gap: 10px; align-items: center; }
-.modal .body { color: var(--text-2); font-size: 13.5px; line-height: 1.7; margin: 10px 0 20px; }
-.modal .foot { display: flex; justify-content: flex-end; gap: 10px; }
-.modal .kv { background: var(--bg); border-radius: 10px; padding: 10px 14px; margin-top: 10px; }
-.modal .kv div { display: flex; justify-content: space-between; padding: 3px 0; }
-.toasts { position: fixed; top: 72px; left: 50%; transform: translateX(-50%); z-index: 200; display: flex; flex-direction: column; gap: 8px; align-items: center; }
-.toast { background: #fff; border-radius: 10px; padding: 10px 16px; box-shadow: 0 8px 28px rgba(2,6,23,.16); display: flex; gap: 10px; align-items: center; font-size: 13.5px; animation: pop .2s; border: 1px solid var(--line); }
-.toast .ti { color: var(--green-2); }
-.toast.err .ti { color: var(--red); }
+/* 确认弹窗正文里的键值列表（Control、FreshAir 的下发确认；弹窗本身见 components/ui/alert-dialog.tsx） */
+[data-slot="alert-dialog-description"] .kv { background: var(--bg); border-radius: 10px; padding: 10px 14px; margin-top: 10px; }
+[data-slot="alert-dialog-description"] .kv div { display: flex; justify-content: space-between; padding: 3px 0; }
+/* 确认弹窗（fade / pop）与轻提示（pop）的入场动画 */
 @keyframes fade { from { opacity: 0 } }
 @keyframes pop { from { opacity: 0; transform: translateY(-6px) scale(.98) } }
 

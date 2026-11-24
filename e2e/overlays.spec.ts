@@ -18,7 +18,7 @@ const tick = (page: Page, ms = 500) => page.clock.runFor(ms)
 async function toastAnimationsDone(page: Page) {
   const done = page.evaluate(() =>
     Promise.all(
-      [...document.querySelectorAll('.toast')]
+      [...document.querySelectorAll('[data-sonner-toast]')]
         .flatMap((t) => t.getAnimations())
         .filter((a) => Number.isFinite(Number(a.effect?.getComputedTiming().endTime)))
         .map((a) => a.finished.catch(() => undefined)),
@@ -35,7 +35,7 @@ async function toastAnimationsDone(page: Page) {
   done.catch(() => undefined)
   let diagTimer: ReturnType<typeof setTimeout> | undefined
   const state = await Promise.race([
-    page.evaluate(() => [...document.querySelectorAll('.toast')].flatMap((t) => t.getAnimations().map((a) => `${a instanceof CSSAnimation ? a.animationName : 'animation'}:${a.playState}@${Math.round(Number(a.currentTime))}ms`))),
+    page.evaluate(() => [...document.querySelectorAll('[data-sonner-toast]')].flatMap((t) => t.getAnimations().map((a) => `${a instanceof CSSAnimation ? a.animationName : 'animation'}:${a.playState}@${Math.round(Number(a.currentTime))}ms`))),
     new Promise<string[]>((resolve) => { diagTimer = setTimeout(() => resolve(['（读取动画状态超时）']), 500) }),
   ])
     .catch((e: unknown) => [`读取失败：${String(e)}`])
@@ -61,7 +61,7 @@ async function shotView(page: Page, name: string, opts: { settle?: boolean } = {
 /** 项目切换菜单（Popover + Command）：滚动容器是弹层本身，当前项目带 data-current */
 const projectMenu = (page: Page) => page.getByRole('dialog').filter({ has: page.getByRole('listbox', { name: '切换当前项目' }) })
 
-const dialog = (page: Page, title: string) => page.locator('.modal').filter({ has: page.getByRole('heading', { name: title }) })
+const dialog = (page: Page, title: string) => page.getByRole('alertdialog').filter({ has: page.getByRole('heading', { name: title }) })
 
 test.describe('确认弹窗', () => {
   test('退出登录', async ({ page, login }) => {
@@ -140,9 +140,9 @@ test.describe('toast', () => {
     // 首屏顶部的城市按钮：不会把页面滚动走，也没有副作用
     await page.getByRole('button', { name: '上海市 · 浦东新区' }).click()
     await tick(page, 300)
-    const t = page.locator('.toast').filter({ hasText: '演示环境仅提供上海市浦东新区天气' })
+    const t = page.locator('[data-sonner-toast]').filter({ hasText: '演示环境仅提供上海市浦东新区天气' })
     await expect(t).toBeVisible()
-    await expect(t).not.toHaveClass(/err/)
+    await expect(t).toHaveAttribute('data-type', 'success')
     await shotView(page, 'toast-success', { settle: false })
   })
 
@@ -155,7 +155,7 @@ test.describe('toast', () => {
     await tick(page, 100)
     await city.click()
     await tick(page, 300)
-    const t = page.locator('.toast').filter({ hasText: '演示环境仅提供上海市浦东新区天气' })
+    const t = page.locator('[data-sonner-toast]').filter({ hasText: '演示环境仅提供上海市浦东新区天气' })
     await expect(t).toHaveCount(2)
     await shotView(page, 'toast-stack', { settle: false })
   })
@@ -174,9 +174,9 @@ test.describe('toast', () => {
     await expect(page.locator('.pick.on')).toHaveCount(0)
     await page.getByRole('button', { name: '确认下发' }).click()
     await tick(page, 300)
-    const t = page.locator('.toast').filter({ hasText: '请至少选择一个项目' })
+    const t = page.locator('[data-sonner-toast]').filter({ hasText: '请至少选择一个项目' })
     await expect(t).toBeVisible()
-    await expect(t).toHaveClass(/err/)
+    await expect(t).toHaveAttribute('data-type', 'error')
     await shotView(page, 'toast-error', { settle: false })
   })
 })

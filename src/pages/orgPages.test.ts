@@ -375,7 +375,8 @@ describe('Groups「查看数据」：按经销商取的集成项目比全量缓�
     const row = (await screen.findByText(name)).closest('tr')!
     await act(async () => { fireEvent.click(within(row).getByRole('button', { name: /查看数据/ })) })
   }
-  const toasts = () => document.querySelector('.toasts')?.textContent ?? ''
+  // Sonner 在下一个宏任务里才把 toast 放进列表，断言出现要等一下
+  const toasts = () => document.querySelector('[data-sonner-toaster]')?.textContent ?? ''
 
   it('范围外：同步失败、提示稍后重试、不跳转、不写存储，并在后台刷新一次；刷新到达后再点一次成功', async () => {
     const be = setup()
@@ -386,7 +387,7 @@ describe('Groups「查看数据」：按经销商取的集成项目比全量缓�
     be.hold() // 让后台刷新先挂着：失败提示必须是同步给出的，不等刷新
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     await clickView('新加的项目')
-    expect(toasts()).toContain('项目列表正在刷新，请稍后重试')
+    await waitFor(() => expect(toasts()).toContain('项目列表正在刷新，请稍后重试'))
     expect(toasts()).not.toContain('已进入')
     expect(screen.queryByText('传感器页内容')).toBeNull()
     expect(localStorage.getItem('hjc-project')).toBeNull()
@@ -400,6 +401,6 @@ describe('Groups「查看数据」：按经销商取的集成项目比全量缓�
     await clickView('新加的项目')
     await screen.findByText('传感器页内容')
     expect(localStorage.getItem('hjc-project')).toBe('p4')
-    expect(toasts()).toContain('已进入「新加的项目」')
+    await waitFor(() => expect(toasts()).toContain('已进入「新加的项目」'))
   })
 })
