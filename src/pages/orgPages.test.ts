@@ -337,3 +337,59 @@ describe('侧栏菜单键盘导航（多组重复项）', () => {
     expect(localStorage.getItem('hjc-project')).toBe('p1') // 选中时传的仍是项目 id
   })
 })
+
+describe('Groups「查看数据」：按经销商取的集成项目比全量缓存新', () => {
+  const P4 = { id: 'p4', code: '261124001', name: '新加的项目', app_code: '1', online: true }
+  const NEW_G1 = { ...GROUPS[0], project_ids: ['p1', 'p3', 'p4'] }
+  /** 全量集成项目（不带 distributor_id）：前 staleCalls 次返回旧版本（g1 里还没有 p4），之后返回新版本 */
+  function setup(staleCalls: number) {
+    let full = 0
+    backend({
+      '/ctrl/projects': () => json({ project_entities: [...PROJECTS, P4] }),
+      '/integrated-projects': (c) => {
+        const body = (c.body ?? {}) as Record<string, unknown>
+        if (body.distributor_id) return json({ entities: [NEW_G1, ...GROUPS.slice(1)] })
+        full += 1
+        return json({ entities: full <= staleCalls ? GROUPS : [NEW_G1, ...GROUPS.slice(1)] })
+      },
+    })
+    return { fullCalls: () => full }
+  }
+  function mountGroups() {
+    const client = createQueryClient()
+    return render(createElement(QueryClientProvider, { client }, createElement(AppProvider, null,
+      createElement(Router, { initialEntries: ['/groups'] }, createElement(Routes, null,
+        createElement(Route, { path: '/groups', element: createElement(Groups) }),
+        createElement(Route, { path: '/sensors', element: createElement('div', null, '传感器页内容') }),
+      )))))
+  }
+  const clickView = async (name: string) => {
+    const row = (await screen.findByText(name)).closest('tr')!
+    await act(async () => { fireEvent.click(within(row).getByRole('button', { name: /查看数据/ })) })
+  }
+
+  it('重新取全量后确认在范围内 → 切换成功、提示「已进入」并跳转', async () => {
+    const be = setup(1)
+    await signIn('u', 'pw', true)
+    mountGroups()
+    await clickView('新加的项目')
+    await screen.findByText('传感器页内容')
+    expect(localStorage.getItem('hjc-project')).toBe('p4')
+    expect(document.querySelector('.toasts')?.textContent).toContain('已进入「新加的项目」')
+    expect(be.fullCalls()).toBe(2) // 首次 + 切换前重新确认一次
+  })
+
+  it('重新取后仍不在范围内 → 提示失败、不跳转、不写存储', async () => {
+    const be = setup(Infinity)
+    await signIn('u', 'pw', true)
+    mountGroups()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    await clickView('新加的项目')
+    await waitFor(() => expect(document.querySelector('.toasts')?.textContent).toContain('不在当前账号可查看的范围内'))
+    expect(document.querySelector('.toasts')?.textContent).not.toContain('已进入')
+    expect(screen.queryByText('传感器页内容')).toBeNull()
+    expect(localStorage.getItem('hjc-project')).toBeNull()
+    expect(be.fullCalls()).toBe(2)
+    warn.mockRestore()
+  })
+})

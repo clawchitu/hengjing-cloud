@@ -85,12 +85,17 @@ describe('mock 数据源（e2e 截图走这里）', () => {
     expect(result.current.project?.id).toBe('PRJ-10252')
     // 不在可见范围里的 id 不写进存储（演示 id、管理员才看得到的项目等）
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    act(() => result.current.setProjectId('PRJ-50101'))
+    // 不在缓存范围里：返回 Promise（先重新取再确认），确认后仍不在 → false
+    let r: unknown
+    act(() => { r = result.current.setProjectId('PRJ-50101') })
+    expect(r).toBeInstanceOf(Promise)
+    await act(async () => { expect(await r).toBe(false) })
     expect(localStorage.getItem(PROJECT_KEY)).toBe('PRJ-10252')
     expect(result.current.project?.id).toBe('PRJ-10252')
     warn.mockRestore()
     const t0 = result.current.selectTick
-    act(() => result.current.setProjectId('PRJ-30057'))
+    // 在可见范围里：同步写入并返回 true（演示数据界面时序不变）
+    act(() => { expect(result.current.setProjectId('PRJ-30057')).toBe(true) })
     expect(result.current.project?.id).toBe('PRJ-30057')
     await waitFor(() => expect(result.current.selectTick).toBeGreaterThan(t0))
   })
@@ -189,12 +194,14 @@ describe('真实数据源', () => {
     expect(result.current.status).toBe('loading')
     d.release()
     await waitFor(() => expect(result.current.project?.id).toBe('p2'))
-    act(() => result.current.setProjectId('p3'))
+    act(() => { result.current.setProjectId('p3') })
     expect(result.current.project?.id).toBe('p3')
     expect(localStorage.getItem(PROJECT_KEY)).toBe('p3')
     // 后端 id 不在可见范围（不在任何集成项目里）→ 忽略
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    act(() => result.current.setProjectId('not-visible'))
+    let r: unknown
+    act(() => { r = result.current.setProjectId('not-visible') })
+    await act(async () => { expect(await r).toBe(false) })
     expect(localStorage.getItem(PROJECT_KEY)).toBe('p3')
     warn.mockRestore()
   })

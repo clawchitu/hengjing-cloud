@@ -11,7 +11,7 @@ import { Command, CommandEmpty, CommandItem, CommandList } from '@/components/ui
 import { Popover, PopoverAnchor, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { cn } from '@/lib/utils'
 import { useApp } from '../app/store'
-import { projectsInGroup } from '../data/org'
+import { projectsInGroup, whenProjectSet } from '../data/org'
 import { gatewayOf, type Project } from '../api'
 
 export const NAV_MAIN = [
@@ -70,7 +70,7 @@ function ProjectSwitch() {
     return ''
   })()
   const show = (keyboard: boolean) => { setValue(keyboard ? currentValue : ''); scrolled.current = ''; if (keyboard) lastPointer.current = false; setOpen(true) }
-  const pick = (p: Project) => { setProjectId(p.id); setOpen(false); toast(`已切换到「${p.name}」`) }
+  const pick = (p: Project) => { const r = setProjectId(p.id); setOpen(false); whenProjectSet(r, () => toast(`已切换到「${p.name}」`), () => toast(`「${p.name}」不在当前账号可查看的范围内，无法切换`, true)) }
   // 打开后焦点在列表（listbox）上。高亮项的 id 写到列表的 aria-activedescendant：cmdk 只在它自己移动高亮时更新这个属性，
   // 高亮由这里改变（键盘打开、先高亮当前项目、鼠标移动清除）时它会过时，所以每次渲染后按实际高亮盖掉。
   // 高亮变化时滚进可视区（只滚一次，不跟用户的滚轮抢）。鼠标打开时没有高亮，菜单停在顶部（同旧版）
@@ -194,7 +194,7 @@ function ProjectSearch() {
   // 关闭（Esc、Tab 离开、点外部、选中）和重新打开都清掉高亮：重开后回车只会选第一条，不会选到之前高亮过的项
   const show = () => { setValue(''); setOpen(true) }
   const close = () => { setValue(''); setOpen(false) }
-  const pick = (p: Project) => { setProjectId(p.id); setQ(''); close(); toast(`当前项目已切换为「${p.name}」`) }
+  const pick = (p: Project) => { const r = setProjectId(p.id); setQ(''); close(); whenProjectSet(r, () => toast(`当前项目已切换为「${p.name}」`), () => toast(`「${p.name}」不在当前账号可查看的范围内，无法切换`, true)) }
   const inForm = (t: EventTarget | null) => t instanceof Node && !!formRef.current?.contains(t)
   const sync = () => {
     const c = document.getElementById(contentId), a = formRef.current?.getBoundingClientRect()

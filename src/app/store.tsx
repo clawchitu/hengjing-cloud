@@ -12,7 +12,7 @@ import type { Project, Role, Scope, User } from '../api'
 import type { ApiError } from '../api/errors'
 import type { SessionInfo } from '../api/session'
 import { can, logout, mockSignIn, useSession, useSessionBoot } from '../data/session'
-import { useCurrentProject, useOrgScope, useResetOnAccountChange, type LoadStatus } from '../data/org'
+import { useCurrentProject, useOrgScope, useResetOnAccountChange, type LoadStatus, type SetProjectResult } from '../data/org'
 
 type Toast = { id: number; text: string; err?: boolean }
 type Confirm = { title: string; body: ReactNode; okText?: string; danger?: boolean; resolve: (v: boolean) => void }
@@ -42,7 +42,8 @@ interface Ctx extends Feedback {
   logout: () => void
   projectId: string
   /** make a project the 当前项目 and report the select event to the backend */
-  setProjectId: (id: string) => void
+  /** 返回是否成功（见 useCurrentProject）；调用方用 whenProjectSet() 只在成功时跳转 / 提示 */
+  setProjectId: (id: string) => SetProjectResult
   /**
    * 当前项目。OrgGate 保证 Layout 及页面渲染时一定有可见项目，这里不会是占位；
    * 只有 Layout 之外（登录页等）才会拿到 id 为 '' 的占位。新代码（S8–S12）用 useCurrentProject() 并判空，写入口前也判空
