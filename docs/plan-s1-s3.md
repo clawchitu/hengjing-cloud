@@ -1,6 +1,6 @@
 # 恒境云 S1–S3 执行说明：Tailwind 4 + shadcn/ui 底座迁移
 
-日期：2026-11-24 · 上游：`docs/plan-v1.md` 第 4、6 节 · 前置：S0（Playwright 截图基线，33 张，`maxDiffPixelRatio: 0`）已合并。
+日期：2026-11-24 · 上游：`docs/plan-v1.md` 第 4、6 节 · 前置：S0（Playwright 截图基线，55 张（56 条用例），`threshold: 0` 且 `maxDiffPixels: 0`，CI 用单线程软件光栅化）已合并。
 
 **硬约束**：保留 React + Vite；shadcn/ui 只做组件底座与行为层；视觉参数全部来自 `src/styles/global.css` 的 `:root`；三段结束时界面与 S0 基线一致；不做《界面改动-1123》里的任何变化；Font Awesome 保留，不引入 lucide；不做暗色模式。
 
@@ -72,7 +72,7 @@
 **变量重名（必须照做）**：旧 `--muted` 是**文字灰** `#64748b`，全站 `color: var(--muted)` 在用；shadcn 的 `--muted` 是**底色**。所以不在 `:root` 定义任何 shadcn 同名变量，只在 `@theme inline` 里建 `--color-*` 映射。同理旧 `--radius`=14px 是卡片圆角，不能当 shadcn 的控件基准。旧 `--text`、`--text-2`、`--shadow`、`--font` 不能原名放进 `@theme`（`--text-*` 在 Tailwind 4 是字号命名空间）。后续凡是 shadcn 组件源码里直接写 `var(--muted)`、`var(--radius)`、`var(--border)`、`var(--popover)` 的地方（已知：sonner 包装、sidebar、chart），加入时逐个改成本项目变量。
 
 **验收**
-- `npm run e2e` 33 张全部零差异（阈值不动）；`typecheck`、`lint`、`test`、`build` 通过。
+- `npm run e2e` 55 张基线全部零差异（阈值不动）；`typecheck`、`lint`、`test`、`build` 通过。
 - 临时在某页写 `<div className="bg-primary text-primary-foreground rounded-md shadow-card p-4">`，目测等于 `.btn.primary` 的颜色与 8px 圆角后删除。
 - PR 描述记录 CSS 与 JS 产物体积前后值（预期 CSS 增量 < 10 KB gzip）。
 
@@ -141,7 +141,7 @@
 
 ## 4. 截图对比策略
 
-- **每段每个 PR 都跑** `npm run e2e`（固定 Playwright 容器，与 CI 同镜像；本机直接跑的结果不作数）。全局阈值保持 `maxDiffPixelRatio: 0`，**不放宽**——0.5% 的页面级阈值足以藏住一个小控件 1px 的位移。
+- **每段每个 PR 都跑** `npm run e2e`（固定 Playwright 容器，与 CI 同镜像；本机直接跑的结果不作数）。全局阈值保持 `threshold: 0`、`maxDiffPixels: 0`，**不放宽**——0.5% 的页面级阈值足以藏住一个小控件 1px 的位移。
 - **S1**：必须零差异，不允许更新任何基线。有差异就是配置问题，修到零为止。
 - **S2、S3**：先以零差异为目标。失败时打开 HTML 报告的差异图逐张判定。
 

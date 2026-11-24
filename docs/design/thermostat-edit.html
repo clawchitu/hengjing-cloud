@@ -255,7 +255,7 @@ button { font-family: inherit; font-size: inherit; color: inherit; cursor: point
       </div>
 
       <div class="card note">
-        <b>说明</b>　设定温度范围 16.0–30.0°C、步进 0.5°C 为<b>占位值，待后端确认</b>；到达上下限时对应按钮禁用。蓝色 = end_modes.is_selected 为 true，灰色 = 未选中；「开 / 关」取自该末端的 switch。末端本期只读，下发时原样带回。
+        <b>说明</b>　设定温度范围暂定 16.0–30.0°C、步进 0.5°C，后续按接口返回的范围，缺失时回退此值；到达上下限时对应按钮禁用。蓝色 = end_modes.is_selected 为 true，灰色 = 未选中；「开 / 关」取自该末端的 switch。末端本期只读，下发时不改的字段一律传 -1、end_modes 传空列表。
       </div>
     </div>
   </div>
