@@ -47,6 +47,16 @@ export default function Sensors() {
   const cur = sensors?.find((s) => s.id === selRaw && s.online) ?? firstOnline
   const stats = useStats(range, () => api.getSensorStats24h(projectId, cur?.id ?? ''), (d) => api.getSensorStatsDaily(projectId, cur?.id ?? '', d), [projectId, cur?.id])
   if (!sensors) return <div className="page" />
+  if (sensors.length === 0) return (
+    <div className="page">
+      <div className="page-head"><div><h1>室内空气传感器</h1><div className="sub">{project.name}</div></div></div>
+      <Card className="placeholder">
+        <div className="ph-ico"><Icon icon={faSmog} /></div>
+        <h3>暂无空气传感器数据</h3>
+        <p>该项目暂时没有可显示的空气传感器。</p>
+      </Card>
+    </div>
+  )
 
   const on = sensors.filter((s) => s.online)
   // KPIs: metrics that at least one online sensor measures
