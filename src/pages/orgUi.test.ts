@@ -218,7 +218,9 @@ describe('首页统计卡与常用项目', () => {
     expect(container.textContent).not.toMatch(/undefined|NaN|最后在线|ppm/)
     expect(screen.queryByText('演示计数')).toBeNull()
     await act(async () => { fireEvent.click(c3) })
-    await screen.findByText('传感器页内容')
+    // p3 离线：进到传感器页时显示离线空态，不挂载页面（S11）
+    await screen.findByText('项目离线，暂无数据')
+    expect(screen.queryByText('传感器页内容')).toBeNull()
     expect(localStorage.getItem('hjc-project')).toBe('p3')
     await waitFor(() => expect(be.callsTo('/project/click/p3')).toHaveLength(1))
   })

@@ -2,7 +2,7 @@ import { Fragment, useEffect, useId, useRef, useState } from 'react'
 import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import {
   faCloudSun, faLayerGroup, faSliders, faLeaf, faTemperatureHalf, faFan, faSitemap, faGear, faRightFromBracket,
-  faChevronDown, faChevronRight, faMagnifyingGlass, faHouse, faPlugCircleXmark, faClock,
+  faChevronDown, faChevronRight, faMagnifyingGlass, faHouse, faPlugCircleXmark,
 } from '@fortawesome/free-solid-svg-icons'
 import { Avatar, Icon, LogoMark } from './legacy'
 import { Badge } from '@/components/ui/badge'
@@ -14,7 +14,10 @@ import { cn } from '@/lib/utils'
 import { useApp } from '../app/store'
 import { useCancelConfirmOnLeave, useConfirm } from '../app/feedback'
 import { dealerSections, projectsInGroup, useOrgScope, whenProjectSet } from '../data/org'
-import { gatewayOf, type Project } from '../api'
+import type { Project } from '../api'
+import { linksOf } from '../data/connections'
+import { Button } from '@/components/ui/button'
+import { Card } from '@/components/ui/card'
 
 export const NAV_MAIN = [
   { to: '/home', label: '欢迎首页', icon: faCloudSun },
@@ -318,21 +321,44 @@ function ProjectSearch() {
 /** cmdk 选项上带 data-value（菜单为「组 id:项目 id」） */
 const itemValue = (groupId: string, projectId: string) => groupId + ':' + projectId
 
+/**
+ * 项目离线（项目列表的 online 不为 true：控制屏不在线，且没有在线的 DTU，见接口文档 4）。
+ * 后端没有最后在线时间（Q9 ④），离线时也读不到设备数据（ctrl 返回 503），所以设备页不挂载、不显示旧数据，
+ * 只显示横幅和空态（方案 1.2「离线横幅」、S11 验收）。
+ */
 function OfflineBanner({ p }: { p: Project }) {
+  const links = linksOf(p)
   return (
     <div className="offline-banner" role="alert">
       <div className="ob-ico"><Icon icon={faPlugCircleXmark} /></div>
       <div className="ob-main">
         <b>项目离线 · {p.name}</b>
-        <span>网关 <span className="num">{gatewayOf(p.id)}</span> 已失去连接，以下为最后在线时的数据（仅供参考），无法下发控制。</span>
+        <span>
+          {links.length ? links.map((l, i) => <Fragment key={l.label}>{i > 0 && '、'}{l.label} <span className="num">{l.id}</span></Fragment>) : '控制屏'}
+          {' '}未连接，暂时读不到设备数据，也无法下发控制。
+        </span>
       </div>
-      <div className="ob-last"><small><Icon icon={faClock} /> 最后在线</small><b className="num">{p.lastOnline ?? '—'}</b><small>{p.lastOnlineAgo ?? ''}</small></div>
+    </div>
+  )
+}
+
+function OfflinePage({ p, title, onRetry }: { p: Project; title: string; onRetry: () => void }) {
+  return (
+    <div className="page offline-page">
+      <OfflineBanner p={p} />
+      <div className="page-head"><div><h1>{title}</h1><div className="sub">{p.name}</div></div></div>
+      <Card className="placeholder" role="status">
+        <div className="ph-ico"><Icon icon={faPlugCircleXmark} /></div>
+        <h3>项目离线，暂无数据</h3>
+        <p>项目恢复在线后即可查看实时数据。</p>
+        <Button style={{ marginTop: 16 }} onClick={onRetry}>重新获取在线状态</Button>
+      </Card>
     </div>
   )
 }
 
 export default function Layout() {
-  const { logout, project, user } = useApp()
+  const { logout, project, user, orgRefetch } = useApp()
   const confirm = useConfirm()
   const loc = useLocation()
   const nav = useNavigate()
@@ -402,10 +428,7 @@ export default function Layout() {
         {isProjectPage && noProject ? (
           <div className="page"><div className="empty-fav" role="status"><b>暂无可用项目</b><small>当前账号下没有可查看的项目，请到「集成项目」确认，或联系管理员</small></div></div>
         ) : offline ? (
-          <div className="page offline-page">
-            <OfflineBanner p={project} />
-            <div className="offline-data" aria-disabled inert><Fragment key={project.id}><Outlet /></Fragment></div>
-          </div>
+          <OfflinePage p={project} title={cur?.label ?? ''} onRetry={orgRefetch} />
         ) : <Fragment key={project.id}><Outlet /></Fragment>}
       </div>
     </div>

@@ -24,7 +24,7 @@ interface Feedback {
 interface Ctx extends Feedback {
   /**
    * 确认弹窗，签名同拆分前（(o) => Promise<boolean>）。内部就是 app/feedback 的 useConfirm()：请求绑定到调用 useApp() 的这个组件实例，
-   * 与直接用 useConfirm() 同等保护（组件卸载、路由 / 会话 / 当前项目变化时同步失效，按 false 结算）。两个入口都可以用（docs/分工.md 第 3 节）
+   * 与直接用 useConfirm() 同等保护（组件卸载、路由 / 会话 / 当前项目变化时同步失效，按 false 结算）。两个入口都可以用（docs/分工.md 第 3 节第 7 条）
    */
   confirm: (o: ConfirmOptions) => Promise<boolean>
   authed: boolean

@@ -52,6 +52,8 @@ test.describe('Button 键盘', () => {
       await tabTo(page, btn)
       await expectFocusVisible(btn)
       await page.keyboard.press(key)
+      // 「立即检测」现在是重新读一次连接数据（S11，演示数据有 120ms 模拟延迟），先推进假时钟让读取返回
+      await page.clock.runFor(500)
       await expectToast(page, '检测完成')
     })
 
