@@ -12,9 +12,7 @@ import { cn } from '@/lib/utils'
  * - 文字色 --text-2、字重 400（原生控件不继承字重）、white-space: pre、内容垂直居中；
  * - 原生下拉框内部文字的行高是首选字体的 ascent + descent 取整（不是 line-height: normal，后者会被中文回退字体撑高），
  *   恒境云首选字体 Barlow 的 ascent/descent 为 1.0em / 0.2em，14px 下取整为 14 + 3 = 17px；
- * - 原生按取整后的 ascent/descent（14 + 3 = 17）算半行距，基线正好在行顶下 14px；Tailwind 的 17px 行高按小数 metrics
- *   （14 + 2.8）算，基线多出约 0.1px。36px 高时基线在 1 + 8.5 + 14 = 23.5px，原生取整到 23，多出的 0.1px 会被取整到 24
- *   （温控统计、项目列表的区域下拉曾因此下移 1px）。所以文字块上移 1/8px，让基线落在 .5 以下；文字块同原生用 overflow: hidden；
+ * - 文字块同原生用 overflow: hidden；
  * - 原生 select 的默认宽度 = 最长选项文字宽度向上取整 + 内边距。不定宽的使用点传 `sizer`（全部选项文字），
  *   触发器下面叠一个不可见的原生 select 撑出同样的宽度，保证逐像素一致。
  * 焦点：旧 .select 只有 outline: none，没有焦点样式，这里照旧。
@@ -39,11 +37,10 @@ function SelectTrigger({
       className={cn(box, arrow, 'inline-flex cursor-default items-center text-left whitespace-pre', sizer && 'col-start-1 row-start-1 w-full', className)}
       {...props}
     >
-      <SelectPrimitive.Value
-        data-slot="select-value"
-        placeholder={placeholder}
-        className="relative -top-[0.125px] min-w-0 grow overflow-hidden leading-[17px]"
-      />
+      {/* Radix 的 Value 会丢掉 className / style，排版类放在外层 span 上 */}
+      <span data-slot="select-value" className="min-w-0 grow overflow-hidden leading-[17px]">
+        <SelectPrimitive.Value placeholder={placeholder} />
+      </span>
     </SelectPrimitive.Trigger>
   )
   if (!sizer) return trigger
