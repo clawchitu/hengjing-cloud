@@ -9,6 +9,11 @@ describe('运行时配置', () => {
       requestTimeoutMs: 10_000, ctrlTimeoutMs: 12_000,
     })
   })
+  it('交付包（mockAllowed=false）：dataSource 恒为 real，config.js 写 mock 也无效', () => {
+    expect(resolveConfig([], '', false).dataSource).toBe('real')
+    expect(resolveConfig([{ dataSource: 'mock' }], '', false).dataSource).toBe('real')
+    expect(resolveConfig([{ dataSource: 'real' }, { dataSource: 'mock' }], '', false).dataSource).toBe('real')
+  })
   it('后面的层覆盖前面的（构建时 ← 运行时）', () => {
     const c = resolveConfig([{ apiBase: '/api', dataSource: 'mock' }, { apiBase: TEST_API_ORIGIN + '/', dataSource: 'real' }])
     expect(c).toMatchObject({ apiBase: TEST_API_ORIGIN, apiEnv: 'test', dataSource: 'real' })

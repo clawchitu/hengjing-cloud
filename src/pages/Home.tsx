@@ -121,7 +121,7 @@ export default function Home() {
       <Card>
         <CardHeader><div><CardTitle>常用项目</CardTitle><CardDescription>按您切换当前项目的次数统计，显示最常用的 4 个</CardDescription></div>
           <div className="row" style={{ gap: 14 }}>
-            <span className="demo-seg"><small>演示计数</small><Seg value={preset} options={['0', '2', '4+']} onChange={(v) => seed(v as '0' | '2' | '4+')} /></span>
+            {__HJC_MOCK__ && <span className="demo-seg"><small>演示计数</small><Seg value={preset} options={['0', '2', '4+']} onChange={(v) => seed(v as '0' | '2' | '4+')} /></span>}
             <Button variant="link" onClick={() => nav('/groups')}>全部项目 <Icon icon={faArrowRight} /></Button>
           </div></CardHeader>
         {favs && favs.length === 0 && <div className="empty-fav"><Icon icon={faStar} /><b>暂无常用项目</b><small>在「集成项目」或顶部搜索中选择项目后，这里会显示您最常用的项目</small></div>}

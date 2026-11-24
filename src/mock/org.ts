@@ -17,8 +17,8 @@ export const dealers: Dealer[] = [
   { id: 'DLR-003', name: '南京舒适家系统集成有限公司', short: '南京舒适家', region: '江苏' },
 ]
 
-/** 程序编码 → 程序名称. Code 12 (新风单机版) has no room panels / room settings, but has fresh-air 运行设置. */
-export const PROGRAMS: Record<number, string> = { 11: '三恒标准版', 12: '新风单机版', 21: '办公楼宇版', 31: '别墅五恒版' }
+// PROGRAMS / gatewayOf 页面也在用（含交付包），放在 src/data/constants.ts，这里转出保持原有引用不变
+export { PROGRAMS, gatewayOf } from '../data/constants'
 export const FRESH_AIR_STANDALONE = 12
 
 export interface Group {
@@ -108,4 +108,3 @@ export const dealerOf = (groupId: string) => groups.find((g) => g.id === groupId
 export const isStandalone = (p: Pick<Project, 'programCode'>) => p.programCode === FRESH_AIR_STANDALONE
 /** room panels / room settings exist unless the program is 新风单机版 */
 export const hasRooms = (p: Pick<Project, 'programCode'>) => !isStandalone(p)
-export const gatewayOf = (projectId: string) => 'GW-' + projectId.slice(4)

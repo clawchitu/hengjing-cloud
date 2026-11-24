@@ -7,8 +7,8 @@
 import { connections, freshAirUnits, rooms, sensors, type Conn, type FreshAir, type Room, type Sensor } from './data'
 import { gatewayOf, hasRooms, isStandalone, projects, type Project } from './org'
 
-/** Modes in which the fresh-air unit supports choosing 露点 or 湿度 control; any other mode is fixed to 湿度控制. */
-export const DEW_MODES = [2, 13, 23, 33]
+import { DEW_MODES } from '../data/constants'
+export { DEW_MODES }
 
 function rng(key: string) {
   let h = 2166136261

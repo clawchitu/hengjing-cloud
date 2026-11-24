@@ -114,7 +114,8 @@ export default function Login() {
   const done = () => toast('登录成功，欢迎回来')
 
   const onSubmit = async ({ account, password, remember }: LoginValues) => {
-    if (!isMockMode()) {
+    // 交付包（__HJC_MOCK__ = false）只有真实接口登录，演示账号登录代码在打包时剔除
+    if (!__HJC_MOCK__ || !isMockMode()) {
       try {
         await signIn(account, password, remember)
       } catch (e) {

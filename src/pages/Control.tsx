@@ -30,7 +30,7 @@ export default function Control() {
   // 按 Group.projectIds 判断归属：一个项目可能属于多个集成项目
   const inGroup = projectsInGroup(groups.find((g) => g.id === gid), projects)
   const ps = inGroup.filter((p) => !pq.trim() || (p.name + p.id).toLowerCase().includes(pq.trim().toLowerCase()))
-  const [picked, setPicked] = useState<string[]>(() => ['PRJ-10241', 'PRJ-10242', 'PRJ-10243', 'PRJ-10245'].filter((id) => inGroup.some((p) => p.id === id)))
+  const [picked, setPicked] = useState<string[]>(() => (__HJC_MOCK__ ? ['PRJ-10241', 'PRJ-10242', 'PRJ-10243', 'PRJ-10245'] : []).filter((id) => inGroup.some((p) => p.id === id)))
   const [expand, setExpand] = useState(false)
   const [power, setPower] = useState<'开启' | '关闭' | '不变'>('开启')
   const [mode, setMode] = useState('制冷')
@@ -60,7 +60,13 @@ export default function Control() {
     })
     if (!ok) return
     setSending(true)
-    const r = await api.sendUnified({ targets: picked.map((id) => ({ projectId: id, power, mode, ...(withRooms && !noRoomP.some((p) => p.id === id) ? { roomSw, temp: keep ? null : temp } : {}) })) })
+    let r: Awaited<ReturnType<typeof api.sendUnified>>
+    try {
+      r = await api.sendUnified({ targets: picked.map((id) => ({ projectId: id, power, mode, ...(withRooms && !noRoomP.some((p) => p.id === id) ? { roomSw, temp: keep ? null : temp } : {}) })) })
+    } catch (e) {
+      setSending(false)
+      return toast(e instanceof Error ? e.message : '下发失败', true)
+    }
     setSending(false)
     const summary = [power, mode, ...(withRooms ? [roomSw === '全部开启' ? '全部房间开启' : roomSw === '全部关闭' ? '全部房间关闭' : '房间不变', keep ? '温度不变' : temp.toFixed(1) + '°C'] : [])].join(' / ')
     const rows = picked.map((id, i) => { const p = projects.find((x) => x.id === id)!; const total = p.devices; const okN = i === 2 ? Math.round(total * 0.68) : total; return { name: p.name, id, ok: okN, total, status: okN === total ? '成功' : '执行中', note: okN === total ? '—' : '等待温控面板应答' } })
