@@ -27,6 +27,15 @@
 | `npm run build` | 类型检查并构建到 `dist/` |
 | `npm run e2e` | 在 Playwright 官方镜像里跑截图对比（需要 Docker） |
 | `npm run e2e:update` | 同上，并重写截图基线 |
+| `npm run gen:proto` | 由 `proto/ctrl200.proto` 重新生成 ctrl 编解码（`src/api/gen/`） |
+| `npm run test:live` | 手动联调：连测试环境跑只读冒烟（login → me → 项目 → ctrl 读 → 刷新），账号从 macOS 钥匙串 `hengjing-admin` / `hengjing-dealer` 读取；CI 不跑 |
+
+## 接口层与运行时配置
+
+- `src/api/`：`config.ts` 运行时配置，`http.ts` 请求封装与令牌续期，`errors.ts` 错误归一，`ctrl.ts` ctrl 同步消息（`callCtrl`），`guard.ts` 写操作防护，`values.ts` 特殊值（-1 不变、65536 无数据），`query.ts` TanStack Query 默认值。`index.ts` 仍是演示数据，现有页面不变。
+- 部署时改 `public/config.js`（`window.__HJC_CONFIG__`）即可换后端；构建时可用 `VITE_API_BASE`、`VITE_API_ENV`、`VITE_DATA_SOURCE`、`VITE_WRITE_MODE` 设默认值。
+- `npm run dev` 时 `/api/*` 代理到测试环境 `https://test.cosyhome.com.cn:9443/v1`（`VITE_PROXY_TARGET` 可改），`/api/login` 除外（演示版 Worker）。
+- 下发类接口默认只在测试环境放行；判断不出环境按生产处理；生产下发须在 `config.js` 显式写 `writeMode: 'on'`。
 
 ## 截图对比
 
