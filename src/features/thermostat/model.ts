@@ -4,11 +4,13 @@
 // - wind_speed：1–99 为档位，100 为自动（后端答复⑧），其他值（含缺省 0）没有含义 → null；
 // - end_modes 按数量动态显示：is_selected 决定蓝 / 灰，「开 / 关」取该末端自己的 switch（改动文档）；
 // - set_humi 按改动文档不再显示，这里也不映射；楼层文档无，去掉。
-import type { CtrlReply } from '@/api/ctrl'
+import type { CtrlQuery, CtrlReply } from '@/api/ctrl'
 import { reading, setting } from '@/api/values'
 
 type RawRoom = CtrlReply<200>['data'][number]
 type RawEndMode = RawRoom['endModes'][number]
+/** 201 里的末端（与 200 同一个 WorkModeData）：下发时把最新读到的原样传回 */
+export type WireEndMode = CtrlQuery<201>['endModes'][number]
 
 /** 风速：1–99 档位，100 自动 */
 export const WIND_AUTO = 100
@@ -47,6 +49,11 @@ export interface RoomView {
   /** 工作模式名称（制冷 / 制热 / 通风）；未知为空串 */
   mode: string
   endModes: EndMode[]
+  /**
+   * 200 读到的末端原始数据（完整 WorkModeData），201 下发时原样传回（11/24 群里决定：不传空列表）。
+   * 为空表示没读到末端，不允许下发
+   */
+  wireEndModes: WireEndMode[]
   /** 面板是否连接 */
   connected: boolean
 }
@@ -89,6 +96,7 @@ export function toRoomView(r: RawRoom): RoomView {
     on: r.switch === 1,
     mode: ROOM_MODES[r.mode] ?? '',
     endModes: (r.endModes ?? []).map(toEndMode),
+    wireEndModes: (r.endModes ?? []).map((m) => ({ optionName: m.optionName, type: m.type, isSelected: m.isSelected, isChange: m.isChange, switch: m.switch })),
     connected: r.isConnected === true,
   }
 }

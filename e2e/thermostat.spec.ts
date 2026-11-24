@@ -27,7 +27,7 @@ test.describe('温控面板：卡片内修改', () => {
     await c.getByRole('button', { name: '下发', exact: true }).click()
     await tick(page)
     const dlg = page.getByRole('alertdialog')
-    await expect(dlg).toContainText('将向 朝阳壹号院 A栋 的「客厅」下发：设定温度 26.0 → 25.0°C，确定继续？')
+    await expect(dlg).toContainText('将向 朝阳壹号院 A栋（PRJ-10241）的「客厅」下发：设定温度 26.0 → 25.0°C，确定继续？')
     await dlg.getByRole('button', { name: '确认下发' }).click()
     await tick(page, 1000) // 演示接口的延时
     await expectToast(page, '客厅 已下发：设定温度 25.0°C')
@@ -68,6 +68,18 @@ test.describe('温控面板：卡片内修改', () => {
     await tick(page)
     await expect(card(page, '客厅').locator('.te-bar')).toHaveCount(0)
     await expect(card(page, '主卧').locator('.te-bar.pending')).toContainText('设定温度 25.5 → 26.0°C')
+  })
+
+  test('节能房间（次卧）：温度步进禁用，提示由系统设定；开节能会去掉已改的温度', async ({ page }) => {
+    const eco = card(page, '次卧')
+    await expect(eco.getByRole('button', { name: '次卧 设定温度升高' })).toBeDisabled()
+    await expect(eco.getByRole('button', { name: '次卧 设定温度升高' })).toHaveAttribute('title', '节能模式下温度由系统设定')
+    const c = card(page, '客厅')
+    await c.getByRole('button', { name: '客厅 设定温度升高' }).click()
+    await c.getByRole('switch', { name: '客厅 节能模式' }).click()
+    await expect(c.locator('.te-bar.pending')).toHaveText(/待下发：节能模式 标准 → 节能/)
+    await expect(c.locator('.te-bar.pending')).not.toContainText('设定温度')
+    await expect(c.getByRole('button', { name: '客厅 设定温度升高' })).toBeDisabled()
   })
 
   test('房间开关：确认后生效并提示', async ({ page }) => {

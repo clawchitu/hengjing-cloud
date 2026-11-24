@@ -40,9 +40,15 @@ describe('ctrl 200 → RoomView', () => {
     expect(one.endModes).toHaveLength(1)
     const [none] = toRoomViews(roundTrip([room({ endModes: [] })]))
     expect(none.endModes).toEqual([])
+    expect(none.wireEndModes).toEqual([])
     // 没有名称时按类型兜底
     const [noName] = toRoomViews(roundTrip([room({ endModes: [{ optionName: '', type: 2, isSelected: false, isChange: true, switch: 1 }] })]))
     expect(noName.endModes[0]).toEqual({ name: '地暖', type: 2, selected: false, on: true })
+  })
+
+  it('wireEndModes：完整 WorkModeData 原样保留（含 is_change），供 201 传回', () => {
+    const [r] = toRoomViews(roundTrip([room()]))
+    expect(r.wireEndModes).toEqual(room().endModes)
   })
 
   it('65536（未初始化）→ null：温度、湿度、露点、设定温度、节能都隐藏 / 不可调', () => {

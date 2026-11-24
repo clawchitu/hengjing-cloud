@@ -57,6 +57,7 @@ export function fromMockRoom(r: api.Room): RoomView {
     on: r.on,
     mode: '制冷',
     endModes: ends.map(([name, type, sel]) => ({ name, type, selected: sel, on: r.on && sel })),
+    wireEndModes: ends.map(([optionName, type, sel]) => ({ optionName, type, isSelected: sel, isChange: true, switch: r.on && sel ? 1 : 0 })),
     connected: true,
   }
 }

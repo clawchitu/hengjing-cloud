@@ -21,24 +21,32 @@ export const canRead = (project: Pick<Project, 'id' | 'online'> | null, kind: 'r
 
 export function useRooms(project: Project | null, enabled = true) {
   const src = thermostatSource()
-  console.log('useRooms render', src.kind, project?.id, enabled)
   const id = project?.id ?? ''
   return useQuery({
     queryKey: roomsKey(src.kind, id),
-    queryFn: ({ signal }) => { console.log('QF start'); return src.rooms(id, signal).then((x) => { console.log('QF done', x.length); return x }) },
+    queryFn: ({ signal }) => src.rooms(id, signal),
     enabled: enabled && canRead(project, src.kind),
     refetchInterval: src.kind === 'real' ? ROOMS_POLL_MS : false,
     staleTime: src.kind === 'real' ? 10_000 : Infinity,
   })
 }
 
-/** 写操作后立即重读房间列表 */
-export function useRefreshRooms(project: Project | null) {
+/**
+ * 写操作后的回读：强制重新读一次 200（页面已卸载、查询不活跃时也会真正去读），返回是否读到。
+ * 查询客户端是应用级的，页面卸载后这个函数仍可用（在途下发结束时调用）
+ */
+export function useReadback(project: Project | null) {
   const qc = useQueryClient()
   const id = project?.id ?? ''
-  return useCallback(() => {
-    if (!id) return Promise.resolve()
-    return qc.invalidateQueries({ queryKey: roomsKey(thermostatSource().kind, id), exact: true })
+  return useCallback(async (): Promise<boolean> => {
+    if (!id) return false
+    const src = thermostatSource()
+    try {
+      await qc.fetchQuery({ queryKey: roomsKey(src.kind, id), queryFn: ({ signal }) => src.rooms(id, signal), staleTime: 0 })
+      return true
+    } catch {
+      return false
+    }
   }, [qc, id])
 }
 

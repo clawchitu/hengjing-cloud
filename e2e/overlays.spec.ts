@@ -118,7 +118,7 @@ test.describe('确认弹窗', () => {
     await shotView(page, 'confirm-thermostat-all-on')
   })
 
-  // 与「全部开启」同一个 confirm() 调用点，只是文案和指令值不同：只断言文案，不另录基线
+  // 与「全部开启」同一个 confirm() 调用点，文案、指令值不同，且「全部关闭」是危险样式（红色图标）：只断言文案，不另录基线
   test('温控全部关闭确认文案', async ({ page, login }) => {
     await login('dealer')
     await page.goto('/thermostat')
@@ -127,7 +127,7 @@ test.describe('确认弹窗', () => {
     await tick(page)
     const dlg = dialog(page, '全部关闭')
     await expect(dlg).toBeVisible()
-    await expect(dlg).toContainText('将向 朝阳壹号院 A栋 的 6 个温控面板下发「关闭」指令，确定继续？')
+    await expect(dlg).toContainText('将向 朝阳壹号院 A栋（PRJ-10241）的 6 个温控面板下发「关闭」指令，确定继续？')
     await expect(dlg.getByRole('button', { name: '取消' })).toBeVisible()
     await expect(dlg.getByRole('button', { name: '确认下发' })).toBeVisible()
   })
