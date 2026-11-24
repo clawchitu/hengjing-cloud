@@ -22,6 +22,9 @@ async function shotView(page: Page, name: string, opts: { settle?: boolean } = {
   await expect.soft(page).toHaveScreenshot(`${name}.png`)
 }
 
+/** 项目切换菜单（Popover + Command）：滚动容器是弹层本身，当前项目带 data-current */
+const projectMenu = (page: Page) => page.getByRole('dialog').filter({ has: page.getByRole('listbox', { name: '切换当前项目' }) })
+
 const dialog = (page: Page, title: string) => page.locator('.modal').filter({ has: page.getByRole('heading', { name: title }) })
 
 test.describe('确认弹窗', () => {
@@ -142,10 +145,10 @@ test.describe('项目切换菜单展开', () => {
       await tick(page, 1500)
       await page.getByText('当前项目', { exact: true }).click()
       await tick(page)
-      const menu = page.locator('.proj-menu')
+      const menu = projectMenu(page)
       await expect(menu).toBeVisible()
-      await expect(menu.locator('.opt.cur')).toHaveCount(1)
-      if (role === 'admin') await expect(menu.locator('.dlr').first()).toBeVisible()
+      await expect(menu.locator('[data-current]')).toHaveCount(1)
+      if (role === 'admin') await expect(menu.getByText('上海恒境暖通', { exact: true })).toBeVisible()
       await shotView(page, `${role}-project-menu`)
     })
   }
@@ -157,9 +160,9 @@ test.describe('项目切换菜单展开', () => {
     await tick(page, 1500)
     await page.getByText('当前项目', { exact: true }).click()
     await tick(page)
-    const menu = page.locator('.proj-menu')
+    const menu = projectMenu(page)
     await expect(menu).toBeVisible()
-    const cur = menu.locator('.opt.cur')
+    const cur = menu.locator('[data-current]')
     await expect(cur).toHaveCount(1)
     await expect(cur).toContainText('河西府 2栋')
     await expect(cur).not.toBeInViewport()
@@ -176,7 +179,7 @@ test.describe('顶栏搜索', () => {
     await tick(page, 1500)
     await page.getByPlaceholder('搜索项目名称 / 项目ID').fill('朝阳壹号院')
     await tick(page)
-    await expect(page.locator('.sp-row')).toHaveCount(8)
+    await expect(page.getByRole('listbox', { name: '项目搜索结果' }).getByRole('option')).toHaveCount(8)
     await shotView(page, 'dealer-search-hit-8')
   })
 })

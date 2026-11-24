@@ -78,12 +78,6 @@
 .proj-switch .st { font-size: 11px; color: #64748b; display: flex; align-items: center; gap: 6px; }
 .proj-switch .st .on { color: var(--green-2); }
 .dot { width: 6px; height: 6px; border-radius: 50%; display: inline-block; background: currentColor; flex: none; }
-.proj-menu { position: absolute; left: 0; right: 0; top: calc(100% + 6px); background: #fff; color: var(--text); border-radius: 10px; box-shadow: 0 10px 30px rgba(2,6,23,.35); padding: 6px; z-index: 50; max-height: 320px; overflow-y: auto; }
-.proj-menu .opt { padding: 8px 10px; border-radius: 7px; display: flex; justify-content: space-between; align-items: center; font-size: 13px; }
-.proj-menu .opt:hover { background: var(--bg); }
-.proj-menu .opt.cur { background: var(--primary-soft); color: var(--primary); font-weight: 600; }
-.proj-menu .opt small { color: var(--faint); font-size: 11px; }
-.proj-menu .grp { font-size: 11px; color: var(--faint); padding: 8px 10px 4px; }
 .sb-foot { border-top: 1px solid rgba(255,255,255,.06); padding: 10px 12px 8px; }
 .sb-foot .nav-item { margin-bottom: 2px; }
 

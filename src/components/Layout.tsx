@@ -1,5 +1,4 @@
-import { Fragment } from 'react'
-import { useEffect, useRef, useState } from 'react'
+import { Fragment, useEffect, useId, useRef, useState } from 'react'
 import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import {
   faCloudSun, faLayerGroup, faSliders, faLeaf, faTemperatureHalf, faFan, faSitemap, faGear, faRightFromBracket,
@@ -8,6 +7,9 @@ import {
 import { Avatar, Icon, LogoMark } from './legacy'
 import { Badge } from '@/components/ui/badge'
 import { InputGroup, InputGroupInput } from '@/components/ui/input'
+import { Command, CommandEmpty, CommandItem, CommandList } from '@/components/ui/command'
+import { Popover, PopoverAnchor, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import { cn } from '@/lib/utils'
 import { useApp } from '../app/store'
 import { gatewayOf, type Project } from '../api'
 
@@ -24,49 +26,93 @@ export const NAV_PROJECT = [
 ]
 const ALL = [...NAV_MAIN, ...NAV_PROJECT, { to: '/settings', label: '系统设置', icon: faGear }]
 
-function useOutside<T extends HTMLElement>(close: () => void) {
-  const ref = useRef<T>(null)
-  useEffect(() => {
-    const h = (e: MouseEvent) => { if (!ref.current?.contains(e.target as Node)) close() }
-    document.addEventListener('mousedown', h)
-    return () => document.removeEventListener('mousedown', h)
-  }, [close])
-  return ref
-}
-
+/** 打开菜单时没有高亮（同旧版）；按上下键先高亮当前项目，回车选中 */
 function ProjectSwitch() {
   const { project, setProjectId, toast, scope, user } = useApp()
   const [open, setOpen] = useState(false)
-  const ref = useOutside<HTMLDivElement>(() => setOpen(false))
+  const [value, setValue] = useState('')
+  const rootRef = useRef<HTMLDivElement>(null)
+  const listRef = useRef<HTMLDivElement>(null)
+  const scrolled = useRef('')
+  const show = (keyboard: boolean) => { setValue(keyboard ? project.id : ''); scrolled.current = ''; setOpen(true) }
   const pick = (p: Project) => { setProjectId(p.id); setOpen(false); toast(`已切换到「${p.name}」`) }
+  // 高亮项的 id 写到菜单根上的 aria-activedescendant（打开后焦点在根上；cmdk 只在它自己移动高亮时更新列表上的这个属性），
+  // 高亮变化时滚进可视区（只滚一次，不跟用户的滚轮抢）。鼠标打开时没有高亮，菜单停在顶部（同旧版）
+  const sync = () => {
+    const el = value ? itemById(listRef.current, value) : null
+    setActive(rootRef.current, el)
+    if (el && scrolled.current !== value) { el.scrollIntoView({ block: 'nearest' }); scrolled.current = value }
+  }
   return (
-    <div className="proj-switch" ref={ref} onClick={() => setOpen((o) => !o)}>
-      <div className="lbl">当前项目</div>
-      <div className="name">{project.name}<Icon className="chev" icon={faChevronDown} /></div>
-      <div className="st">
-        {project.online ? <span className="on"><span className="dot" /> 在线</span> : <span className="off"><span className="dot" /> 离线</span>}
-        <span className="num">{project.id}</span>
-      </div>
-      {open && (
-        <div className="proj-menu" onClick={(e) => e.stopPropagation()}>
-          {scope.dealers.map((d) => (
-            <div key={d.id}>
-              {user.role === 'admin' && <div className="dlr">{d.short}</div>}
-              {scope.groups.filter((g) => g.dealerId === d.id).map((g) => (
-                <div key={g.id}>
-                  <div className="grp">{g.name}</div>
-                  {scope.projects.filter((p) => p.groupId === g.id).map((p) => (
-                    <div key={p.id} className={'opt' + (p.id === project.id ? ' cur' : '')} onClick={() => pick(p)}>
-                      <span>{p.name}</span><small className={'num' + (p.online ? '' : ' red')}>{p.online ? p.id : '离线'}</small>
-                    </div>
-                  ))}
-                </div>
-              ))}
-            </div>
-          ))}
+    <Popover open={open} onOpenChange={(o) => (o ? show(false) : setOpen(false))}>
+      <PopoverTrigger asChild>
+        <div
+          className="proj-switch"
+          role="button"
+          tabIndex={0}
+          aria-haspopup="listbox"
+          // Radix 触发器默认是 <button type="button">，asChild 到 div 上时去掉这个无意义的 type
+          {...{ type: undefined }}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ' || e.key === 'ArrowDown') { e.preventDefault(); if (!open) show(true) }
+          }}
+        >
+          <div className="lbl">当前项目</div>
+          <div className="name">{project.name}<Icon className="chev" icon={faChevronDown} /></div>
+          <div className="st">
+            {project.online ? <span className="on"><span className="dot" /> 在线</span> : <span className="off"><span className="dot" /> 离线</span>}
+            <span className="num">{project.id}</span>
+          </div>
         </div>
-      )}
-    </div>
+      </PopoverTrigger>
+      {/*
+        旧菜单绝对定位在 .proj-switch 的内边距盒里（左右各让出 1px 边框、上沿距边框 5px），这里用对齐偏移复刻；
+        旧菜单在侧栏的滚动区里，阴影被侧栏右沿（菜单右侧 15px 处）裁掉，Portal 出来后用 clip-path 照裁
+      */}
+      <PopoverContent
+        asChild
+        sideOffset={5}
+        alignOffset={1}
+        className="max-h-[320px] w-[calc(var(--radix-popover-trigger-width)-2px)] cursor-pointer overflow-y-auto rounded-lg p-1.5 shadow-[0_10px_30px_rgba(2,6,23,.35)] [clip-path:inset(-60px_-15px_-60px_-60px)]"
+      >
+        <Command
+          shouldFilter={false}
+          value={value}
+          onValueChange={setValue}
+          ref={rootRef}
+          onKeyDown={(e) => {
+            if (value === '' && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) { e.preventDefault(); setValue(project.id) }
+            // 菜单在 Portal 里，Tab 会跳到页面末尾：改为关闭菜单、焦点回到触发器
+            if (e.key === 'Tab') { e.preventDefault(); setOpen(false) }
+          }}
+        >
+          <CommandList ref={listRef} label="切换当前项目">
+            {scope.dealers.map((d) => (
+              <div key={d.id} role="presentation">
+                {user.role === 'admin' && <div aria-hidden className="border-t border-line-2 px-2.5 pt-2.5 pb-0.5 text-[11px] font-bold text-primary">{d.short}</div>}
+                {scope.groups.filter((g) => g.dealerId === d.id).map((g) => (
+                  <div key={g.id} role="group" aria-label={user.role === 'admin' ? `${d.short} · ${g.name}` : g.name}>
+                    <div aria-hidden className="px-2.5 pt-2 pb-1 text-[11px] text-faint">{g.name}</div>
+                    {scope.projects.filter((p) => p.groupId === g.id).map((p) => (
+                      <CommandItem
+                        key={p.id}
+                        value={p.id}
+                        onSelect={() => pick(p)}
+                        data-current={p.id === project.id || undefined}
+                        className={cn('rounded-[7px] text-[13px]', p.id === project.id ? 'bg-primary-soft font-semibold text-primary' : 'hover:bg-background')}
+                      >
+                        <span>{p.name}</span><small className="num text-[11px] text-faint">{p.online ? p.id : '离线'}</small>
+                      </CommandItem>
+                    ))}
+                  </div>
+                ))}
+              </div>
+            ))}
+            <AfterRender run={sync} />
+          </CommandList>
+        </Command>
+      </PopoverContent>
+    </Popover>
   )
 }
 
@@ -75,29 +121,115 @@ function ProjectSearch() {
   const { scope, setProjectId, toast, project } = useApp()
   const [q, setQ] = useState('')
   const [open, setOpen] = useState(false)
-  const ref = useOutside<HTMLFormElement>(() => setOpen(false))
+  const [value, setValue] = useState('')
+  const formRef = useRef<HTMLFormElement>(null)
+  const contentRef = useRef<HTMLDivElement>(null)
+  const contentId = useId()
   const s = q.trim().toLowerCase()
   const hits = s ? scope.projects.filter((p) => (p.name + ' ' + p.id).toLowerCase().includes(s)).slice(0, 8) : []
   const gname = (id: string) => scope.groups.find((g) => g.id === id)?.name ?? ''
+  const shown = open && !!s
   const pick = (p: Project) => { setProjectId(p.id); setQ(''); setOpen(false); toast(`当前项目已切换为「${p.name}」`) }
+  const inForm = (t: EventTarget | null) => t instanceof Node && !!formRef.current?.contains(t)
+  const inputRef = useRef<HTMLInputElement>(null)
+  const sync = () => {
+    setActive(inputRef.current, value ? itemById(contentRef.current, value) : null)
+    // Radix 定位把坐标取整到整像素，旧弹层跟着表单落在小数坐标上（表单左沿取决于右侧用户名的宽度）。
+    // 把取整丢掉的小数部分用外边距补回，文字落在与旧版完全相同的位置
+    const c = contentRef.current, a = formRef.current?.getBoundingClientRect()
+    if (c && a) {
+      const dpr = window.devicePixelRatio || 1, frac = (n: number) => n - Math.round(n * dpr) / dpr
+      c.style.margin = `${frac(a.y)}px 0 0 ${frac(a.x)}px`
+    }
+  }
   return (
-    <form className="relative w-[280px] text-[13px] text-faint" ref={ref} onSubmit={(e) => { e.preventDefault(); if (hits[0]) pick(hits[0]) }}>
-      <InputGroup variant="search">
-        <Icon icon={faMagnifyingGlass} />
-        <InputGroupInput className="min-w-0 text-foreground placeholder:text-faint" placeholder="搜索项目名称 / 项目ID" value={q} onFocus={() => setOpen(true)} onChange={(e) => { setQ(e.target.value); setOpen(true) }} />
-      </InputGroup>
-      {open && s && (
-        <div className="search-pop">
-          {hits.length ? hits.map((p) => (
-            <div key={p.id} className={'sp-row' + (p.id === project.id ? ' cur' : '')} onMouseDown={(e) => e.preventDefault()} onClick={() => pick(p)}>
-              <div><b>{p.name}</b><small>{gname(p.groupId)} · <span className="num">{p.id}</span></small></div>
-              <Badge variant={p.online ? 'green' : 'gray'}>{p.online ? '在线' : '离线'}</Badge>
-            </div>
-          )) : <div className="sp-empty">未找到匹配的项目（仅搜索您可见的集成项目内的项目）</div>}
-        </div>
-      )}
-    </form>
+    <Popover open={shown} onOpenChange={(o) => { if (!o) setOpen(false) }}>
+      <PopoverAnchor asChild>
+        <form className="relative w-[280px] text-[13px] text-faint" ref={formRef} onSubmit={(e) => { e.preventDefault(); if (hits[0]) pick(hits[0]) }}>
+          {/* 输入框不是 cmdk 的 Command.Input（它把 aria-expanded 写死为 true），键盘事件冒泡到 Command 根上处理 */}
+          <Command
+            shouldFilter={false}
+            tabIndex={undefined}
+            value={value}
+            onValueChange={setValue}
+            onKeyDown={(e) => {
+              if (e.nativeEvent.isComposing || e.keyCode === 229) return
+              if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+                // 弹层被 Esc 关掉后，上下键重新打开（不移动高亮）
+                if (!shown) { e.preventDefault(); if (s) setOpen(true) }
+              } else if (e.key === 'Enter' && (!shown || value === '')) {
+                // 没有键盘高亮时回车选第一条（同旧版的表单提交）
+                e.preventDefault()
+                if (hits[0]) pick(hits[0])
+              }
+            }}
+          >
+            <InputGroup variant="search">
+              <Icon icon={faMagnifyingGlass} />
+              <InputGroupInput
+                className="min-w-0 text-foreground placeholder:text-faint"
+                placeholder="搜索项目名称 / 项目ID"
+                role="combobox"
+                aria-label="搜索项目"
+                aria-autocomplete="list"
+                aria-expanded={shown}
+                aria-controls={shown ? contentId : undefined}
+                ref={inputRef}
+                value={q}
+                onFocus={() => setOpen(true)}
+                onChange={(e) => { setQ(e.target.value); setValue(''); setOpen(true) }}
+                // Home / End 留给输入框移动光标，不交给 cmdk 跳到首尾项
+                onKeyDown={(e) => { if (e.key === 'Home' || e.key === 'End') e.stopPropagation() }}
+              />
+            </InputGroup>
+            <PopoverContent
+              ref={contentRef}
+              id={contentId}
+              className="max-h-[360px] w-(--radix-popover-trigger-width) overflow-y-auto rounded-lg border border-border p-1.5 text-[13px] text-faint shadow-pop"
+              // 焦点始终留在输入框：打开时不抢焦点，关闭时不回收；点输入框所在的表单不算点外部
+              onOpenAutoFocus={(e) => e.preventDefault()}
+              onCloseAutoFocus={(e) => e.preventDefault()}
+              onInteractOutside={(e) => { if (inForm(e.target)) e.preventDefault() }}
+            >
+              <CommandList label="项目搜索结果">
+                {hits.map((p) => (
+                  <CommandItem
+                    key={p.id}
+                    value={p.id}
+                    onSelect={() => pick(p)}
+                    onMouseDown={(e) => e.preventDefault()}
+                    data-current={p.id === project.id || undefined}
+                    className={cn('gap-2.5 rounded-md text-foreground', p.id === project.id ? 'bg-primary-soft' : 'hover:bg-background')}
+                  >
+                    <div><b className="block text-[13px] font-semibold">{p.name}</b><small className="mt-0.5 block text-[11.5px] text-faint">{gname(p.groupId)} · <span className="num">{p.id}</span></small></div>
+                    <Badge variant={p.online ? 'green' : 'gray'}>{p.online ? '在线' : '离线'}</Badge>
+                  </CommandItem>
+                ))}
+                <CommandEmpty className="px-2.5 py-3.5 text-[12.5px] text-muted-foreground">未找到匹配的项目（仅搜索您可见的集成项目内的项目）</CommandEmpty>
+                <AfterRender run={sync} />
+              </CommandList>
+            </PopoverContent>
+          </Command>
+        </form>
+      </PopoverAnchor>
+    </Popover>
   )
+}
+
+/**
+ * 放在弹层内容里：弹层经 Portal 晚一拍挂载，父组件的 effect 看不到它；这里每次渲染后（含挂载）执行一次。
+ * 用 useEffect 而不是 useLayoutEffect：挂载那一次，子组件的 layout effect 早于父元素的 ref 绑定
+ */
+function AfterRender({ run }: { run: () => void }) {
+  useEffect(run)
+  return null
+}
+/** cmdk 选项上带 data-value（项目编号） */
+const itemById = (root: Element | null, v: string) => root?.querySelector<HTMLElement>(`[cmdk-item][data-value="${CSS.escape(v)}"]`) ?? null
+/** 组合框的 aria-activedescendant 指向当前高亮项（没有高亮时去掉） */
+const setActive = (owner: Element | null, item: HTMLElement | null) => {
+  if (item?.id) owner?.setAttribute('aria-activedescendant', item.id)
+  else owner?.removeAttribute('aria-activedescendant')
 }
 
 function OfflineBanner({ p }: { p: Project }) {
