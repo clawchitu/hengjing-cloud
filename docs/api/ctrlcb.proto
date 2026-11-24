@@ -1,0 +1,1995 @@
+syntax = "proto3";
+
+package ctrlcb.v1;
+option  go_package           = "kxjserver/ctrlcb/api/gen/v1;ctrlcbpb";
+
+option  java_multiple_files  = true;
+option  java_package         = "ctrlcb.v1";
+option  java_outer_classname = "Ctrlcb";
+
+import "shared/api/shared.proto";
+import "google/protobuf/empty.proto";
+import "weather/api/weather.proto";
+
+// CtrlCBService 控制屏连接服务
+service CtrlCBService {
+
+  rpc Ping(google.protobuf.Empty) returns (google.protobuf.Empty);
+
+  rpc GetStreams(google.protobuf.Empty) returns (GetStreamsResponse);
+  // 控制屏发起连接(控制屏端调用)
+  rpc OpenStream(OpenStreamRequest) returns (stream CtrlMessage);
+
+  // 控制屏健康检查
+  rpc StreamHealthyCheck(StreamHealthyCheckRequest) returns (StreamHealthyCheckResponse);
+
+  // 向控制屏发送消息(外部接口调用)
+  rpc PassCtrlMessage(PassCtrlMessageRequest) returns (PassCtrlMessageResponse);
+
+  // 控制屏回调响应数据(控制屏端调用)
+  rpc CallbackMessage(CallbackMessageRequest) returns (CallbackMessageResponse);
+
+  // 控制屏发送统计数据
+  rpc PutDevicesStat(PutDevicesStatRequest) returns (google.protobuf.Empty);
+  rpc PutRoomsStat(PutRoomsStatRequest) returns (google.protobuf.Empty);
+
+  // 获取控制屏存档文件上传地址
+  rpc GetDeviceArchiveUploadUrl(GetDeviceArchiveUploadUrlRequest) returns (GetDeviceArchiveUploadUrlResponse);
+  // 获取控制屏存档文件下载地址
+  rpc GetDeviceArchiveDownloadUrl(GetDeviceArchiveDownloadUrlRequest) returns (GetDeviceArchiveDownloadUrlResponse);
+  // 删除控制屏存档文件
+  rpc RemoveDeviceArchiveFromOSS(RemoveDeviceArchiveFromOSSRequest) returns (RemoveDeviceArchiveFromOSSResponse);
+
+  // 获取控制屏远程日志文件上传地址
+  rpc GetDeviceRemoteLogUploadUrl(GetDeviceRemoteLogUploadUrlRequest) returns (GetDeviceRemoteLogUploadUrlResponse);
+  // 获取控制屏远程日志文件下载地址
+  rpc GetDeviceRemoteLogDownloadUrl(GetDeviceRemoteLogDownloadUrlRequest)
+      returns (GetDeviceRemoteLogDownloadUrlResponse);
+  // 删除控制屏远程日志文件
+  rpc RemoveDeviceRemoteLogFromOSS(RemoveDeviceRemoteLogFromOSSRequest) returns (RemoveDeviceRemoteLogFromOSSResponse);
+
+  /// 应用相关
+  rpc GetLatestAppVersion(GetLatestAppVersionRequest) returns (GetLatestAppVersionResponse);
+
+  /// 项目相关
+  // 获取项目信息
+  rpc GetProjectInfo(GetProjectInfoRequest) returns (GetProjectInfoResponse);
+  // 获取默认项目配置
+  rpc GetDefaultProjectConfig(GetDefaultProjectConfigRequest) returns (GetDefaultProjectConfigResponse);
+  // 确认获取默认项目配置成功
+  rpc ConfirmDefaultProjectConfig(ConfirmDefaultProjectConfigRequest) returns (ConfirmDefaultProjectConfigResponse);
+  // 项目交付
+  rpc DeliveryProject(DeliveryProjectRequest) returns (google.protobuf.Empty);
+  // 项目验收
+  rpc AcceptanceProject(AcceptanceProjectRequest) returns (google.protobuf.Empty);
+  // 获取项目验收报告上传 URL
+  rpc GetAcceptanceReportUploadUrl(GetAcceptanceReportUploadUrlRequest) returns (GetAcceptanceReportUploadUrlResponse);
+  // 三恒创建项目信息
+  rpc CreateSanHengProject(CreateSanHengProjectRequest) returns (CreateSanHengProjectResponse);
+  // 三恒更新项目信息
+  rpc UpdateSanHengProject(UpdateSanHengProjectRequest) returns (google.protobuf.Empty);
+  // 三恒上传项目配置
+  rpc UpdateSanHengProjectConfig(UpdateSanHengProjectConfigRequest) returns (google.protobuf.Empty);
+  // 获取项目报告
+  rpc GetProjectReports(GetProjectReportsRequest) returns (GetProjectReportsResponse);
+
+  // 获取房屋布局（room list)
+  rpc GetHouseLayout(GetHouseLayoutRequest) returns (GetHouseLayoutResponse);
+
+  /// 经销商
+  // 获取经销商信息
+  rpc GetDistributorInfo(GetDistributorInfoRequest) returns (GetDistributorInfoResponse);
+
+  /// 报警
+  // 新建报警信息
+  rpc CreateDeviceAlarm(CreateDeviceAlarmRequest) returns (CreateDeviceAlarmResponse);
+  rpc StopDeviceAlarm(StopDeviceAlarmRequest) returns (google.protobuf.Empty);
+  rpc StopDeviceAlarmByProjectAndContentCode(StopDeviceAlarmByProjectAndContentCodeRequest)
+      returns (google.protobuf.Empty);
+
+  /// 控制屏控制参数：模式控制、在家离家控制、修改房间名称、温度控制
+
+  // 控制屏模式信息
+  // deprecated
+  rpc SaveCtrlModeItem(SaveCtrlModeItemRequest) returns (SaveCtrlModeItemResponse);
+  // deprecated
+  rpc GetCtrlMode(GetCtrlModeRequest) returns (GetCtrlModeResponse);
+  // deprecated
+  rpc RemoveCtrlModeItem(RemoveCtrlModeItemRequest) returns (RemoveCtrlModeItemResponse);
+
+  // 控制屏模式控制
+  rpc CtrlMode(CtrlModeRequest) returns (PassCtrlMessageResponse);
+  // 控制屏在家离家控制
+  rpc CtrlHome(CtrlHomeRequest) returns (PassCtrlMessageResponse);
+  // 控制屏进行房间名称修改
+  rpc CtrlModifyRoomName(CtrlModifyRoomNameRequest) returns (PassCtrlMessageResponse);
+  // 控制屏进行房间温度控制
+  rpc CtrlRoomTemperature(CtrlRoomTemperatureRequest) returns (PassCtrlMessageResponse);
+
+  // 控制屏消息透传
+  rpc TransCtrlMessage(TransCtrlMessageRequest) returns (TransCtrlMessageResponse);
+  // 透传消息异步响应
+  rpc CallbackTransMessage(CallbackTransMessageRequest) returns (CallbackTransMessageResponse);
+  // 查询透传消息响应结果
+  rpc GetTransMessageCallback(GetTransMessageCallbackRequest) returns (GetTransMessageCallbackResponse);
+
+  rpc TransCtrlMessageSync(TransCtrlMessageRequest) returns (GetTransMessageCallbackResponse);
+
+  // 群发透传消息
+  rpc BroadcastTransMessage(BroadcastTransMessageRequest) returns (BroadcastTransMessageResponse);
+  rpc BroadcastCallback(BroadcastCallbackRequest) returns (google.protobuf.Empty);
+  // 查询群发消息响应结果
+  rpc GetBroadcastResult(GetBroadcastResultRequest) returns (GetBroadcastResultResponse);
+  rpc GetBroadcastResultList(GetBroadcastResultListRequest) returns (GetBroadcastResultListResponse);
+  // 批量删除群发消息记录
+  rpc BatchRemoveBroadcastResult(BatchRemoveBroadcastResultRequest) returns (google.protobuf.Empty);
+
+  // 批量统一控制下发（对每个项目发送 UnifiedCtrlSet，并记录每个项目的执行结果）
+  rpc UnifiedCtrlsSend(UnifiedCtrlsSendRequest) returns (UnifiedCtrlsSendResponse);
+  // 查询批量统一控制的执行记录
+  rpc GetUnifiedCtrlsRecords(GetUnifiedCtrlsRecordsRequest) returns (GetUnifiedCtrlsRecordsResponse);
+
+  // 设置应用版本号
+  rpc SetAppVersion(SetAppVersionRequest) returns (google.protobuf.Empty);
+
+  // 设置项目当前模式
+  rpc SetProjectMode(SetProjectModeRequest) returns (google.protobuf.Empty);
+  // 设置项目滤网寿命
+  rpc SetProjectFilterLife(SetProjectFilterLifeRequest) returns (google.protobuf.Empty);
+
+  // 设置项目数据点位总数
+  rpc SetProjectDataPointTotal(SetProjectDataPointTotalRequest) returns (google.protobuf.Empty);
+
+  // 上传运行提示
+  rpc CreateRunningTip(CreateRunningTipRequest) returns (google.protobuf.Empty);
+
+  rpc GetCalendar(GetCalendarRequest) returns (GetCalendarResponse);
+
+  //  Set project monthly score
+  rpc SetProjectMonthlyScore(SetProjectMonthlyScoreRequest) returns (google.protobuf.Empty);
+
+  //
+  rpc GetLatestFirmware(GetLatestFirmwareRequest) returns (GetLatestFirmwareResponse);
+
+  rpc GetWeatherByCityCode(GetWeatherByCityCodeRequest) returns (GetWeatherByCityCodeResponse);
+
+  rpc GetVipLevels(GetVipLevelsRequest) returns (GetVipLevelsResponse);
+  rpc GetVipServiceByLv(GetVipServiceByLvRequest) returns (GetVipServiceByLvResponse);
+
+  rpc GetAuthProducts(GetAuthProductsRequest) returns (GetAuthProductsResponse);
+}
+
+// 串口地址
+message SerialPortAddress {
+  string type  = 1;
+  int32  value = 2;
+}
+
+// 房间定期统计数据
+message RoomData {
+  string project_id  = 1; // 项目 id
+  string name        = 2;
+  string room_id     = 3;
+  int64  timestamp   = 4; // 时间戳（正点，分秒均为0）
+
+  float  temperature = 5;
+  float  humidity    = 6;
+  float  dew_point   = 7;
+  float  co2         = 8;
+  float  pm25        = 9;
+}
+
+// 其他定期统计数据
+message DeviceData {
+  float  d1         = 1;
+  float  d2         = 2;
+  float  d3         = 3;
+  float  d4         = 4;
+  float  d5         = 5;
+  float  d6         = 6;
+  float  d7         = 7;
+  float  d8         = 8;
+  float  d9         = 9;
+  float  d10        = 10;
+
+  string project_id = 11; // 项目 id
+  string name       = 12; // 名称
+  string device_id  = 13;
+  int64  timestamp  = 14; // 时间戳（正点，分秒均为0）
+}
+
+message PutDevicesStatRequest {
+  repeated bytes device_data_list = 1; // 每个 DeviceData marshal 之后得到的数组
+}
+
+message PutRoomsStatRequest {
+  repeated bytes room_data_list = 2; // 每个 RoomData marshal 之后得到的数组
+}
+
+message GetStreamsResponse { repeated string project_ids = 1; }
+
+message OpenStreamRequest { string project_id = 1; }
+
+message StreamHealthyCheckRequest { string project_id = 1; }
+message StreamHealthyCheckResponse { bool ok = 1; }
+
+message PassCtrlMessageRequest {
+  string      project_id     = 1;
+  string      user_id        = 2;
+  MessageType message_type   = 3;
+  string      body           = 4;
+  string      shadow_body    = 5; // 仅用于开发时，前端上传自己期待的结果
+  string      device_name    = 6; // 设备 id，如果有需要
+  string      parameter_name = 7;
+}
+message PassCtrlMessageResponse {
+  string project_id = 1;
+  string request_id = 2;
+  string record_id  = 3; // 这次请求（request）会生成一条数据记录，record_id
+                         // 即为这条记录的 id, 仅对远程日志等有用。
+}
+
+/* A: GRPC接口，直接通过 stream 发到控制屏
+ * B: 通过异步回调数据到 Redis
+ * C: 类似 A，异步回调数据到内存数据队列
+ * D: 控制屏端主动调用接口，数据放到 MQ 队列
+ * E: GRPC接口（创建一条存档数据记录（上传中、已完成）），需要 OSS
+ * 上传（控制屏统计完毕，通过记录ID获取上传地址）和下载地址接口，提供数据记录CRUD，需要给控制屏提供完成上传接口（用于发送系统通知）
+ * F: 提供后端GRPC接口，控制屏端主动调用接口，数据存到
+ * MongoDB，需要过期时间的可以存到 Redis
+ */
+
+enum MessageType {
+  // deprecated, 控制屏信息透传 (A)
+  CtrlData                    = 0;
+  // 实时房间数据类型 (B)
+  CurrentRoom                 = 1;
+  // deprecated, use DeviceParameterGet instead
+  ProjectConfig               = 2;
+  // deprecated, use DeviceDataGet instead
+  RealtimeDevice              = 3;
+  // 控制屏设备周期性统计数据(比如：间隔 1 个小时传一次数据) (D)
+  StatDevice                  = 4;
+  // deprecated use DeviceDataCollection instead
+  ArchiveDevice               = 5;
+  // 滤网数据（？？？）
+  StrainerData                = 6;
+  // 三恒配置信息（B）
+  SH                          = 7;
+  // 报警数据（F）
+  Alarm                       = 8;
+  // 控制屏远程日志（F）
+  RemoteLog                   = 9;
+  // deprecated,
+  // 控制屏当前状态信息（该类型消息的请求，需要控制屏异步响应：有参数则执行，无参数则直接响应数据）（B）
+  CurrentCtrl                 = 10;
+
+  DeviceParameterGet          = 11; // 项目设备配置的获取
+  DeviceParameterSet          = 12; // 项目设备配置的修改
+  SystemParameterGet          = 13; // 项目系统配置的获取
+  SystemParameterSet          = 14; // 项目系统配置的修改
+  HydraulicSystemGet          = 23; // 水力系统配置的获取
+  HydraulicSystemSet          = 22; // 水力系统配置的修改
+  AirSystemGet                = 24; // 空气系统配置的获取
+  AirSystemSet                = 25; // 空气系统配置的修改
+
+  DeviceDataGet               = 15; // 项目单个设备数据的获取
+  DeviceDataFilter            = 16; // 为项目单个数据的设置过滤条件条件
+  DeviceDataCollection        = 17; // 项目单个设备数据的按时长收集
+  PilotDataCollection         = 32; // 试运行数据收集(实际上是同一个项目多个设备多个参数的数据收集)
+  DeviceParamTest             = 36; // 参数监测
+  RoomDataGet                 = 40; // 房间数据获取
+  RoomStatusGet               = 41; // 房间状态获取
+  RoomStatusSet               = 42; // 房间状态设置
+
+  ClientCtrlMode              = 18; // 模式控制
+  ClientCtrlHome              = 19; // 在家离家控制
+  ClientCtrlTemperature       = 20; // 温度控制
+  ClientCtrlRoomName          = 21; // 修改房间名称
+
+  NotiDistributorInfoChanged  = 26; // 经销商信息更改的通知，目前只有 logo 更改才通知
+
+  CtrlGraphicNoticeSend       = 27; // 发送图文通知信息
+  CtrlGraphicNoticeCanceled   = 28; // 撤销图文通知信息
+
+  OnlineDeviceList            = 30; // 在线设备列表
+  OtherDeviceDataGet          = 31; // 项目的其他设备数据的获取
+
+  DefaultProjectConfigChanged = 33; // 默认项目配置更改的通知
+  ProjectDisableAlarm         = 34; // 项目报警禁用
+  ProjectEnableAlarm          = 35; // 项目报警启用
+
+  LockSystem                  = 37; // 锁定系统
+  UnlockSystem                = 38; // 解锁系统
+
+  Ping                        = 29; // 探活
+
+  ProjectReportGet            = 39; // 项目报告请求
+
+  EnergyDtoGet                = 43; // 能耗数据获取
+  AmmeterDataGet              = 44; // 电表数据获取
+
+  FirmwareUpgradeSend         = 45; // 固件升级
+
+  RealtimeDataReply           = 46; // 实时返回
+
+  ScreenUpgradeSend           = 47; // 控制屏升级
+
+  TPSystemModeGet             = 101; // 获取系统模式
+  TPSystemModeSet             = 102; // 设置系统模式
+  TPSystemIsAtHomeSet         = 103; // 设置系统在家模式
+  TPSystemSceneModeSet        = 104; // 设置系统场景模式
+  TPFloorRoomGet              = 105; // 获取房间信息
+  TPRoomStatusGet             = 106; // 获取房间状态
+  TPRoomTemperatureSet        = 107; // 设置房间温度
+  TPRoomEndSet                = 108; // 设置房间末端
+  TPRoomECOSet                = 109; // 设置房间节能模式
+  TPRoomChildLockSet          = 110; // 设置房间儿童锁
+  TPRoomWindLevelSet          = 111; // 设置房间风速
+  TPRoomStatusSet             = 112; // 设置房间开关
+  TPAirSensorGet              = 113; // 获取空气传感器数据
+  TPAirSensorDataHourGet      = 114; // 获取空气传感器数据（按小时）
+  TPRoomPanelDataHourGet      = 115; // 获取房间面板数据（按小时）
+  TPAmmeterDataGet            = 116; // 获取电表数据
+  TPAmmeterStatisticGet       = 117; // 获取电表统计数据
+  TPTroubleWarnGet            = 118; // 获取故障报警信息
+  TPAirFilterGet              = 119; // 获取滤网数据
+  TPAirFilterReset            = 120; // 重置滤网数据
+
+  RoomTemperatureDataGet      = 200; // 房间温控数据
+  RoomTemperatureSet          = 201; // 房间温控设置
+  FreshDehumidifierGet        = 202; // 获取新风除湿机数据
+  UnifiedCtrlSet              = 203; // 统一控制设置
+  RunningCtrlSet              = 204; // 运行控制设置
+  DeviceSummaryGet            = 205; // 设备连接状态
+  ProjectRoomSwitchSet        = 206; // 房间开关设置
+  AirSensorGet                = 207; // 获取空气传感器数据
+  AirSensorDataHourGet        = 208; // 获取空气传感器数据（按小时）
+  RoomTemperatureDataHourGet  = 209; // 获取房间温控数据（按小时）
+  RunningCtrlGet              = 210; // 获取运行控制数据
+}
+
+// CtrlMessage 控制屏消息
+message CtrlMessage {
+  string      project_id         = 1; // 项目ID
+  string      request_id         = 2; // 请求ID
+  string      user_id            = 3; // 用户ID
+  string      record_id          = 4; // 数据记录ID
+  MessageType message_type       = 5; // 消息类型
+  string      body               = 6; // 消息请求附带数据
+  int32       trans_message_type = 7; // 透传消息类型
+  string      open_id            = 8; // 微信open id
+}
+message CtrlMessageEntity {
+  string      id           = 1;
+  string      created_at   = 2;
+  string      updated_at   = 3;
+  string      creator      = 4;
+  string      updater      = 5;
+  string      project_id   = 6;
+  string      request_id   = 7;
+  string      user_id      = 8;
+  string      record_id    = 9;
+  MessageType message_type = 10;
+  string      body         = 11;
+  string      open_id      = 12;
+}
+
+message CallbackMessageRequest {
+  string      project_id     = 1;
+  string      request_id     = 2;
+  string      user_id        = 3;
+  string      record_id      = 4;
+  MessageType message_type   = 5;
+  string      body           = 6;
+  string      project_name   = 7;
+  string      device_name    = 8;
+  string      parameter_name = 9;  // 设备参数名称
+  bool        finished       = 10; // 用来标识是否是最后一条数据
+}
+message CallbackMessageResponse {}
+
+// TransCtrlMessage 控制屏透传消息
+message TransCtrlMessage {
+  string project_id   = 1;
+  int32  message_type = 2; // 消息类型
+  string body         = 3; // 消息请求附带数据
+}
+
+// 消息透传请求
+message TransCtrlMessageRequest {
+  string project_id   = 1;
+  int32  message_type = 2;
+  string body         = 3;
+  string open_id      = 4;
+  string user_id      = 5;
+  string request_id   = 6;
+}
+message TransCtrlMessageResponse {}
+
+// 透传消息异步响应
+message CallbackTransMessageRequest {
+  string project_id   = 1;
+  int32  message_type = 2;
+  string body         = 3;
+  string open_id      = 4;
+  string user_id      = 5;
+  string request_id   = 6;
+}
+message CallbackTransMessageResponse {}
+
+// 查询透传消息响应结果
+message GetTransMessageCallbackRequest {
+  string project_id   = 1;
+  int32  message_type = 2;
+  string open_id      = 3;
+  string user_id      = 4;
+}
+message GetTransMessageCallbackResponse {
+  string project_id   = 1;
+  int32  message_type = 2;
+  string body         = 3;
+}
+
+message BroadcastTransMessageRequest {
+  string region         = 1;
+  string distributor_id = 2;
+  string app_id         = 3;
+  int32  message_type   = 4;
+  string body           = 5;
+}
+message BroadcastTransMessageResponse { string request_id = 1; }
+
+message BroadcastCallbackRequest {
+  string request_id = 1;
+  string project_id = 2;
+  string body       = 3;
+}
+
+message BroadcastResult {
+  message Data {
+    string project_id = 1;
+    string body       = 3;
+  }
+  string        request_id   = 1;
+  string        created_at   = 2;
+  string        updated_at   = 3;
+  int32         message_type = 4;
+  repeated Data data         = 5;
+  string        progress     = 6; // 完成进度: 完成数量/总数量
+}
+message GetBroadcastResultRequest { string request_id = 1; }
+message GetBroadcastResultResponse { BroadcastResult result = 1; }
+
+message GetBroadcastResultListRequest { shared.v1.PageOptions page_options = 1; }
+message GetBroadcastResultListResponse {
+  repeated BroadcastResult result = 1;
+  int64                    total  = 2;
+}
+
+message BatchRemoveBroadcastResultRequest { repeated string request_ids = 1; }
+
+// 批量统一控制下发请求，message_type 固定为 UnifiedCtrlSet
+message UnifiedCtrlsSendRequest {
+  repeated string project_ids = 1;
+  string          user_id     = 2; // 操作人员 ID
+  string          body        = 3; // UnifiedCtrlSetQuery 序列化后的 base64
+  string          shadow_body = 4; // 仅用于开发时，前端上传自己期待的结果
+}
+message UnifiedCtrlsSendResponse {
+  string batch_id = 1; // 本次批量下发的批次号
+  int32  total    = 2; // 下发的项目总数
+}
+
+// 批量统一控制的执行结果
+enum UnifiedCtrlResult {
+  UNIFIED_CTRL_RESULT_UNKNOWN = 0; // 查询时表示不过滤
+  UNIFIED_CTRL_RESULT_PENDING = 1; // 等待控制屏返回
+  UNIFIED_CTRL_RESULT_SUCCESS = 2; // 成功
+  UNIFIED_CTRL_RESULT_FAILED  = 3; // 失败
+  UNIFIED_CTRL_RESULT_TIMEOUT = 4; // 超时
+}
+
+message UnifiedCtrlsRecord {
+  string            id            = 1;
+  string            batch_id      = 2;
+  string            project_id    = 3;
+  string            project_name  = 4;
+  string            project_code  = 5;
+  UnifiedCtrlResult result        = 6;
+  string            message       = 7; // 失败原因或控制屏返回的 msg
+  string            operate_time  = 8; // 操作时间 yyyy-MM-dd HH:mm:ss
+  string            operator_id   = 9;
+  string            operator_name = 10;
+}
+
+message GetUnifiedCtrlsRecordsRequest {
+  shared.v1.PageOptions page_options = 1;
+  string                batch_id     = 2;
+  string                project_id   = 3;
+  string                project_name = 4; // 模糊匹配
+  string                project_code = 5;
+  UnifiedCtrlResult     result       = 6; // UNKNOWN 表示不过滤
+  string                operator_id  = 7;
+  int64                 start_time   = 8; // 操作时间起，unix 秒，0 表示不限
+  int64                 end_time     = 9; // 操作时间止，unix 秒，0 表示不限
+}
+message GetUnifiedCtrlsRecordsResponse {
+  repeated UnifiedCtrlsRecord records = 1;
+  int64                       total   = 2;
+}
+
+enum DeviceArchiveType {
+  DeviceArchiveTypeUnkown = 0;
+  Archive                 = 1;
+  Filter                  = 2;
+  Collection              = 3;
+  Pilot                   = 4;
+  ParamTest               = 5;
+}
+
+// DeviceArchive 设备存档记录
+message DeviceArchive {
+  string            project_id     = 1;
+  string            user_id        = 2;
+  string            body           = 3;
+  bool              finished       = 4;
+  DeviceArchiveType type           = 5;
+  string            device_name    = 6;
+  string            parameter_name = 7;
+}
+message DeviceArchiveEntity {
+  string            id             = 1;
+  string            created_at     = 2;
+  string            updated_at     = 3;
+  string            creator        = 4;
+  string            updater        = 5;
+  string            project_id     = 6;
+  string            user_id        = 7;
+  string            body           = 8;
+  bool              finished       = 9;
+  DeviceArchiveType type           = 10;
+  string            device_name    = 11;
+  string            parameter_name = 12;
+}
+
+message GetDeviceArchiveUploadUrlRequest {
+  string id           = 1;
+  string content_type = 2;
+}
+message GetDeviceArchiveUploadUrlResponse { string url = 1; }
+message GetDeviceArchiveDownloadUrlRequest {
+  string id           = 1;
+  string content_type = 2;
+}
+message GetDeviceArchiveDownloadUrlResponse { string url = 1; }
+message RemoveDeviceArchiveFromOSSRequest { string id = 1; }
+message RemoveDeviceArchiveFromOSSResponse {}
+
+// GetDefaultProjectConfig
+message GetDefaultProjectConfigRequest { string project_id = 1; }
+message GetDefaultProjectConfigResponse {
+  string config_id = 1;
+  string name      = 12;
+  string config    = 10;
+  bool   based     = 11;
+}
+
+message ConfirmDefaultProjectConfigRequest { string project_id = 1; }
+message ConfirmDefaultProjectConfigResponse {}
+
+message GetLatestAppVersionRequest {
+  int32 app_code = 1; // 这个 code 在 app 中是 string 类型
+}
+
+message GetLatestAppVersionResponse {
+  int64  version_number = 1;
+  string version_name   = 2;
+  string change_log     = 3;
+  string download_url   = 4;
+}
+
+message GetProjectInfoRequest {
+  string code = 1;
+  string id   = 2;
+}
+
+enum ProjectReportState {
+  UnSet      = 0;
+  Finished   = 1; // 已完成
+  Unfinished = 2; // 未完成
+}
+message ProjectReportEntity {
+  string             id          = 1;
+  string             created_at  = 2;
+  string             updated_at  = 3;
+  string             creator     = 4;
+  string             updater     = 5;
+  string             project_id  = 6;
+  string             user_id     = 7;
+  string             body        = 8;
+  bool               finished    = 9;
+  string             name        = 10; // 报告名称
+  int64              start_time  = 11;
+  int64              end_time    = 12;
+  float              score       = 13; // 报告评分
+  string             evaluate    = 14; // 报告评价
+  string             reporter    = 15; // 报告人
+  string             report_time = 16; // 报告完成时间
+  ProjectReportState state       = 17; // 报告状态
+}
+
+message GetProjectReportsRequest {
+  shared.v1.PageOptions page_options = 1;
+  string                project_id   = 2;
+}
+message GetProjectReportsResponse {
+  repeated ProjectReportEntity project_report_entities = 1;
+  int64                        total                   = 2;
+}
+
+message ControlScreen {
+  string          name             = 1;
+  string          model            = 2; // 控制屏型号
+  repeated string serial_addresses = 3; // 串口地址，支持多个，非必填
+  float           screen_size      = 4; // 屏幕尺寸
+  string          supplier         = 5; // 供应商
+  string          code             = 6;
+}
+
+enum VipStatus {
+  VIP_STATUS_UNKNOWN   = 0;
+  VIP_STATUS_NONE      = 1;
+  VIP_STATUS_EFFECTIVE = 2;
+  VIP_STATUS_EXPIRED   = 3;
+}
+message GetProjectInfoResponse {
+  string        id                        = 1;
+  string        name                      = 6;
+  string        code                      = 7;
+  string        number                    = 8;
+  int32         warranty                  = 9;
+  string        app_category_code         = 11;
+  string        app_category_name         = 12;
+  string        app_code                  = 13;
+  string        app_name                  = 14;
+  string        customer_name             = 15;
+  string        customer_phone            = 16;
+  string        customer_region           = 20;
+  string        customer_address          = 21;
+  string        distributor_id            = 17;
+  string        distributor_code          = 26;
+  string        distributor_name          = 18;
+  string        distributor_mobile        = 22;
+  string        distributor_service_phone = 25;
+  string        distributor_logo          = 19;
+  int64         delivery_time             = 23;
+  string        distributor_abbreviation  = 24;
+  float         building_area             = 27;
+  string        building_type             = 28;
+  string        energy_level              = 29;
+  string        level                     = 30;
+  ControlScreen control_screen            = 31;
+  bool          is_system_locked          = 32;
+  bool          is_alarm_enabled          = 33;
+  int32         status                    = 34;
+  int64         warranty_start_time       = 35;
+  int64         warranty_expired_at       = 36;
+  string        vip_level                 = 37;
+  int64         vip_level_expired_at      = 38;
+  VipStatus     vip_status                = 39;
+}
+
+message DeliveryProjectRequest { string project_id = 1; }
+
+message AcceptanceProjectRequest { string project_id = 1; }
+
+message GetAcceptanceReportUploadUrlRequest {
+  string project_id   = 1;
+  string content_type = 2;
+  string file_ext     = 3;
+}
+message GetAcceptanceReportUploadUrlResponse { string url = 1; }
+
+message CreateSanHengProjectRequest {
+  string name              = 1;  // 项目名称
+  int32  warranty          = 2;  // 保修期，单位：月
+  string number            = 3;  // 项目号（经销商自定义）
+  int32  app_category_code = 4;  // 应用类别 code
+  int32  app_code          = 5;  // 应用 code
+  string customer_region   = 12; // 客户所在地区，格式为："320000/320500"
+  string customer_address  = 13; // 客户详细地址
+  string customer_name     = 6;  // 客户
+  string customer_phone    = 7;
+  string distributor_code  = 8;  // 经销商 code
+  string remark            = 9;  // 备注
+  bool   large_screen      = 10; // 是否大屏
+  float  building_area     = 11; // 建筑面积
+  string building_type     = 14; // 建筑类型
+  string energy_level      = 15; // 节能等级
+  string screen_code       = 16; // 控制屏编码
+  string project_level     = 17; // 项目等级
+}
+message CreateSanHengProjectResponse {
+  string project_id   = 1;
+  string project_code = 2;
+}
+
+message UpdateSanHengProjectRequest {
+  string project_id       = 1;
+  string customer_region  = 12;
+  string customer_address = 13;
+  string customer_name    = 6;
+  bool   large_screen     = 10;
+  float  building_area    = 11;
+  string building_type    = 14;
+  string energy_level     = 15;
+  string level            = 2;
+  string customer_phone   = 3;
+}
+
+message UpdateSanHengProjectConfigRequest {
+  string project_id  = 1;
+  string config_name = 2;
+  bool   based       = 3; // 是否有地下
+  string config_body = 4; // 配置体，对象的 json 序列化
+}
+
+message GetHouseLayoutRequest { string project_id = 1; }
+message GetHouseLayoutResponse { string body = 1; }
+
+message GetDistributorInfoRequest {
+  int32  distributor_code = 1;
+  string distributor_id   = 2;
+}
+message GetDistributorInfoResponse {
+  string          id                       = 1;
+  string          name                     = 2;
+  string          phone                    = 3;
+  string          service_phone            = 15;
+  string          address                  = 4;
+  string          remark                   = 5;
+  string          region                   = 6;
+  bool            large_screen             = 7;
+  string          logo                     = 8;
+  string          logoUrl                  = 14; // 用户请求时，服务通过oss获取
+  bool            enabled                  = 9;
+
+  repeated int32  ac_brand_codes           = 10;
+  repeated int32  ahm_brand_codes          = 11;
+  repeated int32  ctrl_unit_codes          = 18;
+  repeated int32  app_codes                = 12;
+
+  string          code                     = 13; // 经销商代码
+
+  string          control_screen_start_url = 16; // 控制屏启动界面图片的URL
+  string          theme_code               = 17; // 主题代码
+
+  repeated string auth_regions             = 19; // 授权区域列表
+}
+
+message CreateDeviceAlarmRequest { DeviceAlarm deviceAlarm = 1; }
+message CreateDeviceAlarmResponse { string id = 1; }
+
+message StopDeviceAlarmRequest {
+  string id        = 1;
+  uint64 timestamp = 2;
+}
+
+message StopDeviceAlarmByProjectAndContentCodeRequest {
+  string project_id   = 1;
+  int32  content_code = 2;
+  string device_info  = 3;
+  uint64 timestamp    = 4;
+}
+
+// DeviceAlarmStatus 控制屏报警处理状态：1 未处理、2 处理中、3 已处理
+enum DeviceAlarmStatus {
+  Unknown   = 0;
+  Unhandled = 1;
+  Handling  = 2;
+  Handled   = 3;
+}
+
+// DeviceAlarm 设备报警
+message DeviceAlarm {
+  string            id                  = 1;
+  DeviceAlarmStatus status              = 2;
+  string            project_id          = 3;
+  int64             timestamp           = 4; // 这个时间戳必须为 unix timestamp 精确到毫秒
+  string            device_info         = 5;
+  int32             level               = 6;
+  string            content             = 7;
+  string            error_code          = 8;
+  string            remark              = 13; // 处理中设定的备注
+  string            log                 = 14; // 处理后设定的处理日志
+  uint64            end_timestamp       = 15; // 报警结束时间
+  string            equipment_type      = 16; // 设备类型 device_category_code
+  string            equipment_type_name = 17; // 设备名称 device_category_name
+  string            model               = 18; // 设备型号 device_model_model
+  int32             content_code        = 19;
+  string            device_name         = 20;
+  int32             device_addr         = 21;
+}
+message DeviceAlarmEntity {
+  string            id                  = 1;
+  string            created_at          = 2;
+  string            updated_at          = 3;
+  string            creator             = 4;
+  string            updater             = 5;
+  DeviceAlarmStatus status              = 6;
+  string            project_id          = 7;
+  int64             timestamp           = 8;
+  string            device_info         = 9;
+  int32             level               = 10;
+  string            content             = 11;
+  string            error_code          = 12;
+  string            remark              = 13;
+  string            log                 = 14;
+  uint64            end_timestamp       = 15; // 报警结束时间
+  string            equipment_type      = 16; // 设备类型 device_category_code
+  string            equipment_type_name = 17; // 设备名称 device_category_name
+  string            model               = 18; // 设备型号 device_model_model
+}
+
+// DeviceRemoteLog 设备远程日志查看记录
+message DeviceRemoteLog {
+  string project_id = 1;
+  string user_id    = 2;
+  string body       = 3;
+  bool   finished   = 4;
+  string filename   = 5;
+}
+message DeviceRemoteLogEntity {
+  string id         = 1;
+  string created_at = 2;
+  string updated_at = 3;
+  string creator    = 4;
+  string updater    = 5;
+  string project_id = 6;
+  string user_id    = 7;
+  string body       = 8;
+  bool   finished   = 9;
+  string filename   = 10;
+}
+
+message GetDeviceRemoteLogUploadUrlRequest {
+  string id           = 1;
+  string content_type = 2;
+  string filename     = 3;
+}
+message GetDeviceRemoteLogUploadUrlResponse { string url = 1; }
+message GetDeviceRemoteLogDownloadUrlRequest {
+  string id           = 1;
+  string content_type = 2;
+}
+message GetDeviceRemoteLogDownloadUrlResponse { string url = 1; }
+message RemoveDeviceRemoteLogFromOSSRequest { string id = 1; }
+message RemoveDeviceRemoteLogFromOSSResponse {}
+
+/// 控制屏控制参数
+
+// CtrlModeItem 控制屏模式选项
+// deprecated
+message CtrlModeItem {
+  int32  mode      = 1; // 模式值
+  string mode_desc = 2; // 模式描述
+  bool   enabled   = 3; // 是否启用该模式选项
+}
+// deprecated
+message CtrlMode { repeated CtrlModeItem mode_list = 1; }
+// deprecated
+message CtrlModeEntity {
+  string                id         = 1;
+  string                created_at = 2;
+  string                updated_at = 3;
+  string                creator    = 4;
+  string                updater    = 5;
+  repeated CtrlModeItem mode_list  = 6;
+}
+
+// 保存控制屏模式选项
+// deprecated
+message SaveCtrlModeItemRequest {
+  int32  mode      = 1;
+  string mode_desc = 2;
+  bool   enabled   = 3;
+}
+// deprecated
+message SaveCtrlModeItemResponse { CtrlModeEntity ctrl_mode_entity = 1; }
+
+// 查询控制屏模式信息
+// deprecated
+message GetCtrlModeRequest {}
+// deprecated
+message GetCtrlModeResponse { CtrlModeEntity ctrl_mode_entity = 1; }
+
+// 更新控制屏模式选项信息(根据 `mode` 值，可以修改控制模式的描述信息)
+// deprecated
+message UpdateCtrlModeItemRequest {
+  int32  mode      = 1;
+  string mode_desc = 2;
+  bool   enabled   = 3;
+}
+// deprecated
+message UpdateCtrlModeItemResponse { CtrlModeEntity ctrl_mode_entity = 1; }
+
+// 删除控制屏模式选项信息(根据 `mode` 值，可以删除控制模式的选项信息)
+// deprecated
+message RemoveCtrlModeItemRequest { int32 mode = 1; }
+// deprecated
+message RemoveCtrlModeItemResponse { CtrlModeEntity ctrl_mode_entity = 1; }
+
+// CtrlType 控制屏控制类型
+enum CtrlType {
+  Mode     = 0; // 控制屏模式
+  Home     = 1; // 控制屏在家离家控制
+  RoomName = 2; // 控制屏修改房间名称
+  RoomTemp = 3; // 控制屏房间温度控制
+}
+
+// CtrlBody 控制屏控制参数
+message CtrlBody {
+  CtrlType ctrl_type        = 1;
+
+  int32    target_mode      = 2; // 目标模式
+  string   target_mode_desc = 3; // 描述
+
+  bool     at_home          = 4; // 是否在家
+
+  string   room_id          = 5; // 房间ID
+  string   room_name        = 6; // 房间名称
+  int32    room_temp_mode   = 7; // 房间温度模式
+  float    target_temp      = 8; // 房间目标温度
+}
+
+/// 控制屏模式控制
+
+message CtrlModeRequest {
+  string project_id       = 1;
+  int32  target_mode      = 2;
+  string target_mode_desc = 3;
+}
+
+/// 控制屏在家离家控制
+
+message CtrlHomeRequest {
+  string project_id = 1;
+  bool   at_home    = 2; // 是否在家
+}
+
+/// 控制屏修改房间名称
+
+message CtrlModifyRoomNameRequest {
+  string project_id = 1;
+  string room_id    = 2;
+  string room_name  = 3;
+}
+
+/// 控制屏进行房间温度控制
+
+message CtrlRoomTemperatureRequest {
+  string project_id     = 1;
+  string room_id        = 2;
+  int32  room_temp_mode = 3;
+  float  target_temp    = 4;
+}
+
+/// 给控制屏图文通知的 CtrlMessage 中 body的定义
+message NoticeCtrlMessageBody {
+  string content   = 1; // 内容
+  int32  type      = 2; // 内容类型: 1 为 plain, 2 为 html
+  string notice_id = 3; // 通知信息ID，仅用于控制端订阅通知
+  string title     = 4; // 标题
+}
+
+/// 设置应用版本号
+message SetAppVersionRequest {
+  string project_id = 1;
+  string version    = 3;
+}
+
+/// 设置项目当前模式
+message SetProjectModeRequest {
+  string project_id = 1;
+  int32  mode       = 2;
+  string mode_desc  = 3;
+}
+
+/// 设置项目滤网寿命
+message SetProjectFilterLifeRequest {
+  message Data {
+    int64  filter_id = 1;
+    int32  life      = 2;
+    string name      = 3;
+    int32  type      = 4;
+  }
+  string        project_id = 1;
+  repeated Data lifes      = 2;
+}
+
+message SetProjectDataPointTotalRequest {
+  string project_id       = 1;
+  int32  data_point_total = 2;
+}
+
+// 上传运行提示
+message CreateRunningTipRequest {
+  string project_id = 1;
+  string content    = 2;
+  int64  timestamp  = 3;
+}
+
+message CalendarItem {
+  string          name       = 1;
+  string          code       = 2;
+  string          start_date = 3;
+  string          end_date   = 4;
+  string          remark     = 5;
+  repeated string comp_days  = 6;
+}
+message GetCalendarRequest {}
+message GetCalendarResponse { repeated CalendarItem entities = 1; }
+
+message SetProjectMonthlyScoreRequest {
+  string project_id = 1;
+  float  score      = 2;
+  int32  year       = 3;
+  int32  month      = 4;
+}
+
+message GetLatestFirmwareRequest {
+  int32  category_code = 1;
+  string model_code    = 2;
+}
+message GetLatestFirmwareResponse {
+  int64  version_number = 1;
+  string version_name   = 2;
+  string change_log     = 3;
+  string download_url   = 4;
+}
+
+/// ===========================================================
+/// 所有透传的body信息结构体定义
+/// 这些定义，服务端不需要感知
+
+message RemoteLogQuery {
+  uint32 value = 1;
+  string order = 2;
+}
+
+message DeviceDataGetQuery { string device_id = 1; }
+
+message DeviceDataGetReply {
+  message Data {
+    string title = 1;
+    int32  type  = 2;
+    string value = 3;
+  }
+  string        equipment_name = 1;
+  int64         equipment_id   = 2;
+  repeated Data data           = 3;
+}
+
+message DeviceDataSetQuery {
+  message Data {
+    string title = 1;
+    int32  type  = 2;
+    string value = 3;
+  }
+  int32         equipment_id = 2;
+  repeated Data data         = 3;
+}
+
+message DeviceDataSetReply { bool success = 1; }
+
+/*
+  参数设置相关
+  DeviceParameterGet
+  HydraulicSystemGet
+  AirSystemGet
+
+  SystemParameterGet 无参数，所以不必有类型
+
+  DeviceParameterSet
+  SystemParameterSet
+  HydraulicSystemSet
+  AirSystemSet
+  均使用 `ParameterSetQuery`
+ */
+message ParameterGetQuery { string device_id = 1; }
+
+message ParameterQueryReply {
+  message Data {
+    string          name          = 1;
+    double          value         = 2;
+    double          dValue        = 3;
+    int32           type          = 4;
+    repeated string name_array    = 5;
+    double          min           = 6;
+    double          max           = 7;
+    string          btn_name      = 8;
+    string          describe      = 9;
+    int32           modify_method = 10;
+  }
+  string        equipment_name = 1;
+  int64         equipment_id   = 2;
+  repeated Data data           = 3;
+}
+
+message ParameterSetQuery {
+  message Data {
+    string name  = 1;
+    double value = 2;
+    int32  type  = 4;
+  }
+  int64         equipment_id = 2;
+  repeated Data data         = 3;
+}
+
+message ParameterSetReply { bool success = 1; }
+
+// 数据过滤
+message DeviceDataFilterQuery {
+  string device_id = 1;
+  string name      = 2;
+  string operator = 3;
+  string param = 4;
+}
+message DeviceDataFilterQueryReply {
+  message DeviceDataFilterData {
+    message DeviceDataFilterDataItem {
+      string title = 1;
+      int32  type  = 2;
+      string value = 3;
+    }
+    repeated DeviceDataFilterDataItem data     = 1;
+    int64                             date     = 2;
+    bool                              is_match = 3;
+  }
+  repeated DeviceDataFilterData data_list      = 1;
+  string                        device_name    = 2;
+  int64                         end_time       = 4;
+  int64                         equipment_id   = 5;
+  string                        parameter_name = 7;
+  string                        record_id      = 8;
+  string                        request_id     = 9;
+  string                        serial_port    = 10;
+  int64                         start_time     = 11;
+  int64                         submit_date    = 12;
+  string                        condition      = 14;
+  string                        operator = 15;
+}
+
+// 参数监测
+message DeviceParamTestQuery {
+  repeated string device_id = 1;
+  string          code      = 2; // 参数监测用例的code
+  repeated string params    = 3; // 参数
+}
+message DeviceParamTestQueryReply {
+  message DeviceData {
+    message Data {
+      message DataItem {
+        string title = 1;
+        int32  type  = 2;
+        string value = 3;
+      }
+      repeated DataItem data     = 1;
+      int64             date     = 2;
+      bool              is_match = 3;
+    }
+    repeated Data data_list   = 1;
+    string        device_name = 2;
+    string        serial_port = 3;
+    string        condition   = 4;
+    string        operator = 5;
+    string        parameter_name = 6;
+    int64         equipment_id   = 7;
+
+    // 供控制屏使用的冗余字段
+    bool          is_uploaded    = 8;
+  }
+  int64               start_time  = 1;
+  int64               end_time    = 2;
+  string              record_id   = 3;
+  string              request_id  = 4;
+  int64               submit_date = 5;
+  repeated DeviceData device_data = 6;
+
+  // 供控制屏使用的冗余字段
+  repeated string     device_id   = 7;
+  string              code        = 8; // 参数监测用例的code
+  repeated string     params      = 9; // 参数
+}
+
+// 数据按时长采集
+message DeviceDataCollectionQuery {
+  string device_id = 1;
+  string name      = 2;
+  uint32 hour      = 3;
+  uint32 minute    = 4;
+}
+message DeviceDataCollectionQueryReply {
+  message DeviceDataCollectionData {
+    int64  date  = 1;
+    string value = 2;
+  }
+  repeated DeviceDataCollectionData data_list       = 1;
+  string                            device_name     = 2;
+  int64                             duration        = 3;
+  int64                             end_time        = 4;
+  int64                             equipment_id    = 5;
+  int32                             interval_time   = 6;
+  string                            parameter_name  = 7;
+  string                            record_id       = 8;
+  string                            request_id      = 9;
+  string                            serial_port     = 10;
+  int64                             start_time      = 11;
+  int64                             submit_date     = 12;
+  bool                              value_is_string = 13;
+}
+
+// 试运行数据采集
+message PilotDataCollectionQuery {
+  message Device {
+    string          device_id = 1;
+    string          name      = 2;
+    uint32          hour      = 3;
+    uint32          minute    = 4;
+    uint32          interval  = 5;
+    repeated string params    = 6;
+  }
+  repeated Device devices = 1;
+}
+
+message PilotDataCollectionQueryReply {
+  message DeviceData {
+    message ParamData {
+      string name            = 1;
+      int64  date            = 2;
+      string value           = 3;
+      bool   value_is_string = 4;
+    }
+    int64              device_id     = 1;
+    string             device_name   = 2;
+    int64              start_time    = 3;
+    int64              end_time      = 4;
+    int64              duration      = 5;
+    int32              interval_time = 6;
+    int64              submit_date   = 7;
+    string             serial_port   = 8;
+    repeated ParamData param_data    = 9;
+    repeated string    params        = 10;
+    string             record_id     = 11; // 仅供控制屏存储数据时使用
+    string             request_id    = 12; // 仅供控制屏存储数据时使用
+  }
+  repeated DeviceData data_list  = 1;
+  string              record_id  = 8;
+  string              request_id = 9;
+}
+
+// 滤网数据查询
+message StrainerDataGetQuery { string device_id = 1; }
+
+message StrainerDataGetReply {
+  message Data {
+    string title = 1;
+    int32  type  = 2;
+    string value = 3;
+  }
+  string        equipment_name = 1;
+  int64         equipment_id   = 2;
+  repeated Data data           = 3;
+}
+
+// 在线设备 ID 列表查询
+message OnlineDeviceListQuery { string project_id = 1; }
+message OnlineDeviceListReply { repeated string ids = 1; }
+
+// 其他数据查询
+message OtherDeviceDataQuery {}
+message OtherDeviceDataReply {
+  message Data {
+    string title = 1;
+    int32  type  = 2;
+    string value = 3;
+  }
+  repeated Data data = 1;
+}
+
+// 项目报告申请
+message ProjectReportQuery {
+  string project_id = 1;
+  int64  start_time = 2;
+  int64  end_time   = 3;
+}
+
+message ProjectReportQueryReply {
+  float                   total_score       = 1;
+  Sensor                  sensor            = 2;
+  Room                    room              = 3;
+  repeated EnergyStat     build_energy      = 4; // 建筑能效
+  OutdoorData             outdoor_data      = 5; // 室外数据
+
+  repeated CommRuntime    air_con_runtime   = 6;  // 空调运行状态
+  repeated AirProcRuntime air_proc_runtime  = 7;  // 空气处理机运行状态
+  repeated CommRuntime    mix_water_runtime = 8;  // 混水机运行状态
+  repeated CommRuntime    room_runtime      = 9;  // 房间运行状态
+  float                   trouble_per       = 10; // 故障指数
+  repeated ModeRatioDto   mode_ratio        = 11; // 模式占比
+  int64                   runtime           = 12; // 运行时长
+  int32                   total_rooms       = 13; // 房间总数
+  int32                   rated_rooms       = 14; // 评分房间数
+
+  message                 ModeRatioDto {
+    int32  mode  = 1;
+    float  value = 2;
+    string name  = 3;
+  }
+
+  message Sensor {
+    float            co2_score  = 1; // CO2评分
+    float            pm25_score = 2; // PM2.5评分
+
+    // 索引对应关系如下：0->优佳，1->良好，2->正常，3->略高，4->极高
+    repeated float   co2_per    = 3; // CO2占比
+    repeated float   pm25_per   = 4; // PM2.5占比
+
+    repeated Details details    = 5;
+
+    message          Details {
+      int64         id    = 1;
+      string        name  = 2; // 名称
+      repeated Data datum = 3;
+
+      message       Data {
+        int64 date_day = 1; // 日期毫秒值
+        int32 avg_co2  = 2; // 平均CO2
+        int32 avg_pm25 = 3; // 平均PM2.5
+      }
+    }
+  }
+
+  message OutdoorData {
+    float min_temperature = 1;
+    float max_temperature = 2;
+    float avg_temperature = 3;
+    float min_dew_point   = 4;
+    float max_dew_point   = 5;
+    float avg_dew_point   = 6;
+  }
+
+  message CommRuntime {
+    string name        = 1; // 名称
+    int64  runtime     = 2; // 运行时间(开机时间)
+    float  power_ratio = 3; // 开机比例
+  }
+
+  message AirProcRuntime {
+    string name              = 1; // 名称
+    int64  runtime           = 2; // 运行时间(开机时间)
+    float  power_ratio       = 3; // 开机比例
+    float  compressor_ratio  = 4; // 压缩机开机比例
+    float  compressor_freq   = 5; // 压缩机平均频率hz
+    float  water_valve_ratio = 6; // 水阀比例
+    string strainer_time     = 7; // 滤网更换时间
+  }
+
+  message RuntimeStat {
+    int64 runtime           = 1; // 运行时间(开机时间)
+    float power_ratio       = 2; // 开机比例
+    float compressor_ratio  = 3; // 压缩机开机比例
+    float compressor_freq   = 4; // 压缩机评价频率hz
+    float water_valve_ratio = 5; // 水阀比例
+  }
+
+  message Room {
+    float            total_score = 1; // 总分
+    float            a_per       = 2; // A级得分占比
+    float            b_per       = 3; // B级得分占比
+    float            c_per       = 4; // C级得分占比
+    float            d_per       = 5; // D级得分占比
+    repeated Details details     = 6;
+
+    message          Details {
+      int64         id          = 1;
+      string        name        = 2; // 名称
+      repeated Data datum       = 3; // 温湿度数据
+      string        time_period = 4; // 时间段
+      float         score       = 5; // 评分
+
+      message       Data {
+        int64  date_day          = 1; // 日期毫秒值
+        string valuation_des     = 2; // 评价汉字描述
+        float  temp_deviation    = 3; // 温度偏差
+        float  dew_hum_deviation = 4; // 湿度偏差
+      }
+    }
+  }
+
+  message EnergyStat {
+    int64                 device_id   = 1; // 设备ID
+    string                energy_name = 2; // 能效组合名称
+    string                unit        = 3; // 单位
+    float                 total_usage = 4; // 总量
+    float                 avg_usage   = 5; // 平均量
+    repeated EnergyDayDto day_list    = 6; // 每天的用量
+
+    message               EnergyDayDto {
+      int64 date  = 1;
+      float value = 2;
+    }
+  }
+}
+
+message GetWeatherByCityCodeRequest { string city_code = 1; }
+
+message GetWeatherByCityCodeResponse { weather.v1.ShowAPIResBody weather = 1; }
+
+// 房间数据查询
+message RoomDataGetQuery { string device_id = 1; }
+message RoomDataGetReply {
+  message Data {
+    string name               = 1;  // 房间名称
+    float  currentTemperature = 2;  // 当前温度
+    float  currentHumidity    = 3;  // 当前湿度
+    float  floorTemperature   = 4;  // 地面温度
+    float  setTemperature     = 5;  // 设定温度
+    string ceilingValve       = 6;  // 顶阀
+    string floorValve         = 7;  // 地阀
+    string dewPointProtection = 8;  // 露点保护
+    string communicationFault = 9;  // 通讯故障
+    string sensorFault        = 10; // 传感器故障
+    string fanSpeed           = 11; // 风盘风速
+    string panelSwitch        = 12; // 面板开关
+    string id                 = 13;
+  }
+  repeated Data data = 3;
+}
+
+message RoomStatusGetQuery { string device_id = 1; }
+message RoomStatusGetReply {
+  message IndoorData {
+    float temperature = 1;
+    float humidity    = 2;
+    int32 pm25        = 3;
+    int32 co2         = 4;
+  }
+  message OutdoorData {
+    float temperature = 1;
+    float humidity    = 2;
+    int32 pm25        = 3;
+  }
+  message RoomData {
+    string id          = 1;
+    string name        = 2;
+    bool   status      = 3;
+    float  temperature = 4;
+    float  humidity    = 5;
+  }
+  message Temperature {
+    string time  = 1;
+    float  value = 2;
+    string type  = 3;
+  }
+  message Energy {
+    message Data {
+      string time   = 1;
+      float  energy = 2;
+    }
+    string        id   = 1;
+    string        name = 2;
+    repeated Data data = 3;
+  }
+  IndoorData           indoor_data  = 1;
+  OutdoorData          outdoor_data = 2;
+  repeated RoomData    rooms        = 3;
+  repeated Temperature temperature  = 4;
+  repeated Energy      energy       = 5;
+}
+
+message RoomStatusSetQuery {
+  repeated string ids    = 1;
+  bool            status = 2;
+}
+message RoomStatusSetReply { bool success = 1; }
+
+message VipServiceEntity {
+  string id         = 1;
+  string created_at = 2;
+  string updated_at = 3;
+  string creator    = 4;
+  string updater    = 5;
+  string name       = 6;
+  int32  level      = 7;
+  string code       = 8;
+  string remark     = 9;
+}
+message GetVipServiceByLvRequest { string level = 1; }
+message GetVipServiceByLvResponse {
+  repeated VipServiceEntity entities = 1;
+  VipLevelEntity            level    = 2;
+}
+
+message VipLevelEntity {
+  string          id             = 1;
+  string          created_at     = 2;
+  string          updated_at     = 3;
+  string          creator        = 4;
+  string          updater        = 5;
+  string          name           = 6;
+  int32           level          = 7;
+  repeated string services       = 8;
+  string          remark         = 9;
+  string          distributor_id = 10;
+}
+
+message GetVipLevelsRequest {
+  shared.v1.PageOptions page_options   = 1;
+  string                name           = 2;
+  int32                 level          = 3;
+  string                distributor_id = 4;
+  bool                  is_internal    = 5;
+}
+message GetVipLevelsResponse {
+  repeated VipLevelEntity entities = 1;
+  int64                   total    = 2;
+}
+
+message GetAuthProductsRequest { string distributor_id = 1; }
+
+message AuthProducts {
+  string category_code = 1;
+  string brand_code    = 2;
+  string brand_name    = 3;
+  string model_name    = 4;
+}
+
+message GetAuthProductsResponse { repeated AuthProducts products = 1; }
+
+message EnergyDtoQuery {}
+
+message EnergyDtoQueryReply {
+  message Data {
+    int64          device_id   = 1;
+    string         device_name = 2;
+    string         data_unit   = 3;
+    repeated float datahour    = 4;
+    repeated float dataDay     = 5;
+    repeated float dataMonth   = 6;
+    repeated float dataYear    = 7;
+  }
+  repeated Data data_list = 3;
+}
+
+message AmmeterDataQuery {}
+
+message AmmeterDataQueryReply {
+  message Data {
+    int64          device_id   = 1;
+    string         device_name = 2;
+    string         data_unit   = 3;
+    repeated float datahour    = 4;
+    repeated float dataDay     = 5;
+    repeated float dataMonth   = 6;
+    repeated float dataYear    = 7;
+  }
+  repeated Data data_list = 3;
+}
+
+message FirmwareUpgradeSendQuery {
+  int64  device_id = 1;
+  string url       = 2;
+}
+message FirmwareUpgradeSendReply { bool success = 1; }
+
+message ScreenUpgradeSendQuery {}
+message ScreenUpgradeSendReply {
+  bool   success = 1;
+  string message = 2;
+}
+
+message SystemMode {
+  message Mode {
+    int32  mode = 1;
+    string name = 2;
+  }
+  string        ac_mode_name      = 1;
+  string        ap_mode_name      = 2;
+  int32         current_mode      = 3;
+  string        current_mode_name = 4;
+  bool          is_at_home        = 5;
+  repeated Mode mode              = 6;
+  int32         scene_mode        = 7;
+}
+message SystemModeGetQuery {}
+message SystemModeGetReply { SystemMode mode = 1; }
+
+message SystemModeSetQuery { int32 mode = 1; }
+message SystemModeSetReply {
+  bool   success = 1;
+  string msg     = 2;
+}
+
+message SystemIsAtHomeSetQuery { bool is_at_home = 1; }
+message SystemIsAtHomeSetReply {
+  bool   success = 1;
+  string msg     = 2;
+}
+
+message SystemSceneModeSetQuery { int32 scene_mode = 1; }
+message SystemSceneModeSetReply {
+  bool   success = 1;
+  string msg     = 2;
+}
+
+message TPFloorRoomGetQuery {}
+message TPFloorRoomGetReply {
+  message Floor {
+    int32         index = 1;
+    int64         id    = 2;
+    string        name  = 3;
+    repeated Room rooms = 4;
+  }
+
+  message Room {
+    int64  id           = 1;
+    string name         = 2;
+    int32  address      = 3;
+    bool   is_connected = 4; // 是否连接
+  }
+  repeated Floor floors = 1;
+}
+
+message TPRoomStatusGetQuery { repeated int64 ids = 1; }
+message TPRoomStatusGetReply {
+  message WorkModeData {
+    string option_name = 1; // 末端的名称
+    int32  type        = 2; // 末端类型值，风盘为0，顶辐射为1，地暖为2，地冷为3，全空气为4
+    bool   is_selected = 3; // 是否被选中,选择才生效，如只选中地暖，该房间只有地暖工作，其他风盘、顶辐射末端将关闭
+    bool   is_change   = 4; // 该末端是否支持关闭，目前进全空气末端不允许关闭
+  }
+  message RoomDetails {
+    int64  id                    = 1;  // 房间ID
+    string name                  = 2;  // 房间名称
+    float  temperature           = 3;  // 房间温度
+    float  humidity              = 4;  // 房间湿度
+    float  dew_point             = 5;  // 房间露点
+    int32  status                = 6;  // 开关机状态
+    int32  cl_status             = 7;  // 童锁状态
+    int32  mode                  = 8;  // 房间模式 0制冷 1制热 2单通风
+    int32  work_status           = 9;  // 工作状态 当为1时表示房间未达标，需要工作，0时表示达标，不需要工作，末端会关闭
+    int32  wind_level            = 10; // 当前风机档位，100时为自动风速
+    float  temperature_set       = 11; // 设定温度 -1代表无设定温度，例如通风模式
+    int32  energy_mode           = 12; // 节能模式 1为节能，处于节能模式时，温度不可设定
+    int32  wind_plate_status     = 13; // 风盘状态
+    int32  floor_output_status   = 14; // 地面输出状态（地冷暖开关）
+    int32  ceiling_output_status = 15; // 顶面输出状态（顶辐射开关）
+    int32  min_temperature_set   = 16; // 设定温度最小值(单通风模式为-1)
+    int32  max_temperature_set   = 17; // 设定温度最大值(单通风模式为-1)
+    repeated WorkModeData end_modes       = 18;
+    float                 eco_temperature = 19; // 节能温度，处于节能模式是，显示节能温度
+    int32 wind_level_count   = 20; // 风盘风量总级数，部分风速是3级风速，部分是5级风速，也存在10级，100级风速控制的
+    bool  is_auto_wind_level = 21; // 是否有自动风速，部分控制面板由自动风速，部分没有，跟该字段判断
+    bool  is_connected       = 22; // 是否连接
+  }
+  repeated RoomDetails rooms = 1;
+}
+
+message TPRoomTemperatureSetQuery {
+  int64 room_id     = 1;
+  float temperature = 2;
+}
+message TPRoomTemperatureSetReply {
+  bool   success = 1;
+  string msg     = 2;
+}
+
+message TPRoomEndSetQuery {
+  int64    room_id                                     = 1;
+  repeated TPRoomStatusGetReply.WorkModeData end_modes = 2;
+}
+message TPRoomEndSetReply {
+  bool   success = 1;
+  string msg     = 2;
+}
+
+message TPRoomECOSetQuery {
+  int64 room_id     = 1;
+  bool  energy_mode = 2;
+}
+message TPRoomECOSetReply {
+  bool   success = 1;
+  string msg     = 2;
+}
+
+message TPRoomChildLockSetQuery {
+  int64 room_id   = 1;
+  bool  cl_status = 2;
+}
+message TPRoomChildLockSetReply {
+  bool   success = 1;
+  string msg     = 2;
+}
+
+message TPRoomWindLevelSetQuery {
+  int64 room_id    = 1;
+  int32 wind_level = 2;
+}
+message TPRoomWindLevelSetReply {
+  bool   success = 1;
+  string msg     = 2;
+}
+
+message TPRoomStatusSetQuery {
+  int64 room_id = 1;
+  int32 status  = 2;
+}
+message TPRoomStatusSetReply {
+  bool   success = 1;
+  string msg     = 2;
+}
+
+message TPAirSensorGetQuery {}
+message TPAirSensorGetReply {
+  message AirSensorData {
+    // 空气传感器名称
+    string name         = 1;
+    // 空气传感器id
+    int64  id           = 2;
+    // 温度
+    float  temperature  = 3;
+    // 湿度
+    int32  humidity     = 4;
+    // pm2.5
+    int32  pm2_5        = 5;
+    // 二氧化碳
+    int32  co2          = 6;
+    // 露点温度
+    float  dew_point    = 7;
+    bool   is_connected = 8;
+  }
+  repeated AirSensorData data = 1;
+}
+
+message TPRoomPanelDataHourGetQuery {
+  int64 device_id  = 1;
+  int64 start_time = 2;
+  int64 end_time   = 3;
+}
+message TPRoomPanelDataHourGetReply {
+  message RoomPanelDataHour {
+    int64 id                = 1; // 设备ID
+    int64 date              = 2; // 日期(毫秒)
+    int32 hour              = 3; // 小时值
+    float temperature       = 4; // 空气温度，-100为无效数据
+    float floor_temperature = 5; // 地面温度，-100为无效数据
+    float humidity          = 6; // 湿度，-100为无效数据
+    float dew_point         = 7; // 露点，-100为无效数据
+    int32 co2               = 8; // 二氧化碳，-100为无效数据
+    int32 pm2_5             = 9; // pm2.5，-100为无效数据
+  }
+  repeated RoomPanelDataHour data = 1;
+}
+
+message TPAirSensorDataHourGetQuery {
+  int64 device_id  = 1;
+  int64 start_time = 2;
+  int64 end_time   = 3;
+}
+message TPAirSensorDataHourGetReply {
+  message AirSensorDataHour {
+    int64 id                = 1; // 设备ID
+    int64 date              = 2; // 日期(毫秒)
+    int32 hour              = 3; // 小时值
+    float temperature       = 4; // 空气温度，-100为无效数据
+    float floor_temperature = 5; // 地面温度，-100为无效数据
+    float humidity          = 6; // 湿度，-100为无效数据
+    float dew_point         = 7; // 露点，-100为无效数据
+    int32 co2               = 8; // 二氧化碳，-100为无效数据
+    int32 pm2_5             = 9; // pm2.5，-100为无效数据
+  }
+  repeated AirSensorDataHour data = 1;
+}
+
+message TPAmmeterDataGetQuery {}
+message TPAmmeterDataGetReply {
+  message AmmeterData {
+    int64  id           = 1;  // 设备ID
+    string name         = 2;  // 设备名称
+    float  voltage_a    = 3;  // A相电压
+    float  voltage_b    = 4;  // B相电压
+    float  voltage_c    = 5;  // C相电压
+    float  current_a    = 6;  // A相电流
+    float  current_b    = 7;  // B相电流
+    float  current_c    = 8;  // C相电流
+    float  power        = 9;  // 功率(KW)
+    float  power_factor = 10; // 功率因子
+    float  total_power  = 11; // 总功率
+    bool   is_connected = 12; // 是否连接
+  }
+  repeated AmmeterData data = 1;
+}
+
+message TPAmmeterStatisticGetQuery { int64 device_id = 1; }
+message TPAmmeterStatisticGetReply {
+  int64          device_id   = 1;
+  string         device_name = 2;
+  string         data_unit   = 3;
+  repeated float data_hour   = 4;
+  repeated float data_day    = 5;
+  repeated float data_month  = 6;
+  repeated float data_year   = 7;
+}
+
+message TPTroubleWarnGetQuery {}
+message TPTroubleWarnGetReply {
+  message TroubleWarn {
+    int64  id          = 1; // 故障ID
+    int64  date        = 2; // 故障开始时间
+    int64  end_date    = 3; // 故障结束时间
+    int64  device_id   = 4; // 设备ID
+    string type_name   = 5; // 设备类型名称
+    string model       = 6; // 设备型号
+    string device_name = 7; // 设备名称
+    string content     = 8; // 故障内容
+  }
+  repeated TroubleWarn data = 1;
+}
+
+message TPAirFilterGetQuery {}
+message TPAirFilterGetReply {
+  message AirFilterData {
+    int64  id                 = 1; // 空气滤网的ID
+    string name               = 2; // 空气滤网的名称
+    int64  modify_filter_time = 3; // 滤网更换时间（毫秒值）
+    int32  filter_lifespan    = 4; // 滤网剩余寿命(单位：天)
+  }
+  repeated AirFilterData data = 1;
+}
+
+// 重置滤网，当滤网更换后调用该接口，滤网寿命重新开始倒计时，需要传入AirFilter中id
+message TPAirFilterResetQuery { int64 device_id = 1; }
+message TPAirFilterResetReply {
+  bool   success = 1;
+  string msg     = 2;
+}
+
+message UnifiedCtrlSetQuery {
+  enum OperatingMode {
+    OPERATION_MODE_NONE                     = 0;   // 不变
+    OPERATION_MODE_SUMMER                   = 2;   // 夏季模式
+    OPERATION_MODE_WINTER                   = 3;   // 冬季模式
+    OPERATION_MODE_VENTILATION              = 4;   // 通风模式
+    OPERATION_MODE_DEHUMIDIFY               = 5;   // 除湿
+    OPERATION_MODE_FREE_COOLING             = 6;   // 免费制冷模式
+    OPERATION_MODE_HEATING_DEHUMIDIFY       = 8;   // 制热除湿模式
+    OPERATION_MODE_HEATING                  = 9;   // 供热模式
+    OPERATION_MODE_HEATING_HUMIDIFY         = 10;  // 供热加湿模式
+    OPERATION_MODE_HUMIDIFY                 = 11;  // 加湿模式
+    OPERATION_MODE_REFRIGERATION            = 12;  // 供冷模式
+    OPERATION_MODE_REFRIGERATION_HUMIDIFY   = 13;  // 供冷加湿模式
+    OPERATION_MODE_REFRIGERATION_DEHUMIDIFY = 14;  // 供冷除湿模式
+    OPERATION_MODE_REFRIGERATION_HEATING    = 15;  // 冷热过度模式
+    OPERATION_MODE_AUTO                     = 100; // 自动模式
+  }
+  int32         system_switch = 1; // 系统开关 - -1: 不变，1: 开启，0: 关闭
+  OperatingMode system_mode   = 2; // 运行模式
+  int32         room_switch   = 3; // 房间开关 - -1: 不变，1: 开启，0: 关闭
+  float         room_temp     = 4; // 房间温度 - -1: 不变，其他值为设定温度
+}
+message UnifiedCtrlSetReply {
+  bool   success = 1;
+  string msg     = 2;
+}
+
+message RoomTemperatureDataGetQuery {}
+message RoomTemperatureDataGetReply {
+  message RoomTemperatureData {
+    message WorkModeData {
+      string option_name = 1; // 末端的名称
+      int32  type        = 2; // 末端类型值，风盘为0，顶辐射为1，地暖为2，地冷为3，全空气为4
+      bool   is_selected = 3; // 是否被选中,选择才生效，如只选中地暖，该房间只有地暖工作，其他风盘、顶辐射末端将关闭
+      bool   is_change   = 4; // 该末端是否支持关闭，目前进全空气末端不允许关闭
+      int32 switch       = 5; // 开关 - 1为开启，0为关闭，-1为不变
+    }
+    int64  id                          = 1;  // 设备ID
+    string name                        = 2;  // 设备名称
+    float  temperature                 = 3;  // 室内温度
+    float  humidity                    = 4;  // 湿度
+    float  dew_point                   = 5;  // 露点
+    float  set_temp                    = 6;  // 设定温度
+    float  set_humi                    = 7;  // 设定湿度
+    int32  wind_speed                  = 8;  // 风速 - 数字即为风速档位，100为自动风速
+    int32  eco                         = 9;  // 节能模式 - 1为节能，0为标准
+    int32 switch                       = 13; // 开关 - 1为开启，0为关闭，-1为不变
+    int32                 mode         = 14; // 工作模式 - 0为制冷，1为制热，2为通风
+    repeated WorkModeData end_modes    = 15;
+    bool                  is_connected = 16; // 是否连接
+  }
+  repeated RoomTemperatureData data = 1;
+}
+
+message RoomTemperatureSetQuery {
+  int64 equipment_id = 1; // 设备ID
+  float temperature  = 2; // 温度
+  float humidity     = 3; // 湿度
+  int32 wind_speed   = 4; // 风速 - 数字即为风速档位，100为自动风速
+  int32 eco          = 8; // 节能模式 - 1为节能，0为标准
+  int32 switch       = 9; // 开关 - 1为开启，0为关闭，-1为不变
+                          // 房间末端至少选中一项，如果修改，需要将获取的完整信息传入
+  repeated RoomTemperatureDataGetReply.RoomTemperatureData.WorkModeData end_modes = 10;
+}
+message RoomTemperatureSetReply {
+  bool   success = 1;
+  string msg     = 2;
+}
+
+message FreshDehumidifierGetQuery {}
+message FreshDehumidifierGetReply {
+  message FreshDehumidifierData {
+    int64  id                  = 1;  // 设备ID
+    string name                = 2;  // 设备名称
+    float  supply_temp         = 3;  // 送风温度
+    float  return_temp         = 4;  // 回风温度
+    int32  wind_level          = 5;  // 风速档位
+    int32  wind_speed          = 6;  // 风机转速
+    int32  dehumidifier_status = 7;  // 压缩机状态
+    int32  dehumidifier_freq   = 8;  // 压缩机频率
+    int32  filter_life         = 9;  // 滤网寿命
+    int32  filter_life_p       = 10; // 滤网寿命百分比
+    int32  filter_running      = 11; // 滤网运行时间
+    string running_mode        = 12; // 运行模式
+    int64  running_time        = 13; // 运行时间
+    int32 switch               = 14; // 开关 - 1为开启，0为关闭
+    bool is_connected          = 15; // 是否连接
+  }
+  repeated FreshDehumidifierData data = 1;
+}
+
+message DeviceSummaryGetQuery {}
+message DeviceSummaryGetReply {
+  message DeviceSummaryData {
+    int64  device_id   = 1; // 设备ID
+    string device_name = 2; // 设备名称
+    string model       = 3; // 设备型号
+    string address     = 4; // 设备地址
+    int32  conn_status = 5; // 连接状态 - 0: 离线, 1: 在线，2: 异常
+  }
+  repeated DeviceSummaryData data = 1;
+}
+
+message RunningCtrlGetQuery { int64 device_id = 1; }
+message RunningCtrlGetReply {
+  int64  id           = 1; // 设备ID
+  string name         = 2; // 设备名称
+  int32  control_type = 3; // 当前控制类型 - 1: 露点控制, 0: 湿度控制，-1: 露点与湿度均不可控
+  float  dew_point    = 4; // 露点 - 值为 [-1] 时，前端显示为 [--]
+  float  humidity_set = 5; // 设定湿度 - 值为 [-1] 时，前端显示为 [--]
+  int32  wind_speed   = 6; // 设定风速 - 0: 低, 1: 高, 2: 自动
+  int32 switch        = 7; // 开关 - 1为开启，0为关闭，-1为不变
+  bool can_change     = 8; // 是否可以更改控制类型
+}
+
+message RunningCtrlSetQuery {
+  int64  id           = 1; // 设备ID
+  string name         = 2; // 设备名称
+  int32  control_type = 3; // 当前控制类型 - 1: 露点控制, 0: 湿度控制
+  float  dew_point    = 4; // 露点
+  float  humidity_set = 5; // 设定湿度
+  int32  wind_speed   = 6; // 设定风速
+  int32 switch        = 7; // 开关 - 1为开启，0为关闭，-1为不变
+}
+message RunningCtrlSetReply {
+  bool   success = 1;
+  string msg     = 2;
+}
+
+message ProjectRoomSwitchSetQuery {
+  int32 switch = 1; // 开关 - 1为开启，0为关闭，-1为不变
+}
+message ProjectRoomSwitchSetReply {
+  bool   success = 1;
+  string msg     = 2;
+}
