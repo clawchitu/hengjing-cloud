@@ -159,7 +159,7 @@ const defaultAccount = (): Account => {
 let accountSource: () => Account = defaultAccount
 /** 当前账号（只读，可在渲染期间调用） */
 export const currentAccount = (): Account => accountSource()
-const sameAccount = (a: Account, b: Account) => a.user === b.user && a.gen === b.gen
+export const sameAccount = (a: Account, b: Account) => a.user === b.user && a.gen === b.gen
 
 // ---------------------------------------------------------------------------
 // 配置（应用初始化时注入）
@@ -473,9 +473,6 @@ function readValid(ticket: ReadTicket, signal?: AbortSignal): boolean {
   if (e.sentAt !== undefined && Date.now() >= e.sentAt + ttlMs) return false
   return sameAccount(currentAccount(), ticket.account)
 }
-
-/** 这次读取现在还有效吗（只检查、不提交）：页面在把读数交给自己的结果判定之前用它作废失效的读取 */
-export function readStillValid(ticket: ReadTicket, signal?: AbortSignal): boolean { return readValid(ticket, signal) }
 
 /** token 仍持有这把锁（没放、没被换成别的锁） */
 export function holds(token: LockToken): boolean { return !!entryOf(token) }

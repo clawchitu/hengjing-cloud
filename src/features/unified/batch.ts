@@ -21,7 +21,7 @@ import { TEXT } from './constants'
 import { consoleLogger, type UnifiedLogger } from './log'
 import { createUnifiedController, isDone, outcomeOf, type UnifiedController, type UnifiedState } from './machine'
 import { changedFields, describeQuery, fieldResults, type EchoField, type UnifiedContext, type UnifiedDraft, type UnifiedEcho } from './rules'
-import { acquire, beginRead, claim, commitRead, holds, lockOf, markOverdue, markSent, OTHER_ACCOUNT_TEXT, readStillValid, requireVerify, settle, verify, type LockToken, type ReadTicket } from '@/api/writeLock'
+import { acquire, beginRead, claim, commitRead, currentAccount, holds, lockOf, markOverdue, markSent, OTHER_ACCOUNT_TEXT, requireVerify, sameAccount, settle, verify, type LockToken } from '@/api/writeLock'
 import { LOCK_BUSY_TEXT, lockTargetOf, recordOf } from './lock'
 
 /** 页面传进来的项目（S6a 的 Project 直接可用） */
@@ -152,9 +152,9 @@ export const DEADLINE_NOT_SENT = '超过 35 秒截止时间，未下发（超时
 export const DEADLINE_UNKNOWN = '已下发，结果未知：超过 35 秒截止时间仍未收到应答，请刷新查看；未自动重试'
 export const DEADLINE_REPLIED_OK = '已下发，结果未知：下发后回读在 35 秒截止前未完成，请稍后刷新确认；未自动重试'
 export const DEADLINE_REPLIED_FAIL = '控制屏明确拒绝（未自动重试）；下发后回读在 35 秒截止前未完成'
-/** 下发前读到房间全部关着，这次又要设温度（且没同时开房间）：不发（后端答复⑦） */
 /** 下发后回读途中登录账号变了、写锁已放开或过了有效期：这次读数作废 */
-export const READ_VOID_TEXT = '回读期间登录账号已切换或本次下发已结束核对，读数未采用'
+export const READ_VOID_TEXT = '回读期间登录账号已切换或本次下发已超时 / 已结束，读数未采用'
+/** 下发前读到房间全部关着，这次又要设温度（且没同时开房间）：不发（后端答复⑦） */
 export const ROOMS_OFF_TEXT = '下发前读到房间都关着，不能设定温度，未下发'
 
 export function rowStatus(s: UnifiedState<unknown>, started: boolean): RowStatus {
@@ -194,8 +194,6 @@ export function createUnifiedBatch(deps: BatchDeps) {
     /** 本次下发的值，和还没结束（没回读一致过）的字段：全部结束才放锁 */
     query?: WriteQuery<203>
     open?: Set<EchoField>
-    /** 下发后第一次回读：读之前取的写锁凭据和读到的快照（只是候选，由 settleByReadback 经 commitRead 提交） */
-    firstRead?: { ticket: ReadTicket | null; snap: UnifiedSnapshot }
     /** 正在进行的核对（锁的 verify 同一时刻只跑一个，正在跑时再调会直接返回） */
     checking?: Promise<unknown>
     /** 截止时冻结的结果 */
@@ -310,9 +308,8 @@ export function createUnifiedBatch(deps: BatchDeps) {
    */
   const settleByReadback = (e: Entry, st: UnifiedState<UnifiedSnapshot>) => {
     if (!e.token || !e.sent || e.reply === 'rejected') return
-    // 第一次回读的候选结果交给写锁提交（与之后的复核同一条路径）：读取途中换号、锁换了 / 取消 / 过期 → 丢弃，字段保持未结束
-    const first = e.firstRead
-    if (first && 'after' in st && st.after === first.snap) commitRead(first.ticket, () => closeFields(e, first.snap))
+    // 第一次回读的候选字段已在读完时经写锁 commitRead 提交（与之后的复核同一条路径，见 prepare 里的 readBack 包装）；
+    // 提交被拒的读数已作废，这里不再碰字段
     if (e.open && e.open.size === 0) {
       // 锁已不归这个 token（到期、被核对放开后同屏又被新的下发占用）：不按锁键去碰别人的锁
       if (!holds(e.token)) return
@@ -359,14 +356,26 @@ export function createUnifiedBatch(deps: BatchDeps) {
           // 记下第一次（下发前）读到的快照，供发送前判断房间是否都关着
           // 已发出后的那次（下发后回读）：读之前向写锁取凭据（记下读取开始时的账号与锁 token），读数只作为候选
           readBack: async (pid, sig) => {
-            const ticket = entry.sent && entry.token ? beginRead(entry.token) : undefined
-            // 读开始时锁已不归这次下发（到期、被放开后又被新的下发占用）：这次读取直接作废。明确被拒的锁本来就已放开，照常读
-            if (ticket === null && entry.reply !== 'rejected') throw new Error(READ_VOID_TEXT)
+            if (!entry.sent || !entry.token) {
+              const snap = await readBack(pid, sig)
+              if (!entry.before) entry.before = snap
+              return snap
+            }
+            // 明确被拒：锁已按 fail 放开，没有凭据；单独记下读取开始时的账号，读的过程中换了号这次读数作废（after 置空），
+            // 被拒的结论由状态机保留
+            if (entry.reply === 'rejected') {
+              const acct = currentAccount()
+              const snap = await readBack(pid, sig)
+              if (!sameAccount(acct, currentAccount())) throw new Error(READ_VOID_TEXT)
+              return snap
+            }
+            const ticket = beginRead(entry.token)
+            // 读开始时锁已不归这次下发（到期、被放开后又被新的下发占用）：这次读取直接作废
+            if (!ticket) throw new Error(READ_VOID_TEXT)
             const snap = await readBack(pid, sig)
-            // 读取途中账号变了 / 锁换了或放了 / 过了有效期：这次读取作废，按回读失败交给状态机（结果未知），读数不进结果判定
-            if (ticket && !readStillValid(ticket)) throw new Error(READ_VOID_TEXT)
-            if (ticket !== undefined) entry.firstRead = { ticket, snap }
-            else if (!entry.before) entry.before = snap
+            // 先提交、再判定：读完立刻（同一同步段）经写锁 commitRead 提交候选字段，被拒（读取途中换号、锁已放开或换了、过了有效期）
+            // 就作废这次读数，按回读失败交给状态机（结果未知），绝不进结果判定；提交成功的读数才交给状态机判定
+            if (!commitRead(ticket, () => closeFields(entry, snap))) throw new Error(READ_VOID_TEXT)
             return snap
           },
           toEcho: (s) => s,

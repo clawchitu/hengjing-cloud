@@ -573,4 +573,59 @@ describe('下发后第一次回读经写锁提交', () => {
     expect(check.mock.calls.length).toBe(calls)
     expect(L.lockOf('screen:Sf6')?.phase).toBe('unknown')
   })
+
+  it('读完、交给状态机判定之前账号变了（日志回调里换号）：先提交再判定，显示与写锁一致（已提交的读数才显示已生效，锁按 ok 放开）', async () => {
+    let who = { user: 'A', gen: 1 }
+    L.__resetWriteLockForTests(() => who)
+    const log = vi.fn((x: { event: string }) => { if (x.event === 'read-after') who = { user: 'B', gen: 2 } })
+    let n = 0
+    const read = vi.fn(async () => { n += 1; return n === 1 ? off : on })
+    const b = createUnifiedBatch({ getProjects: () => [P('f7', 'Sf7')], readBack: read as never, send: okSend, log, now: () => new Date() })
+    b.prepare(['f7'], { roomSwitch: 1 })
+    const done = await b.start()
+    await flush()
+    expect(who.user).toBe('B')
+    // 判定用的读数在换号前已经经写锁提交：显示已生效，锁也已按一致放开，两者不会分叉
+    expect(done.rows[0].status).toBe('success')
+    expect(L.lockOf('screen:Sf7')).toBeNull()
+  })
+
+  it('commitRead 被拒（读取途中换号）：读数作废，结果未知，绝不显示已生效', async () => {
+    let who = { user: 'A', gen: 1 }
+    L.__resetWriteLockForTests(() => who)
+    let n = 0
+    const read = vi.fn(async () => { n += 1; if (n === 2) who = { user: 'B', gen: 2 }; return n === 1 ? off : on })
+    const b = createUnifiedBatch({ getProjects: () => [P('f8', 'Sf8')], readBack: read as never, send: okSend, log: () => {}, now: () => new Date() })
+    b.prepare(['f8'], { roomSwitch: 1 })
+    const done = await b.start()
+    await flush()
+    const st = done.rows[0].state
+    expect(done.rows[0].status).toBe('unknown')
+    expect(st.status === 'unknown' && st.after).toBeNull()
+    expect(L.lockOf('screen:Sf8')?.phase).toBe('unknown')
+  })
+
+  it('明确被拒：读取途中换号 → 读数作废（after 置空），被拒的结论保留；没换号的照常带回读读数', async () => {
+    const rejSend: BatchSender = async (_p, _q, o) => { if (!o.beforeSend()) throw new ApiError('write_blocked', 'x'); return { success: false, msg: '拒绝' } }
+    for (const swap of [true, false]) {
+      let who = { user: 'A', gen: 1 }
+      L.__resetWriteLockForTests(() => who)
+      let n = 0
+      const read = vi.fn(async () => { n += 1; if (n === 2 && swap) who = { user: 'B', gen: 2 }; return n === 1 ? off : on })
+      const id = swap ? 'f9' : 'f10'
+      const b = createUnifiedBatch({ getProjects: () => [P(id, 'S' + id)], readBack: read as never, send: rejSend, log: () => {}, now: () => new Date() })
+      b.prepare([id], { roomSwitch: 1 })
+      const done = await b.start()
+      const st = done.rows[0].state
+      expect(done.rows[0].status).toBe('failure')
+      expect(st.status === 'failure' && st.outcome).toBe('rejected')
+      if (swap) {
+        expect(st.status === 'failure' && st.after).toBeNull()
+        expect(st.status === 'failure' && st.afterError).toContain('读数未采用')
+      } else {
+        expect(st.status === 'failure' && st.after).toEqual(on)
+      }
+      expect(read).toHaveBeenCalledTimes(2)
+    }
+  })
 })
