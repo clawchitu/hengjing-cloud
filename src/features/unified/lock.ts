@@ -76,7 +76,8 @@ export function setupUnifiedWriteLock(qc: QueryClient, read: (projectId: string,
     const k = ev.query.queryKey
     if (k[0] !== 'org' || (k[2] !== 'projects' && k[2] !== 'groups')) return
     const loaded = (ev.type === 'updated' && ev.action.type === 'success') || (ev.type === 'added' && ev.query.state.data !== undefined)
-    if (loaded) verifyRestored(resolve)
+    // added 可能在渲染期间同步发出（QueryObserver 在 useState 初始化里建）：放到微任务里，不在渲染中触发锁的 emit
+    if (loaded) queueMicrotask(() => verifyRestored(resolve))
   })
   verifyRestored(resolve)
 }

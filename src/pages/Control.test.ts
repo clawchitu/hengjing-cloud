@@ -472,6 +472,32 @@ describe('写锁（页面）', () => {
     expect(sendBtn().hasAttribute('disabled')).toBe(true)
   })
 
+  it('刷新后（restored 来源）：组织数据到了会补核对；回读不一致时锁仍在，页面提示并置灰', async () => {
+    // 记录的目标是房间开，回读到关：补核对不一致，锁保留（回读一致就会放锁，那是另一条路径）
+    const be = backend({ '/ctrl/room-temperature-data-get': () => rooms(0, 26) })
+    // 刷新前留下的记录；重新加载模块 = 刷新页面
+    localStorage.setItem(STORAGE_PREFIX + 'project:p1', JSON.stringify(lockRec('dealer-1')))
+    vi.resetModules()
+    const W = await import('../api/writeLock')
+    expect(W.lockOf('project:p1')?.origin).toBe('restored')
+    const C = (await import('./Control')).default
+    const S = await import('../app/store')
+    const Q = await import('../api/query')
+    const SS = await import('../api/session')
+    const CF = await import('../api/config')
+    const RR = await import('react-router-dom')
+    const RQ = await import('@tanstack/react-query')
+    CF.setConfig({ apiBase: '/api', dataSource: 'real', apiEnv: 'test' })
+    await SS.signIn('d', 'pw', true)
+    render(createElement(RQ.QueryClientProvider, { client: Q.createQueryClient() }, createElement(S.AppProvider, null,
+      createElement(RR.MemoryRouter, { initialEntries: ['/control'] }, createElement(RR.Routes, null, createElement(RR.Route, { path: '/control', element: createElement(C) }))))))
+    await click(await screen.findByText('测试项目0829'))
+    expect(await screen.findByText(/上一条下发还在处理中（测试项目0829）/)).toBeTruthy()
+    expect(sendBtn().hasAttribute('disabled')).toBe(true)
+    expect(be.callsTo('/ctrl/room-temperature-data-get').length).toBeGreaterThan(0)
+    expect(W.lockOf('project:p1')?.phase).toBe('unknown')
+  })
+
   it('强制重读：锁放开（对方删除记录）时重读一次房间状态，按钮恢复', async () => {
     const be = backend({ '/ctrl/room-temperature-data-get': () => rooms(1, 26) })
     await mount()

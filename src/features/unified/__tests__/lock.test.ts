@@ -195,6 +195,23 @@ describe('注册了 203 核对器时', () => {
     expect(read).not.toHaveBeenCalled()
   })
 
+  it('结果未知后状态机下发后回读一致：batch 再调一次 verify，核对一致放锁', async () => {
+    L.configureWriteLock({ resolveProject: (id) => (id === 'w' ? { id: 'w', controlScreenId: 'SW' } : null) })
+    const verifier = vi.fn<(r: L.StoredLock, s: AbortSignal) => Promise<boolean>>()
+      .mockResolvedValueOnce(false) // settle(unknown) 后的自动核对：控制屏还没生效
+      .mockResolvedValue(true)
+    L.registerVerifier(203, verifier)
+    const send: BatchSender = async (_p, _q, o) => { if (!o.beforeSend()) throw new ApiError('write_blocked', 'x'); throw new ApiError('timeout', '超时') }
+    // 下发前读关着，下发后读开着：状态机按回读一致判成功
+    const reads = [{ rooms: 2, roomSwitch: 0, roomTemp: 26 }, { rooms: 2, roomSwitch: 1, roomTemp: 26 }]
+    const b = createUnifiedBatch({ getProjects: () => [P('w', 'SW')], readBack: async () => reads.shift() ?? snap, send, log: () => {}, now: () => new Date() })
+    const done = await runOnce(b, ['w'])
+    await flush()
+    expect(done.rows[0].state.status === 'success' && done.rows[0].state.via).toBe('readback')
+    expect(verifier).toHaveBeenCalledTimes(2)
+    expect(L.lockOf('screen:SW')).toBeNull()
+  })
+
   it('批次截止调 markOverdue：锁标记已过截止，但不放', async () => {
     const send: BatchSender = (_p, _q, o) => { if (!o.beforeSend()) return Promise.reject(new ApiError('write_blocked', 'x')); return new Promise(() => {}) }
     const b = createUnifiedBatch({ getProjects: () => [P('d', 'SD')], readBack: async () => snap, send, log: () => {}, deadlineMs: 20 })
