@@ -32,9 +32,10 @@ export default function Home() {
   const [favs, setFavs] = useState<Awaited<ReturnType<typeof api.getFrequentProjects>>>()
   useEffect(() => { let live = true; api.getFrequentProjects(user).then((r) => live && setFavs(r)); return () => { live = false } }, [user, selectTick, preset])
   const [spin, setSpin] = useState(false)
-  if (!w) return <div className="page" />
+  // 交付包（__HJC_MOCK__ = false）没有天气接口：不等天气，整块显示「暂无天气数据」
+  if (__HJC_MOCK__ && !w) return <div className="page" />
   const lo = 22, hi = 36
-  const opt = {
+  const opt = w && {
     tooltip,
     grid: { left: 36, right: 40, top: 22, bottom: 30 },
     xAxis: { type: 'category' as const, boundaryGap: false, data: [...w.hours, '15时'], axisLabel: { ...axis.label, interval: 2 }, axisLine: { show: false }, axisTick: { show: false } },
@@ -56,13 +57,14 @@ export default function Home() {
   return (
     <div className="page">
       <div className="page-head">
-        <div><h1>{greet}，{user.name} 👋</h1><div className="sub">今天是 2025年6月18日 星期三 · 农历五月廿三，以下是您所在区域的天气预报</div></div>
-        <div className="actions">
+        <div><h1>{greet}，{user.name} 👋</h1><div className="sub">{__HJC_MOCK__ && w ? '今天是 2025年6月18日 星期三 · 农历五月廿三，以下是您所在区域的天气预报' : `今天是 ${new Date().toLocaleDateString('zh-CN', { year: 'numeric', month: 'long', day: 'numeric', weekday: 'long' })}`}</div></div>
+        {__HJC_MOCK__ && w && <div className="actions">
           <Button size="lg" style={{ fontWeight: 500, color: 'var(--text)' }} onClick={() => toast('演示环境仅提供上海市浦东新区天气')}><Icon icon={faLocationDot} className="cyan" />{w.city}<Icon icon={faChevronDown} size="xs" className="faint" /></Button>
           <Button size="lg" style={{ width: 42, padding: 0 }} onClick={() => { setSpin(true); setTimeout(() => { setSpin(false); toast('天气已更新') }, 800) }}><Icon icon={faRotateRight} spin={spin} /></Button>
-        </div>
+        </div>}
       </div>
 
+      {__HJC_MOCK__ && w && opt ? <>
       <div className="home-top">
         <div className="wx">
           <div className="wx-main">
@@ -110,6 +112,9 @@ export default function Home() {
           <div className="hourly">{w.hourIcons.map(([ic, h]) => <div key={h}><Icon icon={WX[ic][0]} style={{ color: WX[ic][1] }} /><span className="num">{h}</span></div>)}</div>
         </Card>
       </div>
+      </> : (
+        <Card style={{ marginBottom: 20 }}><CardHeader><div><CardTitle>天气</CardTitle><CardDescription>暂无天气数据</CardDescription></div></CardHeader></Card>
+      )}
 
       <div className="hj-grid g4" style={{ marginBottom: 20 }}>
         <Card className="stat" pad={false}><div className="si" style={{ background: '#ecfeff', color: '#0891b2' }}><Icon icon={faLayerGroup} /></div><div><span>集成项目</span><b className="num">{groups.length}</b></div></Card>

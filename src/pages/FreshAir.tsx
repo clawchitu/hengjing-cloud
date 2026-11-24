@@ -54,6 +54,16 @@ export default function FreshAir() {
     return () => clearInterval(t)
   }, [units, setUnits, project.online])
 
+  if (units && units.length === 0) return (
+    <div className="page">
+      <div className="page-head"><div><h1>新风除湿机</h1><div className="sub">{project.name}</div></div></div>
+      <Card className="placeholder">
+        <div className="ph-ico"><Icon icon={faFan} /></div>
+        <h3>暂无新风除湿机数据</h3>
+        <p>该项目暂时没有可显示的新风除湿机。</p>
+      </Card>
+    </div>
+  )
   if (!units || !u || !draft) return <div className="page" />
   const [st] = statusText(u)
   const canDew = dewCapable(u)

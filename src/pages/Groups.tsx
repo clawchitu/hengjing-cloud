@@ -86,8 +86,8 @@ export default function Groups() {
       <div className="page-head">
         <div><h1>集成项目</h1><div className="sub">{isAdmin && <>{dealers.find((d) => d.id === dealerId)?.name}<span className="sep">·</span></>}共 {groups.length} 个集成项目<span className="sep">·</span>{projects.length} 个项目，点击项目进入运行数据</div></div>
         <div className="actions">
-          <Button onClick={() => toast('新建集成项目：演示环境为只读', true)}><Icon icon={faFolderPlus} className="faint" />新建集成项目</Button>
-          <Button variant="primary" onClick={() => toast('新建项目：演示环境为只读', true)}><Icon icon={faPlus} />新建项目</Button>
+          <Button onClick={() => toast(__HJC_MOCK__ ? '新建集成项目：演示环境为只读' : '新建集成项目：暂不支持', true)}><Icon icon={faFolderPlus} className="faint" />新建集成项目</Button>
+          <Button variant="primary" onClick={() => toast(__HJC_MOCK__ ? '新建项目：演示环境为只读' : '新建项目：暂不支持', true)}><Icon icon={faPlus} />新建项目</Button>
         </div>
       </div>
       <div className="groups">
@@ -114,7 +114,7 @@ export default function Groups() {
               <div className="gi"><Icon icon={faHouse} /></div>
               <div style={{ flex: 1 }}><h2>{g.name}</h2><p>{g.desc}</p></div>
               <div className="row" style={{ gap: 10 }}>
-                <Button onClick={() => toast('编辑：演示环境为只读', true)}><Icon icon={faPenToSquare} />编辑</Button>
+                <Button onClick={() => toast(__HJC_MOCK__ ? '编辑：演示环境为只读' : '编辑：暂不支持', true)}><Icon icon={faPenToSquare} />编辑</Button>
                 <Button variant="soft" onClick={() => nav('/control')}><Icon icon={faSliders} />统一控制</Button>
               </div>
             </div>

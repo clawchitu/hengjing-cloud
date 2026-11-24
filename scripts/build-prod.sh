@@ -83,13 +83,14 @@ VER
 echo "==> 打包"
 if [ -n "$DIRTY" ]; then echo "警告：工作区有未提交改动，正式交付请在合并后的 main、干净工作区重新打包" >&2; fi
 ZIP="$OUT_DIR/$NAME.zip"
-rm -f "$ZIP"
+rm -f "$ZIP" "$ZIP.sha256"
 ( cd "$STAGE" && zip -qr "$ZIP" . )
 
 echo "==> 自检（解开打好的 zip 检查，验的是实际交付物）"
 CHECK="$(mktemp -d)"
 trap 'rm -rf "$CHECK"' EXIT
-fail() { echo "自检失败：$*" >&2; rm -f "$ZIP"; exit 1; }
+# 失败时删掉 zip、同名 .sha256 和暂存目录（暂存目录就是可直接部署的站点，不能留下没过自检的）
+fail() { echo "自检失败：$*" >&2; rm -rf "$ZIP" "$ZIP.sha256" "$STAGE"; exit 1; }
 ( cd "$CHECK" && unzip -q "$ZIP" ) || fail "zip 解不开"
 # 1. 在隔离的 vm 里执行 config.js，按实际字段值检查（不靠 grep 文本）
 node scripts/check-config.mjs "$CHECK/config.js" "$PROD_API" "$SAME_ORIGIN_API" || fail "config.js 字段不符合生产要求"
@@ -106,9 +107,9 @@ node -e '
   if (!mods.length) bad("没有应用的 module 脚本")
   if (mods.some((t) => /\sasync/.test(t))) bad("应用脚本不能带 async（否则可能先于 config.js 执行）")
 ' "$CHECK/index.html" || fail "index.html"
-# 3. 包里不能有演示数据与演示账号（特征串取自 src/mock 与演示登录）。cosyhome 单独出现才算演示账号，
+# 3. 包里不能有演示数据与演示账号（特征串取自 src/mock、演示登录和页面里写死的演示文案；「演示」二字一律不许出现）。cosyhome 单独出现才算演示账号，
 #    control.cosyhome.com.cn 这类域名里的不算
-MOCK_PATTERN='hjadmin|(^|[^.A-Za-z0-9_-])cosyhome([^.A-Za-z0-9_-]|$)|张建国|华东运维中心|上海恒境暖通|朝阳壹号院|PRJ-[0-9]{5}|DLR-[0-9]{3}|GRP-[A-Z]{2}-[0-9]{3}|hjc-mock-|CMD-2025|多云转晴|2025-06-18|演示计数|/api/login'
+MOCK_PATTERN='演示|400-820-1234|2025年6月18日|更新于 14:30|hjadmin|(^|[^.A-Za-z0-9_-])cosyhome([^.A-Za-z0-9_-]|$)|张建国|华东运维中心|上海恒境暖通|朝阳壹号院|PRJ-[0-9]{5}|DLR-[0-9]{3}|GRP-[A-Z]{2}-[0-9]{3}|hjc-mock-|CMD-2025|多云转晴|2025-06-18|演示计数|/api/login'
 HITS="$(grep -rIEl "$MOCK_PATTERN" "$CHECK")" && RC=0 || RC=$?
 [ "$RC" -le 1 ] || fail "grep 执行出错（$RC）"
 if [ -n "$HITS" ]; then
@@ -123,5 +124,6 @@ if grep -rIl "test\.cosyhome\.com\.cn" "$CHECK" >/dev/null 2>&1; then
 fi
 ( cd "$OUT_DIR" && { shasum -a 256 "$NAME.zip" 2>/dev/null || sha256sum "$NAME.zip"; } > "$NAME.zip.sha256" )
 
+rm -rf "$STAGE"   # 只交付 zip
 echo "完成：$ZIP"
 cat "$OUT_DIR/$NAME.zip.sha256"

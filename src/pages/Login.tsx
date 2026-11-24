@@ -186,7 +186,7 @@ export default function Login() {
               <a className="cyan" onClick={() => toast('已向绑定手机发送重置链接')} style={{ cursor: 'pointer' }}>忘记密码?</a>
             </div>
             <button className="btn-login" disabled={busy}>{busy ? '登录中…' : '登 录'}</button>
-            <div className="login-ver">平台版本 <b>v3.6.2</b> · 技术支持 400-820-1234</div>
+            {__HJC_MOCK__ && <div className="login-ver">平台版本 <b>v3.6.2</b> · 技术支持 400-820-1234</div>}
           </form>
         </Form>
       </div>

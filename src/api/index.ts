@@ -147,12 +147,8 @@ export const sendUnified = (payload: unknown): Promise<{ ok: boolean; payload: u
 
 // home -----------------------------------------------------------------------
 type Weather = typeof M.weather
-/** 交付包里没有演示天气：各项显示「—」，曲线和预报为空 */
-const NO_WEATHER: Weather = {
-  city: '—', temp: 0, text: '—', feels: 0, high: 0, low: 0, humidity: 0, wind: '—', windLevel: '—', dew: 0, pressure: 0, visibility: 0, uv: '—',
-  aqi: 0, aqiText: '—', pm25: 0, sunrise: '—', sunset: '—', rain: 0, rainNote: '—', week: [], hours: [], hourTemp: [], hourHum: [], hourIcons: [],
-}
-export const getWeather = (_city: string): Promise<Weather> => delay(__HJC_MOCK__ ? M.weather : NO_WEATHER)
+/** 天气（演示数据）。交付包里没有天气接口，返回 null，首页显示「暂无天气数据」 */
+export const getWeather = (_city: string): Promise<Weather | null> => delay(__HJC_MOCK__ ? M.weather : null)
 
 // sensors ----------------------------------------------------------------------
 /** GET /api/projects/:id/sensors — pm25 / co2 absent when the sensor has no such probe */
