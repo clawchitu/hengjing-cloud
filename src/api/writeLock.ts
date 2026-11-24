@@ -95,10 +95,11 @@ export type FieldResult = 'applied' | 'unchanged' | 'unverifiable' | 'unknown'
 /** 带逐字段结果的核对结论（writeLockVerify.ts 的比对函数返回它）；verdict 为整体结论，只有 applied 才放锁 */
 export interface MatchDetail { verdict: FieldResult; fields: Record<string, FieldResult> }
 /**
- * 核对函数的返回：MatchResult，或带「提交」的候选结果（#33）。commit 只在写锁确认这次核对仍然有效（锁没换、没超时、没取消、
+ * 核对函数的返回：MatchResult，或带「提交」的候选结果（#33）。commit 返回 false 表示在提交这一刻否决（Fable 裁定）：一致也不放锁，
+ * 记为未变化、走退避重核。commit 只在写锁确认这次核对仍然有效（锁没换、没超时、没取消、
  * 账号没变）之后才调，调用方据此提交逐字段的结束状态；无效的核对（迟到、超时、换账号）不提交
  */
-export type VerifyOutcome = MatchResult | { same: boolean; commit: () => void }
+export type VerifyOutcome = MatchResult | { same: boolean; commit: () => void | false }
 export type VerifyFn = (signal: AbortSignal) => Promise<VerifyOutcome>
 export type LockOwner = 'current' | 'previous-session' | 'other-account'
 
@@ -138,6 +139,8 @@ export interface LockInfo {
   lastVerify?: VerifyResult
   /** 最近一次核对的逐字段结果（界面逐项列出；整体结论只作标题）。回读失败时每个目标字段都是 unknown */
   lastFields?: Record<string, FieldResult>
+  /** 最近一次核对读到一致、但在提交这一刻被核对方否决（Fable 裁定；lastVerify 记 mismatch）：界面仍按「正在核对」显示。下一次核对开始时清掉 */
+  lastVetoed?: boolean
   overdue: boolean
   owner: LockOwner
   mine: boolean
@@ -176,6 +179,7 @@ interface Entry {
   verifying: boolean
   lastVerify?: VerifyResult
   lastFields?: Record<string, FieldResult>
+  lastVetoed?: boolean
 }
 
 // ---------------------------------------------------------------------------
@@ -264,7 +268,7 @@ const view = (e: Entry): LockInfo => {
   const hide = owner === 'other-account'
   return {
     key: e.token.key, keys: e.keys, projectId: hide ? '' : e.projectId, label: hide ? '' : e.label, phase: e.phase, origin: e.origin,
-    sendSettled: e.sendSettled, outcome: e.outcome, lastVerify: e.lastVerify, lastFields: hide ? undefined : e.lastFields, overdue: e.overdue, owner, mine: owner === 'current', verifiable: !!verifierOf(e),
+    sendSettled: e.sendSettled, outcome: e.outcome, lastVerify: e.lastVerify, lastFields: hide ? undefined : e.lastFields, lastVetoed: e.lastVetoed === true, overdue: e.overdue, owner, mine: owner === 'current', verifiable: !!verifierOf(e),
     verifying: e.verifying, expiresAt: e.sentAt !== undefined ? e.sentAt + ttlMs : undefined,
   }
 }
@@ -630,10 +634,11 @@ async function runVerify(e: Entry, fn: VerifyFn, signal?: AbortSignal): Promise<
   let timer: ReturnType<typeof setTimeout> | undefined
   const timeout = new Promise<never>((_, reject) => { timer = setTimeout(() => { ac.abort(); reject(new Error('核对超时')) }, VERIFY_TIMEOUT_MS) })
   e.verifying = true
+  e.lastVetoed = false
   emit()
   let same: FieldResult = 'unchanged'
   let fields: Record<string, FieldResult> | undefined
-  let commit: (() => void) | undefined
+  let commit: (() => void | false) | undefined
   let err: unknown = null
   try {
     const r = await Promise.race([fn(ac.signal), timeout])
@@ -661,8 +666,17 @@ async function runVerify(e: Entry, fn: VerifyFn, signal?: AbortSignal): Promise<
   if (!isLive(e)) return result === 'released' ? 'none' : result
   if (isExpired(e)) { expire(e); return 'expired' } // 读取期间过了有效期：不接受核对结果
   // 这次核对没出错、没中止：候选结果经 commitRead 提交（与页面回读同一条路径：锁没换、没过有效期、账号没变才提交），再按结论放锁
+  // commit 返回 false = 核对方在提交这一刻否决（Fable 裁定：如读数已被更新的读取取代）：不放锁，按未变化记下，走原有退避重核
+  let vetoed = false
   const valid = result !== 'account-changed' && result !== 'aborted' && !err && !ac.signal.aborted
-    && commitRead(ticket, () => commit?.(), signal)
+    && commitRead(ticket, () => { if (commit?.() === false) vetoed = true }, signal)
+  if (result === 'released' && valid && vetoed) {
+    e.lastVerify = 'mismatch'
+    e.lastFields = unknownFields(e)
+    e.lastVetoed = true
+    emit()
+    return 'mismatch'
+  }
   if (result === 'released') { if (!valid) return 'none'; drop(e); return result }
   // 未变化 / 无法核对 / 结果未知：锁保持到核对一致或有效期到期（不续期）
   if (result !== 'aborted') {
