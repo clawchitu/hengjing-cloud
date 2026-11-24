@@ -226,6 +226,8 @@ function plainWriteBody(body: unknown): Record<string, unknown> {
 
 /** 写请求收到未认证（401 / token err）时的提示：不重放，按「没执行」结束 */
 export const WRITE_AUTH_TEXT = '登录状态已更新，请重新下发'
+/** 发送前发现存储里已换成别的账号 */
+export const WRITE_ACCOUNT_TEXT = '登录账号已变化，未下发'
 /** 发送前取消信号已中止 */
 export const WRITE_CANCELLED_TEXT = '已取消，未下发'
 /** 控制屏未连接（503 code 14）：后端没有转发，确定没执行 */
@@ -269,6 +271,8 @@ export async function requestWrite<T>(op: WriteOp, projects: readonly WriteProje
  */
 async function writeOnce<T>(path: string, opts: WriteOptions & { method: 'POST'; body: unknown }): Promise<T> {
   const { beforeSend, ...rest } = opts
+  // 发起时的账号：续期期间存储被换成别的账号，refreshSession 可能直接返回新账号的令牌，这种情况不能发
+  const startSub = jwtSub(readTokens()?.accessToken)
   const token = await freshAccessToken()
   if (!token) {
     const err = new ApiError('unauthenticated', '登录已过期，请重新登录')
@@ -278,6 +282,10 @@ async function writeOnce<T>(path: string, opts: WriteOptions & { method: 'POST';
   const check = () => {
     // 最先看取消信号：已中止就不调 fetch
     if (rest.signal?.aborted) throw new ApiError('write_blocked', WRITE_CANCELLED_TEXT)
+    // 账号绑定：要用的令牌必须仍是存储里当前账号的令牌（续期期间别的标签页换了账号就不发）
+    const cur = readTokens()?.accessToken
+    if (startSub !== null && jwtSub(token) !== startSub) throw new ApiError('write_blocked', WRITE_ACCOUNT_TEXT)
+    if (cur !== token && (!cur || jwtSub(cur) !== jwtSub(token))) throw new ApiError('write_blocked', WRITE_ACCOUNT_TEXT)
     let ok = false
     try { ok = beforeSend ? beforeSend() === true : true } catch { ok = false }
     if (!ok) throw new ApiError('write_blocked', WRITE_RECHECK_TEXT)

@@ -305,6 +305,48 @@ describe('下发', () => {
     expect(screen.queryByRole('status')).toBeNull()
   })
 
+  it('账号绑定（页面接线）：确认后刷新项目列表期间换了账号 → 203 为 0 次，未下发', async () => {
+    let release!: () => void
+    const gate = new Promise<void>((r) => { release = r })
+    let n = 0
+    const be = backend({
+      '/ctrl/projects': async () => { if (n++ > 0) await gate; return json({ project_entities: PROJECTS }) },
+      '/ctrl/room-temperature-data-get': () => rooms(1, 26),
+      '/ctrl/unified-ctrl-set': () => reply(true),
+    })
+    const dlg = await prepare()
+    await click(okIn(dlg))
+    await waitFor(() => expect(n).toBe(2)) // 确认后的强制刷新挂起
+    setCurrentUserId('someone-else') // 测试令牌不是 JWT，没有 sub，账号取 /me 的 user id
+    release()
+    await waitFor(() => expect(screen.queryByRole('status')).toBeNull(), { timeout: 3000 })
+    expect(be.callsTo('/ctrl/unified-ctrl-set')).toHaveLength(0)
+    // 结果记在发起时的账号下（换账号后的页面看不到，符合按账号隔离）
+    await waitFor(() => expect(sessionStorage.getItem('hjc-unified-last:real:dealer-1') ?? '').toMatch(/"status":"(not-sent|failure)"/), { timeout: 3000 })
+  })
+
+  it('已有上一次结果时：下发进行中卡片仍显示上一次的四列结果、没有说明', async () => {
+    let gateNext = false
+    let release!: () => void
+    const gate = new Promise<void>((r) => { release = r })
+    const be = backend({ '/ctrl/room-temperature-data-get': () => rooms(1, 26), '/ctrl/unified-ctrl-set': async () => { if (gateNext) await gate; return reply(true) } })
+    await click(okIn(await prepare()))
+    await screen.findByText('成功', { selector: '[data-slot=badge]' }, { timeout: 3000 })
+    const card = () => document.querySelector<HTMLElement>('[aria-label="最近一次执行结果"]')!
+    const prev = card().textContent
+    expect(prev).toContain('测试项目0829')
+    gateNext = true
+    await click(screen.getByRole('button', { name: '降低温度' }))
+    await click(screen.getByRole('button', { name: '确认下发' }))
+    await click(okIn(await screen.findByRole('alertdialog')))
+    await waitFor(() => expect(be.callsTo('/ctrl/unified-ctrl-set')).toHaveLength(2))
+    expect(card().textContent).toBe(prev)
+    expect(card().textContent).not.toMatch(/正在下发|回读|核对/)
+    expect(screen.getByRole('button', { name: '下发中…' }).hasAttribute('disabled')).toBe(true)
+    release()
+    await waitFor(() => expect(screen.queryByRole('status')).toBeNull(), { timeout: 3000 })
+  })
+
   it('500 且回读不一致 → 结果未确认，提示刷新查看，不重试', async () => {
     const be = backend({ '/ctrl/room-temperature-data-get': () => rooms(0, 26), '/ctrl/unified-ctrl-set': () => text('oops', 500) })
     await click(okIn(await prepare()))

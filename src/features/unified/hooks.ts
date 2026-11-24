@@ -80,6 +80,9 @@ export function useUnifiedBatch(deps: BatchDeps): UnifiedBatchControl {
   const [batch] = useState(() => createUnifiedBatch({
     ...deps,
     getProjects: () => ref.current.getProjects(),
+    // 这两个也每次换成最新值（演示模式不重挂就换账号时，不能拿旧账号名比对）
+    refreshProjects: deps.refreshProjects ? (sig) => (ref.current.refreshProjects ?? deps.refreshProjects!)(sig) : undefined,
+    getAccount: deps.getAccount ? () => (ref.current.getAccount ?? deps.getAccount!)() : undefined,
     readBack: (id, s) => (ref.current.readBack ?? readUnifiedSnapshot)(id, s),
     send: (p, q, o) => (ref.current.send ?? defaultBatchSender)(p, q, o),
   }))

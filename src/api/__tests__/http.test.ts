@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { setConfig } from '../config'
-import { __resetHttpForTests, onSessionExpired, refreshSession, request, requestWrite, WRITE_AUTH_TEXT, WRITE_CANCELLED_TEXT, WRITE_OFFLINE_TEXT, WRITE_RECHECK_TEXT } from '../http'
+import { __resetHttpForTests, onSessionExpired, refreshSession, request, requestWrite, WRITE_ACCOUNT_TEXT, WRITE_AUTH_TEXT, WRITE_CANCELLED_TEXT, WRITE_OFFLINE_TEXT, WRITE_RECHECK_TEXT } from '../http'
 import { clearTokens, readTokens, writeTokens } from '../tokens'
 import { fakeBackend, json, text } from './helpers'
 
@@ -264,5 +264,22 @@ describe('写请求：不重放、发送前同步复核（S12b）', () => {
     const be = fakeBackend({ [route]: () => json({ code: 14, message: 'no stream' }, 503) })
     await expect(requestWrite('ctrl-206', [P], { body: 'x' })).rejects.toMatchObject({ kind: 'unavailable', code: 14, message: WRITE_OFFLINE_TEXT })
     expect(be.callsTo(route)).toHaveLength(1)
+  })
+
+  it('账号绑定：续期期间别的标签页换了账号（refreshSession 直接返回新账号令牌）→ 不发，写请求 fetch 0 次', async () => {
+    const tok = (sub: string, n: number) => `h.${btoa(JSON.stringify({ sub, n })).replace(/=+$/, '')}.s`
+    writeTokens({ accessToken: tok('u1', 1), refreshToken: 'R1', expiresAt: Date.now() + 10_000 })
+    let release!: () => void
+    const gate = new Promise<void>((r) => { release = r })
+    const be = fakeBackend({ [route]: () => json({ body: '' }), '/auth/refresh': async () => { await gate; return json({ code: 16 }, 401) } })
+    const beforeSend = vi.fn(() => true)
+    const p = requestWrite('ctrl-206', [P], { body: 'x' }, { beforeSend })
+    await vi.waitFor(() => expect(be.callsTo('/auth/refresh')).toHaveLength(1))
+    // 另一个标签页登录了别的账号
+    writeTokens({ accessToken: tok('u2', 1), refreshToken: 'R9', expiresAt: Date.now() + 2 * HOUR })
+    release()
+    await expect(p).rejects.toMatchObject({ kind: 'write_blocked', message: WRITE_ACCOUNT_TEXT })
+    expect(beforeSend).not.toHaveBeenCalled()
+    expect(be.callsTo(route)).toHaveLength(0)
   })
 })

@@ -65,6 +65,8 @@ export async function readUnifiedSnapshot(projectId: string, signal: AbortSignal
  * 自己实现的下发函数（演示数据、测试）也必须在「发出」前调用它
  */
 export type BatchSender = (project: BatchProject, query: WriteQuery<203>, opts: { beforeSend: () => boolean; signal: AbortSignal }) => Promise<CtrlReply<203>>
+// 批次的取消信号不交给 writeCtrl 去中止 fetch：已经发出的写请求要照常走完、拿到应答（S12a abort 语义）。
+// 取消在发出前由 beforeSend 最先检查（recheck 第一行），效果等同 http 层的信号检查
 export const defaultBatchSender: BatchSender = (project, query, opts) => writeCtrl(203, project, query, { beforeSend: opts.beforeSend })
 
 export type RowStatus = 'waiting' | 'sending' | 'success' | 'failure' | 'unknown' | 'not-sent'
