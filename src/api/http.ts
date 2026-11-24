@@ -11,7 +11,7 @@
 // request() 遇到写接口路径直接拒绝。
 import { getConfig } from './config'
 import { ApiError, errorFromResponse, errorFromThrown } from './errors'
-import { assertWriteAllowed, isWritePath, WRITE_ROUTES, type WriteOp } from './guard'
+import { assertWriteAllowed, isNonCanonicalPath, isWritePath, WRITE_ROUTES, type WriteOp } from './guard'
 import { clearTokens, readTokens, tokensFromResponse, writeTokens, type Tokens } from './tokens'
 
 export interface RequestOptions {
@@ -136,7 +136,10 @@ async function freshAccessToken(): Promise<string | null> {
 
 /** 普通请求（读接口、登录等）。写接口一律拒绝，须走 requestWrite() */
 export async function request<T>(path: string, opts: RequestOptions = {}): Promise<T> {
-  if (isWritePath(path)) throw new ApiError('write_blocked', `写接口只能经 requestWrite() 下发：${path}`)
+  // 非规范路径（. / ..、反斜杠、空白、编码的分隔符）一律拒绝；写接口路径先规范化再判断，
+  // 拼上 apiBase 后的完整地址也判断一次（防 .. 越过 apiBase 的写法）
+  if (isNonCanonicalPath(path)) throw new ApiError('bad_request', `请求路径不规范：${JSON.stringify(path)}`)
+  if (isWritePath(path) || isWritePath(url(path))) throw new ApiError('write_blocked', `写接口只能经 requestWrite() 下发：${path}`)
   return authed<T>(path, opts)
 }
 

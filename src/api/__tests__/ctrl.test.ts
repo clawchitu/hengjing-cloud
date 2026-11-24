@@ -172,6 +172,35 @@ describe('写消息不依赖 proto 默认值', () => {
     setConfig(null)
   })
 
+  it.each([
+    ['undefined', undefined], ['null', null], ["字符串 'false'", 'false'], ["字符串 'true'", 'true'], ['数字 0', 0], ['数字 1', 1], ['对象', {}],
+  ] as const)('206 全部房间开关：非布尔值（%s）拒绝，不发请求', async (_, v) => {
+    setConfig({ apiBase: '/api', apiEnv: 'test' })
+    const be = fakeBackend({})
+    expect(() => buildProjectRoomSwitchSet(v as never)).toThrow(expect.objectContaining({ kind: 'bad_request' }))
+    await expect(Promise.resolve().then(() => writeCtrl(206, 'p1', buildProjectRoomSwitchSet(v as never)))).rejects.toMatchObject({ kind: 'bad_request' })
+    expect(be.calls).toHaveLength(0)
+    setConfig(null)
+  })
+
+  it('206 全部房间开关：true → 1，false → 0', () => {
+    expect(buildProjectRoomSwitchSet(true)).toEqual({ switch: 1 })
+    expect(buildProjectRoomSwitchSet(false)).toEqual({ switch: 0 })
+  })
+
+  it('build* 收到 null 或不传 changes 时一律按不变（-1）处理，不会落成 0', () => {
+    expect(buildRoomTemperatureSet(1, { switch: null, eco: null } as never)).toMatchObject({ switch: -1, eco: -1 })
+    expect(buildRoomTemperatureSet(1, undefined as never)).toMatchObject({ temperature: -1, switch: -1, endModes: [] })
+    expect(buildUnifiedCtrlSet(undefined as never)).toEqual({ systemSwitch: -1, systemMode: 0, roomSwitch: -1, roomTemp: -1 })
+    expect(buildRunningCtrlSet(1, 'x', undefined as never)).toMatchObject({ controlType: -1, switch: -1 })
+  })
+
+  it('布尔或字符串冒充数值字段被拒绝（不会被当成 0/1）', () => {
+    expect(() => validateWriteQuery(pb.RoomTemperatureSetQuerySchema, buildRoomTemperatureSet(1, { switch: false } as never))).toThrow(/switch/)
+    expect(() => validateWriteQuery(pb.ProjectRoomSwitchSetQuerySchema, { switch: '0' })).toThrow(/switch/)
+    expect(() => validateWriteQuery(pb.UnifiedCtrlSetQuerySchema, buildUnifiedCtrlSet({ roomSwitch: true } as never))).toThrow(/roomSwitch/)
+  })
+
   it('NaN、嵌套末端缺字段也拒绝', () => {
     expect(() => validateWriteQuery(pb.RoomTemperatureSetQuerySchema, { ...buildRoomTemperatureSet(1, {}), temperature: NaN })).toThrow(/temperature/)
     expect(() => validateWriteQuery(pb.RoomTemperatureSetQuerySchema, buildRoomTemperatureSet(1, { endModes: [{ optionName: '风盘', type: 0 } as never] }))).toThrow(/endModes\[0\]\.isSelected/)
@@ -190,6 +219,20 @@ describe('写接口只有一个入口', () => {
       await expect(request(p, { body: {} })).rejects.toMatchObject({ kind: 'write_blocked' })
     }
     expect(be.calls).toHaveLength(0)
+  })
+
+  it('request()：非规范写法的写接口路径（./、..、反斜杠、重复斜杠、大小写、空白、编码、查询串）也拒绝，不发请求', async () => {
+    for (const apiBase of ['/api', 'https://api.cosyhome.com.cn/v1']) {
+      setConfig({ apiBase })
+      const be = fakeBackend({})
+      for (const p of ['/./ctrl/room-temperature-set', '/x/../ctrl/room-temperature-set', '/ctrl\\room-temperature-set', '//ctrl//room-temperature-set',
+        '/CTRL/Room-Temperature-Set', '/V1/ctrl/project-room-switch-set', '/ctrl/room-temperature-set ', '/ctrl/room-temperature-set\n', '/ctrl/room-\ttemperature-set',
+        '/ctrl/room-temperature-set?a=1#b', '/ctrl/room%2Dtemperature-set', '/ctrl%2Froom-temperature-set', '/ctrl/%2e/unified-ctrl-set', '/../v1/ctrl/unified-ctrls-send']) {
+        await expect(request(p, { body: {} }), p).rejects.toMatchObject({ kind: expect.stringMatching(/^(write_blocked|bad_request)$/) })
+      }
+      expect(be.calls).toHaveLength(0)
+    }
+    setConfig(null)
   })
 
   it('callCtrl() 遇到写消息号拒绝', async () => {

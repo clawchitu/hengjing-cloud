@@ -167,7 +167,7 @@ const U = -1 // 后端约定：不变
 type Changes<T extends WriteCtrlType, Fixed extends string> = Partial<Omit<WriteQuery<T>, Fixed>>
 
 /** 201 房间温控设置：只改给出的项，其余标量 -1，末端不改传 [] */
-export function buildRoomTemperatureSet(equipmentId: number, changes: Changes<201, 'equipmentId'>): WriteQuery<201> {
+export function buildRoomTemperatureSet(equipmentId: number, changes: Changes<201, 'equipmentId'> = {}): WriteQuery<201> {
   return {
     equipmentId,
     temperature: changes.temperature ?? U,
@@ -180,7 +180,7 @@ export function buildRoomTemperatureSet(equipmentId: number, changes: Changes<20
 }
 
 /** 203 统一控制：开关/温度不改为 -1；运行模式是枚举，不改为 0（OPERATION_MODE_NONE） */
-export function buildUnifiedCtrlSet(changes: Changes<203, never>): WriteQuery<203> {
+export function buildUnifiedCtrlSet(changes: Changes<203, never> = {}): WriteQuery<203> {
   return {
     systemSwitch: changes.systemSwitch ?? U,
     systemMode: changes.systemMode ?? pb.UnifiedCtrlSetQuery_OperatingMode.OPERATION_MODE_NONE,
@@ -190,7 +190,7 @@ export function buildUnifiedCtrlSet(changes: Changes<203, never>): WriteQuery<20
 }
 
 /** 204 运行控制设置：id、name 必给，其余不改为 -1 */
-export function buildRunningCtrlSet(id: number, name: string, changes: Changes<204, 'id' | 'name'>): WriteQuery<204> {
+export function buildRunningCtrlSet(id: number, name: string, changes: Changes<204, 'id' | 'name'> = {}): WriteQuery<204> {
   return {
     id,
     name,
@@ -202,8 +202,12 @@ export function buildRunningCtrlSet(id: number, name: string, changes: Changes<2
   }
 }
 
-/** 206 全部房间开关：必须明确 1 开 / 0 关 */
+/**
+ * 206 全部房间开关：必须明确 true 开 / false 关。0 是「全项目房间关闭」，破坏面最大，
+ * 所以不做任何真假值转换：undefined、null、'false'、0/1 等非布尔值一律拒绝（值可能来自 any）。
+ */
 export function buildProjectRoomSwitchSet(on: boolean): WriteQuery<206> {
+  if (typeof on !== 'boolean') throw new ApiError('bad_request', `206 全部房间开关须明确传 true 或 false，收到：${on === null ? 'null' : typeof on}`)
   return { switch: on ? 1 : 0 }
 }
 
