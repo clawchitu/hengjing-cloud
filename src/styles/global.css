@@ -134,6 +134,9 @@
 .toggle.on { background: var(--primary-2); }
 .toggle.on::after { left: 21px; }
 
+/* 表格行悬停（原 .table tbody tr:hover td）。shadcn TableBody 带 data-slot，权重同为 (0,2,3)：压过 pages.css 的 tr.cur-row / st-off / st-err 底色，
+   又低于 .ptable tr.mod td 的 !important。写在这里不分层，不用工具类 + !important。 */
+tbody[data-slot="table-body"] > tr:hover > td { background: #fafcfe; }
 
 .bar { height: 6px; border-radius: 6px; background: #eef2f6; overflow: hidden; flex: 1; }
 .bar > i { display: block; height: 100%; border-radius: 6px; background: var(--green-2); }

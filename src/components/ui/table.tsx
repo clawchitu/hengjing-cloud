@@ -5,12 +5,11 @@ import { cn } from '@/lib/utils'
  * 表格（原 global.css 的 .table）。去掉 shadcn 默认的 h-10、p-2、行 border-b、hover:bg-muted/50；
  * 数值照旧：表体 13.5px；表头 #f8fafc 底、--muted 字、12.5px/500、10px 12px；单元格 9.5px 12px + --line-2 上边框；
  * 首末列 22px。
+ * 不要 shadcn 自带的横向滚动包裹 div：旧版表格超宽时向外溢出，不出内部滚动条。
  */
 function Table({ className, ...props }: React.ComponentProps<'table'>) {
   return (
-    <div data-slot="table-container" className="relative w-full overflow-x-auto">
-      <table data-slot="table" className={cn('w-full border-collapse text-[13.5px]', className)} {...props} />
-    </div>
+    <table data-slot="table" className={cn('w-full border-collapse text-[13.5px]', className)} {...props} />
   )
 }
 
@@ -18,12 +17,9 @@ function TableHeader(props: React.ComponentProps<'thead'>) {
   return <thead data-slot="table-header" {...props} />
 }
 
-/*
- * 行悬停色带 !important：旧 `.table tbody tr:hover td`（0,2,3）压过 pages.css 的 tr.cur-row / tr.st-off / tr.st-err 底色；
- * 工具类在 layer 里，不加 ! 会反过来被这些未分层规则压住。
- */
-function TableBody({ className, ...props }: React.ComponentProps<'tbody'>) {
-  return <tbody data-slot="table-body" className={cn('[&>tr:hover>td]:bg-[#fafcfe]!', className)} {...props} />
+// 行悬停色写在 global.css（tbody[data-slot="table-body"] > tr:hover > td），未分层、权重与旧 .table 规则相同。
+function TableBody(props: React.ComponentProps<'tbody'>) {
+  return <tbody data-slot="table-body" {...props} />
 }
 
 function TableRow(props: React.ComponentProps<'tr'>) {

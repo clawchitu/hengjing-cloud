@@ -16,7 +16,13 @@
 /* 只扫 src，避开 docs/、ref/ */
 @source '../**/*.{ts,tsx}';
 
+/* hover: 与旧 CSS 的 :hover 一致，不带 Tailwind 4 默认的 @media (hover: hover)（触屏上旧版也会显示悬停色） */
+@custom-variant hover (&:hover);
+
 @theme inline {
+  /* 间距基数用 px（旧版全是 px）：h-9 = 36px、px-4 = 16px；浏览器改默认字号时不随 rem 缩放 */
+  --spacing: 4px;
+
   /* shadcn 语义色 */
   --color-background: var(--bg);
   --color-foreground: var(--text);
