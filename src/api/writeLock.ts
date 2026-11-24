@@ -7,8 +7,15 @@
 // 1. 按控制屏加锁，并且原子锁住项目所有可用的键：控制屏号、DTU 号、项目 id。任一键已被占即 busy；lockOf 任一键命中即返回。
 // 2. 发送前绑定账号：isHolder / claim 要求持锁、还没发出、账号与会话代次未变（登录、恢复、同号重登、退出换代；令牌续期不换代）。
 // 3. 原写的 Promise 没结算，锁就不放（有效期到了除外，见 6）。
-// 4. 结果未知：锁到「回读核对一致」为止。unknown 不能被后续 settle 覆盖；唯一例外：经 markSent 登记的那个原写 Promise
-//    迟到 resolve（写入口只在 Reply success=true 时 resolve，后端答复⑥：success 即已生效），视为生效证据放锁。
+// 4. 下发结果口径（11/24 测试服实测后修订，Fable 裁定）：success 只表示已下发，生效只认回读一致（实测 203 返回 success=true，
+//    23 秒、90 秒两次回读房间仍是关）。settle('ok') 与 settle('unknown') 一样进入待核对（outcome 记 ok 表示「已下发」），
+//    原写 Promise 迟到 resolve 也只标记已结算并触发一次自动核对，不再直接放锁。结果四态（比对口径见 writeLockVerify.ts）：
+//      已生效 / 未变化（指令已下发、设备状态暂未变化，不等于失败）/ 无法核对（目标房间条目缺失、回包为空、写入目标在回读里
+//      没有对应字段、读数无效）/ 结果未知（回读失败：网络错误、超时、非 2xx、屏离线；或目标房间面板离线、读数不可信）。
+//      逐字段判四态，整体按「结果未知 > 未变化 > 无法核对 > 已生效」（Fable 裁定 B，writeLockVerify.ts 的 verdictOf）；
+//      锁上 lastVerify 记整体、lastFields 记逐字段（界面逐项列出）。只有所有目标字段都一致才放锁；其余三种都锁到核对一致
+//      或有效期到期，到期走强制重读，不提前放、不续期。200 的 proto3 标量缺省 = 0 是真实读数，直接比对。
+//      settle('fail')（确定没生效）不变：原写结算后放锁。只认第一次 settle。
 // 5. 核对不绑定账号：谁能读谁核对，只要求读取途中账号没变（变了结果作废）。读之前先确认能读：用 resolveProject（S6a 组织范围的
 //    同步查询，由应用注入）查存下的 projectId 是否在当前账号可见范围里，并用当前项目对象重算主锁键、与锁的键对上；不在或对不上
 //    → 不发读请求、锁保持（not-visible）。不看 ctrl 响应判断能不能读（屏离线和 id 非法都是 503）。读到 503 → offline（屏离线，
@@ -19,9 +26,14 @@
 // 6. 有效期：从登记（markSent）起算，含写入口等待令牌续期的时间；默认 2 分钟，可配置、最短 30 秒（不宜配到 60 秒以下：
 //    写 12 秒 + 续期 12 秒 + 回读核对都要在有效期内完成）；刷新和核对失败都不续期。到期放锁、通知订阅者，并发出
 //    「强制重读」事件（onForceReread），让页面重读设备状态。截止时间（markOverdue）只改标记，不放锁。
-// 7. 持久化：markSent 时就写 localStorage（键 = STORAGE_PREFIX + 主锁键），结论 ok / fail 时删；刷新后读到的记录一律按「结果未知」
+//    自动重新核对：原写结算后的首次自动核对若不是一致（未变化、无法核对、读取失败、屏离线、不可见），按 RETRY_DELAYS_MS（5 秒、
+//    20 秒、60 秒）退避再核对，不超过有效期（到期前来不及的不排）。退避到点遇到手动核对进行中：等那次的结果，仍不一致就继续剩余
+//    退避；手动核对一致照旧放锁并取消定时器。延迟执行可能越过有效期：退避回调执行时、核对发起前与接受结果前都用当前时间对绝对
+//    到期时间再检查，已到期一律走 expire()（只放一次锁、只发一次强制重读），不发起也不接受核对。
+// 7. 持久化：markSent 时就写 localStorage（键 = STORAGE_PREFIX + 主锁键），放锁时删（核对一致、确定失败、未认领、到期）；刷新后读到的记录一律按「结果未知」
 //    恢复（原 Promise 已不存在，视为已结算），靠 registerVerifier(消息号, fn) 注册的核对器重建核对，注册时若已有该消息号的锁就立刻
-//    核对一次。记录只存：锁键、projectId、消息号、设备 id、目标字段与值、userId、sentAt（不存 label、项目名、令牌或任何凭据）；
+//    核对一次。记录只存：锁键、projectId、消息号、设备 id、目标字段与值、206 的目标房间 id 集合、userId、sentAt（不存 label、项目名、
+//    令牌或任何凭据）；
 //    读取时结构校验，JSON 损坏、sentAt 晚于现在（时钟异常 / 篡改，即到期时间晚于「现在 + 有效期」）或已到期的直接作废。
 // 8. 跨标签：监听 storage 事件，别的标签页写入 / 删除的记录同步到本标签（synced）。同步锁只读：本标签不核对它（verify 返回
 //    send-pending，对方的写可能还在路上），放锁时也不代删对方的记录；对方删除记录时本标签按到期处理（放锁 + 强制重读）。
@@ -38,11 +50,12 @@
 //      │ 没认领就结束（beforeSend 没调 / 返回 false / 抛错 / 发送前失败）：settle 或登记的 Promise 结算 → 释放、删记录
 //      ▼
 //    sent ── markSent(token, promise, 记录) 登记原写 Promise、写 localStorage、开始计有效期
-//      │ settle(ok | fail)：等原 Promise 结算后释放、删记录
-//      │ settle(unknown) ──► unknown（只认第一次 settle）
+//      │ settle(fail)：等原 Promise 结算后释放、删记录（确定没生效）
+//      │ settle(ok | unknown) ──► unknown（待核对；ok 记为「已下发」；只认第一次 settle）
 //      ▼
-//    unknown ── 原 Promise 迟到 resolve ──► 释放（证据）
-//      │ verify：原写未结算 → send-pending；能读（可见 + 键对上）才读；一致 → 释放 / 不一致、失败、503、超时 → 保持
+//    unknown（待核对）── 原 Promise 结算（不论 resolve / reject）：只标记已结算，自动核对一次
+//      │ verify：原写未结算 → send-pending；能读（可见 + 键对上）才读；
+//      │   一致 → 已生效，释放 / 不一致（mismatch）、无法核对（unverifiable）、失败、503、超时 → 保持
 //      ▼
 //    任一状态（sent / unknown）到有效期 ──► 释放 + 强制重读事件
 //    刷新 ──► restored（unknown，已结算）；别的标签页 ──► synced（unknown，已结算）
@@ -54,28 +67,50 @@
 // 没注入 resolveProject 会按不可见跳过）。localStorage 写入失败时 console.warn，降级为只在内存里锁。
 import { isApiError } from './errors'
 import { getSession, subscribeSession } from './session'
+import { isNoChange } from './writeLockVerify'
 
 /** 一次核对的最长时间 */
 export const VERIFY_TIMEOUT_MS = 15_000
 /** 有效期：默认 2 分钟，最短 30 秒 */
 export const DEFAULT_TTL_MS = 2 * 60_000
 export const MIN_TTL_MS = 30_000
+/** 自动核对未变化 / 无法核对时的退避再核对间隔 */
+export const RETRY_DELAYS_MS = [5_000, 20_000, 60_000] as const
 export const STORAGE_PREFIX = 'hjc-write-lock:'
+/** 206 目标房间集合的上限（超过的在发送前由 checkSentRecord 拒绝，不会发出后才降级为内存锁） */
+export const ROOM_IDS_MAX = 512
+/** 一条持久化记录的最大长度（ROOM_IDS_MAX 个安全整数也放得下） */
+const STORED_MAX_CHARS = 16_000
 /** 别的账号发起、本账号核对不了（或不该看到细节）时的提示 */
 export const OTHER_ACCOUNT_TEXT = '上一账号的下发结果未知，请稍后再试或联系有权限的账号'
 
 export type LockPhase = 'held' | 'sent' | 'unknown'
 export type LockOrigin = 'local' | 'restored' | 'synced'
 export type WriteOutcome = 'ok' | 'fail' | 'unknown'
-export type VerifyResult = 'released' | 'send-pending' | 'mismatch' | 'failed' | 'offline' | 'not-visible' | 'account-changed' | 'aborted' | 'none'
+export type VerifyResult = 'released' | 'send-pending' | 'mismatch' | 'unverifiable' | 'failed' | 'offline' | 'not-visible' | 'account-changed' | 'aborted' | 'expired' | 'none'
+/** 核对函数的返回：一致 true / 不一致 false / 无法核对 'unverifiable'（目标房间缺失、回包为空、写入目标没有回读字段）；回读失败请抛错 */
+export type MatchResult = boolean | 'unverifiable' | MatchDetail
+/** 逐字段四态：已生效 / 未变化 / 无法核对 / 结果未知 */
+export type FieldResult = 'applied' | 'unchanged' | 'unverifiable' | 'unknown'
+/** 带逐字段结果的核对结论（writeLockVerify.ts 的比对函数返回它）；verdict 为整体结论，只有 applied 才放锁 */
+export interface MatchDetail { verdict: FieldResult; fields: Record<string, FieldResult> }
+/**
+ * 核对函数的返回：MatchResult，或带「提交」的候选结果（#33）。commit 只在写锁确认这次核对仍然有效（锁没换、没超时、没取消、
+ * 账号没变）之后才调，调用方据此提交逐字段的结束状态；无效的核对（迟到、超时、换账号）不提交
+ */
+export type VerifyOutcome = MatchResult | { same: boolean; commit: () => void }
+export type VerifyFn = (signal: AbortSignal) => Promise<VerifyOutcome>
 export type LockOwner = 'current' | 'previous-session' | 'other-account'
 
 /** 加锁目标：S6a 的 Project 可以直接传 */
 export interface LockTarget { id: string; controlScreenId?: string; dtuId?: string }
 
 export type Scalar = string | number | boolean | null
-/** markSent 时要持久化的核对数据：消息号、设备 id、目标字段与值 */
-export interface SentRecord { msg: number; deviceId: number | null; target: { [field: string]: Scalar } }
+/**
+ * markSent 时要持久化的核对数据：消息号、设备 id、目标字段与值；roomIds 为 206（全部房间开关）确认后预检读到的目标房间 id 集合，
+ * 核对时逐个检查这些房间（回包里缺了的按无法核对）。206 必须给（最多 ROOM_IDS_MAX 个），发送前用 checkSentRecord 检查
+ */
+export interface SentRecord { msg: number; deviceId: number | null; target: { [field: string]: Scalar }; roomIds?: number[] }
 /** localStorage 里的一条记录 */
 export interface StoredLock extends SentRecord {
   v: 1
@@ -97,7 +132,12 @@ export interface LockInfo {
   phase: LockPhase
   origin: LockOrigin
   sendSettled: boolean
+  /** 写的结论：ok = 已下发（仍待核对）；unknown = 结果未知 */
   outcome?: WriteOutcome
+  /** 最近一次核对的结果（界面据此显示：未变化 / 结果未知 / 无法核对） */
+  lastVerify?: VerifyResult
+  /** 最近一次核对的逐字段结果（界面逐项列出；整体结论只作标题）。回读失败时每个目标字段都是 unknown */
+  lastFields?: Record<string, FieldResult>
   overdue: boolean
   owner: LockOwner
   mine: boolean
@@ -127,8 +167,15 @@ interface Entry {
   record?: SentRecord
   sentAt?: number
   expiryTimer?: ReturnType<typeof setTimeout>
+  /** 自动再核对的定时器与已排次数 */
+  retryTimer?: ReturnType<typeof setTimeout>
+  retries: number
+  /** 进行中的那次核对（自动退避遇到手动核对进行中时等它的结果） */
+  inflight?: Promise<VerifyResult>
   verifyFn?: VerifyFn
   verifying: boolean
+  lastVerify?: VerifyResult
+  lastFields?: Record<string, FieldResult>
 }
 
 // ---------------------------------------------------------------------------
@@ -184,13 +231,7 @@ let version = 0
 const subs = new Set<() => void>()
 function emit() { version += 1; for (const fn of subs) { try { fn() } catch { /* 订阅者出错不影响锁 */ } } }
 const rereadSubs = new Set<(e: { keys: readonly string[]; projectId: string }) => void>()
-/**
- * 核对结果：true / false，或带「提交」的候选结果。commit 只在写锁确认这次核对仍然有效（锁没换、没超时、没取消、账号没变）之后才调，
- * 调用方据此提交逐字段的结束状态；无效的核对（迟到、超时、换账号）不提交
- */
-export type VerifyOutcome = boolean | { same: boolean; commit: () => void }
-export type VerifyFn = (signal: AbortSignal) => Promise<VerifyOutcome>
-const verifiers = new Map<number, (record: StoredLock, signal: AbortSignal) => Promise<boolean>>()
+const verifiers = new Map<number, (record: StoredLock, signal: AbortSignal) => Promise<VerifyOutcome>>()
 const newOp = () => `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`
 
 const clean = (v: unknown) => (typeof v === 'string' ? v.trim() : '')
@@ -210,7 +251,7 @@ function ownerOf(e: Entry): LockOwner {
   return cur.user !== null && cur.user === e.account.user ? 'previous-session' : 'other-account'
 }
 const storedOf = (e: Entry): StoredLock | null => (e.record && e.sentAt !== undefined
-  ? { v: 1, op: e.op, keys: e.keys, projectId: e.projectId, userId: e.account.user, sentAt: e.sentAt, msg: e.record.msg, deviceId: e.record.deviceId, target: e.record.target }
+  ? { v: 1, op: e.op, keys: e.keys, projectId: e.projectId, userId: e.account.user, sentAt: e.sentAt, msg: e.record.msg, deviceId: e.record.deviceId, target: e.record.target, ...(e.record.roomIds ? { roomIds: e.record.roomIds } : {}) }
   : null)
 const verifierOf = (e: Entry): VerifyFn | undefined => {
   if (e.verifyFn) return e.verifyFn
@@ -223,7 +264,7 @@ const view = (e: Entry): LockInfo => {
   const hide = owner === 'other-account'
   return {
     key: e.token.key, keys: e.keys, projectId: hide ? '' : e.projectId, label: hide ? '' : e.label, phase: e.phase, origin: e.origin,
-    sendSettled: e.sendSettled, outcome: e.outcome, overdue: e.overdue, owner, mine: owner === 'current', verifiable: !!verifierOf(e),
+    sendSettled: e.sendSettled, outcome: e.outcome, lastVerify: e.lastVerify, lastFields: hide ? undefined : e.lastFields, overdue: e.overdue, owner, mine: owner === 'current', verifiable: !!verifierOf(e),
     verifying: e.verifying, expiresAt: e.sentAt !== undefined ? e.sentAt + ttlMs : undefined,
   }
 }
@@ -246,16 +287,30 @@ function validTarget(t: unknown): t is { [k: string]: Scalar } {
   const ks = Object.keys(t)
   return ks.length > 0 && ks.length <= 16 && ks.every((k) => FIELD_RE.test(k) && !CRED_RE.test(k) && scalar((t as Record<string, unknown>)[k]))
 }
-const validRecord = (r: SentRecord) => Number.isInteger(r.msg) && r.msg > 0 && r.msg < 100_000 && (r.deviceId === null || Number.isSafeInteger(r.deviceId)) && validTarget(r.target)
+const validRoomIds = (v: unknown) => v === undefined || (Array.isArray(v) && v.length > 0 && v.length <= ROOM_IDS_MAX && v.every((n) => Number.isSafeInteger(n)))
+const validRecord = (r: SentRecord) => Number.isInteger(r.msg) && r.msg > 0 && r.msg < 100_000 && (r.deviceId === null || Number.isSafeInteger(r.deviceId)) && validTarget(r.target) && validRoomIds(r.roomIds)
+const copyRecord = (r: SentRecord): SentRecord => ({ msg: r.msg, deviceId: r.deviceId, target: { ...r.target }, ...(r.roomIds ? { roomIds: [...r.roomIds] } : {}) })
+
+/**
+ * 发送前检查核对数据（在 requestWrite 之前调用）：返回 null = 可以登记；否则返回给用户看的原因，调用方应 release(token)、
+ * 提示该原因、不发送。206 必须带非空的目标房间集合，且不超过 ROOM_IDS_MAX 个；其余按落盘的结构校验
+ */
+export function checkSentRecord(r: SentRecord): string | null {
+  if (r.msg === 206) {
+    if (!Array.isArray(r.roomIds) || !r.roomIds.length) return '没有读到目标房间，无法核对下发结果，未下发'
+    if (r.roomIds.length > ROOM_IDS_MAX) return `目标房间超过 ${ROOM_IDS_MAX} 个，无法记录核对数据，未下发`
+  }
+  return validRecord(r) ? null : '核对数据不合规，未下发'
+}
 
 /** 结构校验（含时间合理性）：不合规、到期、sentAt 晚于现在返回 null */
 export function parseStored(raw: string | null, now = Date.now()): StoredLock | null {
-  if (!raw || raw.length > 4_000) return null
+  if (!raw || raw.length > STORED_MAX_CHARS) return null
   let o: unknown
   try { o = JSON.parse(raw) } catch { return null }
   if (!o || typeof o !== 'object' || Array.isArray(o)) return null
   const r = o as Record<string, unknown>
-  const allowed = new Set(['v', 'op', 'keys', 'projectId', 'userId', 'sentAt', 'msg', 'deviceId', 'target'])
+  const allowed = new Set(['v', 'op', 'keys', 'projectId', 'userId', 'sentAt', 'msg', 'deviceId', 'target', 'roomIds'])
   if (Object.keys(r).some((k) => !allowed.has(k))) return null
   const str = (x: unknown) => typeof x === 'string' && x.length > 0 && x.length <= 200
   if (r.v !== 1 || !str(r.op) || !str(r.projectId) || !(r.userId === null || str(r.userId))) return null
@@ -263,7 +318,7 @@ export function parseStored(raw: string | null, now = Date.now()): StoredLock | 
   if (typeof r.sentAt !== 'number' || !Number.isFinite(r.sentAt)) return null
   if (r.sentAt > now) return null // 到期时间晚于「现在 + 有效期」：时钟异常或被改过
   if (r.sentAt + ttlMs <= now) return null // 已到期
-  const rec = { msg: r.msg, deviceId: r.deviceId, target: r.target } as SentRecord
+  const rec = { msg: r.msg, deviceId: r.deviceId, target: r.target, ...(r.roomIds !== undefined ? { roomIds: r.roomIds } : {}) } as SentRecord
   if (!validRecord(rec)) return null
   return r as unknown as StoredLock
 }
@@ -291,9 +346,21 @@ function drop(e: Entry) {
   if (!isLive(e)) return
   for (const k of e.keys) if (byKey.get(k) === e) byKey.delete(k)
   if (e.expiryTimer) clearTimeout(e.expiryTimer)
+  if (e.retryTimer) clearTimeout(e.retryTimer)
   removeStored(e)
   emit()
 }
+
+/** 回读失败时的逐字段结果：核对数据里每个改了的字段都是结果未知（没有核对数据时为空） */
+function unknownFields(e: Entry): Record<string, FieldResult> | undefined {
+  if (!e.record) return undefined
+  const out: Record<string, FieldResult> = {}
+  for (const [k, v] of Object.entries(e.record.target)) if (!isNoChange(e.record.msg, k, v)) out[k] = 'unknown'
+  return out
+}
+
+/** 按当前时间判断是否已过有效期（不依赖到期定时器是否已执行） */
+const isExpired = (e: Entry) => e.sentAt !== undefined && Date.now() >= e.sentAt + ttlMs
 
 /** 到有效期：放锁、通知订阅者、发强制重读事件 */
 function expire(e: Entry) {
@@ -313,7 +380,7 @@ function adopt(rec: StoredLock, origin: 'restored' | 'synced'): Entry | null {
   const e: Entry = {
     token: Object.freeze({ id: ++seq, key: rec.keys[0] }), op: rec.op, keys: [...rec.keys], projectId: rec.projectId, label: '',
     account: { user: rec.userId, gen: -1 }, origin, phase: 'unknown', sendSettled: true, outcome: 'unknown', overdue: true,
-    record: { msg: rec.msg, deviceId: rec.deviceId, target: rec.target }, sentAt: rec.sentAt, verifying: false,
+    record: copyRecord(rec), sentAt: rec.sentAt, verifying: false, retries: 0,
   }
   for (const k of e.keys) byKey.set(k, e)
   startExpiry(e)
@@ -369,7 +436,7 @@ export function acquire(target: LockTarget, label = ''): { ok: true; token: Lock
     if (cur) return { ok: false, busy: view(cur) }
   }
   const token: LockToken = Object.freeze({ id: ++seq, key: keys[0] })
-  const e: Entry = { token, op: newOp(), keys, projectId: target.id, label, account: currentAccount(), origin: 'local', phase: 'held', sendSettled: false, overdue: false, verifying: false }
+  const e: Entry = { token, op: newOp(), keys, projectId: target.id, label, account: currentAccount(), origin: 'local', phase: 'held', sendSettled: false, overdue: false, verifying: false, retries: 0 }
   for (const k of keys) byKey.set(k, e)
   emit()
   return { ok: true, token }
@@ -390,17 +457,37 @@ export function claim(token: LockToken): boolean {
   return true
 }
 
-function afterSettled(e: Entry, resolved: boolean) {
+/** 自动退避再核对的结果：这些都还不是一致，按节奏继续 */
+const RETRYABLE = new Set<VerifyResult>(['mismatch', 'unverifiable', 'failed', 'offline', 'not-visible', 'aborted', 'account-changed'])
+
+/**
+ * 自动核对：原写结算后（或注册核对器时）核对一次；不一致按 RETRY_DELAYS_MS 退避再核对，不超过有效期。
+ * 到点遇到手动核对进行中：等它的结果再决定是否继续
+ */
+function autoVerify(e: Entry) {
+  if (!isLive(e)) return
+  if (isExpired(e)) { expire(e); return }
+  const running = e.inflight
+  void (running ?? verify(e.token.key)).then((r) => {
+    if (!isLive(e)) return
+    if (isExpired(e)) { expire(e); return }
+    if (!RETRYABLE.has(r)) return
+    const delay = RETRY_DELAYS_MS[e.retries]
+    if (delay === undefined || e.retryTimer) return
+    if (e.sentAt !== undefined && Date.now() + delay >= e.sentAt + ttlMs) return // 到期前来不及：交给到期
+    e.retries += 1
+    e.retryTimer = setTimeout(() => { e.retryTimer = undefined; autoVerify(e) }, delay)
+  })
+}
+
+function afterSettled(e: Entry) {
   e.sendSettled = true
   if (!isLive(e)) return
   emit()
   if (e.phase === 'held') { drop(e); return } // 没认领：必未发出
-  if (e.phase === 'unknown') {
-    if (resolved) { drop(e); return } // 原写迟到 success=true：生效证据
-    if (verifierOf(e)) void verify(e.token.key) // 结算之后自动核对一次
-    return
-  }
-  if (e.outcome === 'ok' || e.outcome === 'fail') drop(e)
+  // 待核对（含已下发）：原写结算（resolve 也只算已下发）后自动核对一次
+  if (e.phase === 'unknown') { if (verifierOf(e)) autoVerify(e); return }
+  if (e.outcome === 'fail') drop(e)
 }
 
 /**
@@ -412,25 +499,37 @@ export function markSent(token: LockToken, sent: Promise<unknown>, record?: Sent
   if (!e || e.sent) return
   e.sent = sent
   e.sentAt = Date.now()
-  if (record && validRecord(record)) e.record = { msg: record.msg, deviceId: record.deviceId, target: { ...record.target } }
-  else if (record) console.warn('[writeLock] 核对数据不合规，不落盘')
+  // 指令已发出：空的目标房间集合规范成"缺失"，照常落盘（核对按无法核对），不能因此只剩内存锁
+  if (record && Array.isArray(record.roomIds) && record.roomIds.length === 0) {
+    const { roomIds: _empty, ...rest } = record
+    record = rest
+  }
+  if (record && validRecord(record)) {
+    e.record = copyRecord(record)
+    // 206 漏传目标房间集合（接入应先用 checkSentRecord 拒绝）：照常落盘与锁住，核对一律按无法核对，锁到有效期
+    if (record.msg === 206 && !record.roomIds?.length) console.warn('[writeLock] 206 缺少目标房间集合，核对将按无法核对处理')
+  } else if (record) console.warn('[writeLock] 核对数据不合规，不落盘')
   writeStored(e)
   startExpiry(e)
-  sent.then(() => afterSettled(e, true), () => afterSettled(e, false))
+  sent.then(() => afterSettled(e), () => afterSettled(e))
 }
 
-/** 记下这次写的结论（只认第一次）。未认领 → 必未发出，直接释放；已认领：ok / fail 等原写结算后释放，unknown 待核对 */
+/**
+ * 记下这次写的结论（只认第一次）。未认领 → 必未发出，直接释放；已认领：fail（确定没生效）等原写结算后释放；
+ * ok（success，只算已下发）与 unknown 一样进入待核对，核对一致才放锁
+ */
 export function settle(token: LockToken, outcome: WriteOutcome): void {
   const e = entryOf(token)
   if (!e) return
   if (e.phase === 'held') { drop(e); return }
   if (e.outcome !== undefined) return
   e.outcome = outcome
-  if (outcome === 'unknown') {
+  if (outcome === 'ok' || outcome === 'unknown') {
     e.phase = 'unknown'
+    if (!e.sent) e.sendSettled = true // 没登记原写：没有要等的
     emit()
-    // 原写已先结算（调用方 await 之后在 catch 里 settle）：afterSettled 当时还不是 unknown，这里补一次自动核对
-    if (e.sendSettled && verifierOf(e)) void verify(e.token.key)
+    // 原写已先结算（调用方 await 之后再 settle）：afterSettled 当时还不是待核对，这里补一次自动核对
+    if (e.sendSettled && verifierOf(e)) autoVerify(e)
     return
   }
   emit()
@@ -445,7 +544,10 @@ export function markOverdue(token: LockToken): void {
   emit()
 }
 
-/** 登记本次的核对函数（新读成功且目标值一致返回 true；不登记则用 registerVerifier 按消息号注册的核对器） */
+/**
+ * 登记本次的核对函数（新读成功且目标值一致返回 true，不一致 false，无法核对返回 'unverifiable'，读取失败抛错；
+ * 不登记则用 registerVerifier 按消息号注册的核对器）
+ */
 export function requireVerify(token: LockToken, fn: VerifyFn): void {
   const e = entryOf(token)
   if (!e) return
@@ -485,10 +587,10 @@ export function commitRead(ticket: ReadTicket | null | undefined, commit: () => 
 }
 
 /** 按消息号注册核对器（刷新恢复的锁用它重建核对）。注册时若已有该消息号、结果未知且原写已结算的锁，立刻核对一次 */
-export function registerVerifier(msg: number, fn: (record: StoredLock, signal: AbortSignal) => Promise<boolean>): () => void {
+export function registerVerifier(msg: number, fn: (record: StoredLock, signal: AbortSignal) => Promise<VerifyOutcome>): () => void {
   verifiers.set(msg, fn)
   for (const e of new Set(byKey.values())) {
-    if (e.phase === 'unknown' && e.sendSettled && !e.verifyFn && e.record?.msg === msg && e.origin !== 'synced') void verify(e.token.key)
+    if (e.phase === 'unknown' && e.sendSettled && !e.verifyFn && e.record?.msg === msg && e.origin !== 'synced') autoVerify(e)
   }
   emit()
   return () => { if (verifiers.get(msg) === fn) verifiers.delete(msg) }
@@ -508,11 +610,19 @@ export async function verify(keyOrTarget: string | LockTarget, signal?: AbortSig
   const fn = e ? verifierOf(e) : undefined
   if (e?.origin === 'synced' && e.phase === 'unknown') return 'send-pending' // 别的标签页的锁：对方的写可能还在路上，本标签不核对
   if (!e || e.phase !== 'unknown' || !fn || e.verifying) return 'none'
+  if (isExpired(e)) { expire(e); return 'expired' } // 已过有效期：不发起核对
   if (signal?.aborted) return 'aborted'
   if (!e.sendSettled) return 'send-pending'
   // 能不能读：当前账号可见范围里有这个项目，且用当前项目对象算出的主锁键与锁的一致
   const p = resolveProject?.(e.projectId) ?? null
   if (!p || lockKeyOf(p) !== e.token.key) return 'not-visible'
+  const run = runVerify(e, fn, signal)
+  e.inflight = run
+  try { return await run } finally { if (e.inflight === run) e.inflight = undefined }
+}
+
+async function runVerify(e: Entry, fn: VerifyFn, signal?: AbortSignal): Promise<VerifyResult> {
+  // 读取凭据（与页面回读同一套，见 beginRead / commitRead）：记下锁 token 与读取开始时的账号
   const ticket: ReadTicket = { token: e.token, account: currentAccount() }
   const ac = new AbortController()
   const onAbort = () => ac.abort()
@@ -521,10 +631,15 @@ export async function verify(keyOrTarget: string | LockTarget, signal?: AbortSig
   const timeout = new Promise<never>((_, reject) => { timer = setTimeout(() => { ac.abort(); reject(new Error('核对超时')) }, VERIFY_TIMEOUT_MS) })
   e.verifying = true
   emit()
-  let got: VerifyOutcome = false
+  let same: FieldResult = 'unchanged'
+  let fields: Record<string, FieldResult> | undefined
+  let commit: (() => void) | undefined
   let err: unknown = null
   try {
-    got = await Promise.race([fn(ac.signal), timeout])
+    const r = await Promise.race([fn(ac.signal), timeout])
+    if (r && typeof r === 'object' && 'commit' in r) { same = r.same ? 'applied' : 'unchanged'; commit = r.commit }
+    else if (r && typeof r === 'object') { same = r.verdict; fields = { ...r.fields } }
+    else same = r === 'unverifiable' ? 'unverifiable' : r === true ? 'applied' : 'unchanged'
   } catch (x) {
     err = x ?? new Error('核对失败')
   } finally {
@@ -533,24 +648,37 @@ export async function verify(keyOrTarget: string | LockTarget, signal?: AbortSig
     e.verifying = false
     if (isLive(e)) emit()
   }
-  if (!sameAccount(currentAccount(), ticket.account)) return 'account-changed'
-  if (signal?.aborted) return 'aborted'
-  // 超时会先中止内部信号再报错：核对函数若一收到中止就同步返回结果，可能先于超时错误胜出。中止过的一律作废，不提交、不放锁
-  if (ac.signal.aborted && !err) return 'failed'
-  if (err) return isApiError(err) && err.kind === 'unavailable' ? 'offline' : 'failed'
-  // 提交与页面回读同一条路径（commitRead）：锁没换、没过有效期、账号没变才提交候选结果，再按结论放锁
-  const candidate = got
-  if (!commitRead(ticket, () => { if (typeof candidate === 'object' && candidate) candidate.commit() })) return 'none'
-  if (!(got === true || (typeof got === 'object' && got?.same === true))) return 'mismatch'
-  drop(e)
-  return 'released'
+  // 只有整体为已生效（所有目标字段都一致）才放锁
+  const result: VerifyResult = !sameAccount(currentAccount(), ticket.account) ? 'account-changed'
+    : signal?.aborted ? 'aborted'
+    // 超时会先中止内部信号再报错：核对函数若一收到中止就同步返回结果，可能先于超时错误胜出。中止过的一律作废（#33）
+    : ac.signal.aborted && !err ? 'failed'
+    : err ? (isApiError(err) && err.kind === 'unavailable' ? 'offline' : 'failed')
+    : same === 'unknown' ? 'failed'
+    : same === 'unchanged' ? 'mismatch'
+    : same === 'unverifiable' ? 'unverifiable'
+    : 'released'
+  if (!isLive(e)) return result === 'released' ? 'none' : result
+  if (isExpired(e)) { expire(e); return 'expired' } // 读取期间过了有效期：不接受核对结果
+  // 这次核对没出错、没中止：候选结果经 commitRead 提交（与页面回读同一条路径：锁没换、没过有效期、账号没变才提交），再按结论放锁
+  const valid = result !== 'account-changed' && result !== 'aborted' && !err && !ac.signal.aborted
+    && commitRead(ticket, () => commit?.(), signal)
+  if (result === 'released') { if (!valid) return 'none'; drop(e); return result }
+  // 未变化 / 无法核对 / 结果未知：锁保持到核对一致或有效期到期（不续期）
+  if (result !== 'aborted') {
+    e.lastVerify = result
+    // 回读失败或读取途中换号：核对器返回的逐字段结果作废，每个改了的目标字段都记为结果未知（中止不更新上次结论）
+    e.lastFields = valid ? fields : unknownFields(e)
+    emit()
+  }
+  return result
 }
 
-/** 主动放弃：只在还没认领（held）时，或已有确定结论（ok / fail）且原写已结算时生效 */
+/** 主动放弃：只在还没认领（held）时，或结论是 fail（确定没生效）且原写已结算时生效；已下发 / 结果未知都要核对一致或到期 */
 export function release(token: LockToken): boolean {
   const e = entryOf(token)
   if (!e) return false
-  const ok = e.phase === 'held' || ((e.outcome === 'ok' || e.outcome === 'fail') && (!e.sent || e.sendSettled))
+  const ok = e.phase === 'held' || (e.outcome === 'fail' && (!e.sent || e.sendSettled))
   if (!ok) return false
   drop(e)
   return true
@@ -577,7 +705,7 @@ export const lockVersion = () => version
 
 /** 仅供测试：清空锁、核对器与配置；换账号来源（不传恢复默认的 api/session） */
 export function __resetWriteLockForTests(account?: () => Account) {
-  for (const e of new Set(byKey.values())) if (e.expiryTimer) clearTimeout(e.expiryTimer)
+  for (const e of new Set(byKey.values())) { if (e.expiryTimer) clearTimeout(e.expiryTimer); if (e.retryTimer) clearTimeout(e.retryTimer) }
   byKey = new Map()
   verifiers.clear()
   rereadSubs.clear()

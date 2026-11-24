@@ -47,6 +47,7 @@ describe('S12b 接入写锁', () => {
   })
 
   it('claim 在 beforeSend 链的最后：批次复核不过时不认领（锁直接放）；认领时锁已在 sent 之前是 held', async () => {
+    L.configureWriteLock({ resolveProject: (id) => (id === 'ok1' ? { id: 'ok1' } : null) }) // #31：success 只算已下发，核对一致才放锁（核对前要能查到项目）
     const spy = vi.spyOn(L, 'claim')
     let phaseAtSend: string | undefined
     const send: BatchSender = async (p, _q, o) => {
@@ -268,6 +269,7 @@ describe('注册了 203 核对器时', () => {
     const off = { rooms: 3, roomSwitch: 0, roomTemp: 24.5, perRoom: { roomSwitch: [0, 0, 0], roomTemp: [21.5, 24.5, 24.5] } }
 
     it('成功且一致 → 已生效，放锁', async () => {
+      L.configureWriteLock({ resolveProject: (id) => (id === 'a1' ? { id: 'a1', controlScreenId: 'Sa1' } : null) }) // #31：核对一致才放锁（核对前要能查到项目）
       const b = batchWith('a1', [off, { rooms: 3, roomSwitch: 1, roomTemp: null, perRoom: { roomSwitch: [1, 1, 1], roomTemp: [21.5, 24.5, 24.5] } }])
       const done = await runOnce(b, ['a1'])
       await flush()
@@ -431,23 +433,32 @@ describe('下发后第一次回读经写锁提交', () => {
     expect(await L.verify('screen:Sf1')).toBe('released')
   })
 
-  it('首次回读期间锁已过有效期（计时器还没跑）：读数一致也不提交、不按 ok 放锁；锁按到期放开并发强制重读', async () => {
+  it('首次回读期间锁已过有效期（计时器还没跑）：读数一致也不提交、不按 ok 放锁；核对发起前按当前时间判到期，立即放锁并强制重读一次', async () => {
+    // 经赤兔 11/24 授权按 #31 口径改预期：核对发起前用当前时间判已过期 → 立即放锁、强制重读一次（不等计时器）
     vi.useFakeTimers({ shouldAdvanceTime: true })
     try {
       const reread = vi.fn()
       L.onForceReread(reread)
+      const settleSpy = vi.spyOn(L, 'settle')
       const g = gated('f2')
       await g.waitRead()
       vi.setSystemTime(Date.now() + L.DEFAULT_TTL_MS + 1)
       g.resolve(on)
       const done = await g.run
       await flush()
+      // 过期那次的首次回读数据不提交、字段状态不变：字段没被记为结束，不按 ok 结算，只转结果未知
+      expect(settleSpy.mock.calls.some(([, o]) => o === 'ok')).toBe(false)
+      expect(settleSpy.mock.calls.some(([, o]) => o === 'unknown')).toBe(true)
+      // 不显示「已生效」
       expect(done.rows[0].status).toBe('unknown')
-      expect(L.lockOf('screen:Sf2')).not.toBeNull()
-      expect(reread).not.toHaveBeenCalled()
-      vi.advanceTimersByTime(L.DEFAULT_TTL_MS + 10)
+      expect(done.rows[0].status).not.toBe('success')
+      // 核对发起前判到期：立即放锁、强制重读一次，也不再发核对读
       expect(L.lockOf('screen:Sf2')).toBeNull()
       expect(reread).toHaveBeenCalledTimes(1)
+      expect(g.read).toHaveBeenCalledTimes(2)
+      vi.advanceTimersByTime(L.DEFAULT_TTL_MS + 10)
+      expect(reread).toHaveBeenCalledTimes(1)
+      settleSpy.mockRestore()
     } finally { vi.useRealTimers() }
   })
 
@@ -577,6 +588,7 @@ describe('下发后第一次回读经写锁提交', () => {
   it('读完、交给状态机判定之前账号变了（日志回调里换号）：先提交再判定，显示与写锁一致（已提交的读数才显示已生效，锁按 ok 放开）', async () => {
     let who = { user: 'A', gen: 1 }
     L.__resetWriteLockForTests(() => who)
+    L.configureWriteLock({ resolveProject: (id) => (id === 'f7' ? { id: 'f7', controlScreenId: 'Sf7' } : null) }) // #31：success 只算已下发，核对一致才放锁（核对前要能查到项目；经赤兔 11/24 授权）
     const log = vi.fn((x: { event: string }) => { if (x.event === 'read-after') who = { user: 'B', gen: 2 } })
     let n = 0
     const read = vi.fn(async () => { n += 1; return n === 1 ? off : on })
