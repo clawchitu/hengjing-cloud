@@ -1,0 +1,207 @@
+// 恒境云用到的 ctrl 同步消息（MessageType 200–210）。
+// 摘自后端 kxjserver/ctrlcb/api/ctrlcb.proto（docs/api/ctrlcb.proto 第 1734–1795、1859–1995 行），
+// 消息与字段号未作任何改动。int64 在生成代码里是 bigint，src/api/ctrl.ts 在编解码边界统一转成 number
+// （设备 ID 与毫秒时间戳都远小于 2^53）。重新生成：npm run gen:proto
+syntax = "proto3";
+
+package ctrlcb.v1;
+
+message TPAirSensorGetQuery {}
+message TPAirSensorGetReply {
+  message AirSensorData {
+    // 空气传感器名称
+    string name         = 1;
+    // 空气传感器id
+    int64  id           = 2;
+    // 温度
+    float  temperature  = 3;
+    // 湿度
+    int32  humidity     = 4;
+    // pm2.5
+    int32  pm2_5        = 5;
+    // 二氧化碳
+    int32  co2          = 6;
+    // 露点温度
+    float  dew_point    = 7;
+    bool   is_connected = 8;
+  }
+  repeated AirSensorData data = 1;
+}
+
+message TPRoomPanelDataHourGetQuery {
+  int64 device_id  = 1;
+  int64 start_time = 2;
+  int64 end_time   = 3;
+}
+message TPRoomPanelDataHourGetReply {
+  message RoomPanelDataHour {
+    int64 id                = 1; // 设备ID
+    int64 date              = 2; // 日期(毫秒)
+    int32 hour              = 3; // 小时值
+    float temperature       = 4; // 空气温度，-100为无效数据
+    float floor_temperature = 5; // 地面温度，-100为无效数据
+    float humidity          = 6; // 湿度，-100为无效数据
+    float dew_point         = 7; // 露点，-100为无效数据
+    int32 co2               = 8; // 二氧化碳，-100为无效数据
+    int32 pm2_5             = 9; // pm2.5，-100为无效数据
+  }
+  repeated RoomPanelDataHour data = 1;
+}
+
+message TPAirSensorDataHourGetQuery {
+  int64 device_id  = 1;
+  int64 start_time = 2;
+  int64 end_time   = 3;
+}
+message TPAirSensorDataHourGetReply {
+  message AirSensorDataHour {
+    int64 id                = 1; // 设备ID
+    int64 date              = 2; // 日期(毫秒)
+    int32 hour              = 3; // 小时值
+    float temperature       = 4; // 空气温度，-100为无效数据
+    float floor_temperature = 5; // 地面温度，-100为无效数据
+    float humidity          = 6; // 湿度，-100为无效数据
+    float dew_point         = 7; // 露点，-100为无效数据
+    int32 co2               = 8; // 二氧化碳，-100为无效数据
+    int32 pm2_5             = 9; // pm2.5，-100为无效数据
+  }
+  repeated AirSensorDataHour data = 1;
+}
+
+message UnifiedCtrlSetQuery {
+  enum OperatingMode {
+    OPERATION_MODE_NONE                     = 0;   // 不变
+    OPERATION_MODE_SUMMER                   = 2;   // 夏季模式
+    OPERATION_MODE_WINTER                   = 3;   // 冬季模式
+    OPERATION_MODE_VENTILATION              = 4;   // 通风模式
+    OPERATION_MODE_DEHUMIDIFY               = 5;   // 除湿
+    OPERATION_MODE_FREE_COOLING             = 6;   // 免费制冷模式
+    OPERATION_MODE_HEATING_DEHUMIDIFY       = 8;   // 制热除湿模式
+    OPERATION_MODE_HEATING                  = 9;   // 供热模式
+    OPERATION_MODE_HEATING_HUMIDIFY         = 10;  // 供热加湿模式
+    OPERATION_MODE_HUMIDIFY                 = 11;  // 加湿模式
+    OPERATION_MODE_REFRIGERATION            = 12;  // 供冷模式
+    OPERATION_MODE_REFRIGERATION_HUMIDIFY   = 13;  // 供冷加湿模式
+    OPERATION_MODE_REFRIGERATION_DEHUMIDIFY = 14;  // 供冷除湿模式
+    OPERATION_MODE_REFRIGERATION_HEATING    = 15;  // 冷热过度模式
+    OPERATION_MODE_AUTO                     = 100; // 自动模式
+  }
+  int32         system_switch = 1; // 系统开关 - -1: 不变，1: 开启，0: 关闭
+  OperatingMode system_mode   = 2; // 运行模式
+  int32         room_switch   = 3; // 房间开关 - -1: 不变，1: 开启，0: 关闭
+  float         room_temp     = 4; // 房间温度 - -1: 不变，其他值为设定温度
+}
+message UnifiedCtrlSetReply {
+  bool   success = 1;
+  string msg     = 2;
+}
+
+message RoomTemperatureDataGetQuery {}
+message RoomTemperatureDataGetReply {
+  message RoomTemperatureData {
+    message WorkModeData {
+      string option_name = 1; // 末端的名称
+      int32  type        = 2; // 末端类型值，风盘为0，顶辐射为1，地暖为2，地冷为3，全空气为4
+      bool   is_selected = 3; // 是否被选中,选择才生效，如只选中地暖，该房间只有地暖工作，其他风盘、顶辐射末端将关闭
+      bool   is_change   = 4; // 该末端是否支持关闭，目前进全空气末端不允许关闭
+      int32 switch       = 5; // 开关 - 1为开启，0为关闭，-1为不变
+    }
+    int64  id                          = 1;  // 设备ID
+    string name                        = 2;  // 设备名称
+    float  temperature                 = 3;  // 室内温度
+    float  humidity                    = 4;  // 湿度
+    float  dew_point                   = 5;  // 露点
+    float  set_temp                    = 6;  // 设定温度
+    float  set_humi                    = 7;  // 设定湿度
+    int32  wind_speed                  = 8;  // 风速 - 数字即为风速档位，100为自动风速
+    int32  eco                         = 9;  // 节能模式 - 1为节能，0为标准
+    int32 switch                       = 13; // 开关 - 1为开启，0为关闭，-1为不变
+    int32                 mode         = 14; // 工作模式 - 0为制冷，1为制热，2为通风
+    repeated WorkModeData end_modes    = 15;
+    bool                  is_connected = 16; // 是否连接
+  }
+  repeated RoomTemperatureData data = 1;
+}
+
+message RoomTemperatureSetQuery {
+  int64 equipment_id = 1; // 设备ID
+  float temperature  = 2; // 温度
+  float humidity     = 3; // 湿度
+  int32 wind_speed   = 4; // 风速 - 数字即为风速档位，100为自动风速
+  int32 eco          = 8; // 节能模式 - 1为节能，0为标准
+  int32 switch       = 9; // 开关 - 1为开启，0为关闭，-1为不变
+                          // 房间末端至少选中一项，如果修改，需要将获取的完整信息传入
+  repeated RoomTemperatureDataGetReply.RoomTemperatureData.WorkModeData end_modes = 10;
+}
+message RoomTemperatureSetReply {
+  bool   success = 1;
+  string msg     = 2;
+}
+
+message FreshDehumidifierGetQuery {}
+message FreshDehumidifierGetReply {
+  message FreshDehumidifierData {
+    int64  id                  = 1;  // 设备ID
+    string name                = 2;  // 设备名称
+    float  supply_temp         = 3;  // 送风温度
+    float  return_temp         = 4;  // 回风温度
+    int32  wind_level          = 5;  // 风速档位
+    int32  wind_speed          = 6;  // 风机转速
+    int32  dehumidifier_status = 7;  // 压缩机状态
+    int32  dehumidifier_freq   = 8;  // 压缩机频率
+    int32  filter_life         = 9;  // 滤网寿命
+    int32  filter_life_p       = 10; // 滤网寿命百分比
+    int32  filter_running      = 11; // 滤网运行时间
+    string running_mode        = 12; // 运行模式
+    int64  running_time        = 13; // 运行时间
+    int32 switch               = 14; // 开关 - 1为开启，0为关闭
+    bool is_connected          = 15; // 是否连接
+  }
+  repeated FreshDehumidifierData data = 1;
+}
+
+message DeviceSummaryGetQuery {}
+message DeviceSummaryGetReply {
+  message DeviceSummaryData {
+    int64  device_id   = 1; // 设备ID
+    string device_name = 2; // 设备名称
+    string model       = 3; // 设备型号
+    string address     = 4; // 设备地址
+    int32  conn_status = 5; // 连接状态 - 0: 离线, 1: 在线，2: 异常
+  }
+  repeated DeviceSummaryData data = 1;
+}
+
+message RunningCtrlGetQuery { int64 device_id = 1; }
+message RunningCtrlGetReply {
+  int64  id           = 1; // 设备ID
+  string name         = 2; // 设备名称
+  int32  control_type = 3; // 当前控制类型 - 1: 露点控制, 0: 湿度控制，-1: 露点与湿度均不可控
+  float  dew_point    = 4; // 露点 - 值为 [-1] 时，前端显示为 [--]
+  float  humidity_set = 5; // 设定湿度 - 值为 [-1] 时，前端显示为 [--]
+  int32  wind_speed   = 6; // 设定风速 - 0: 低, 1: 高, 2: 自动
+  int32 switch        = 7; // 开关 - 1为开启，0为关闭，-1为不变
+  bool can_change     = 8; // 是否可以更改控制类型
+}
+
+message RunningCtrlSetQuery {
+  int64  id           = 1; // 设备ID
+  string name         = 2; // 设备名称
+  int32  control_type = 3; // 当前控制类型 - 1: 露点控制, 0: 湿度控制
+  float  dew_point    = 4; // 露点
+  float  humidity_set = 5; // 设定湿度
+  int32  wind_speed   = 6; // 设定风速
+  int32 switch        = 7; // 开关 - 1为开启，0为关闭，-1为不变
+}
+message RunningCtrlSetReply {
+  bool   success = 1;
+  string msg     = 2;
+}
+
+message ProjectRoomSwitchSetQuery {
+  int32 switch = 1; // 开关 - 1为开启，0为关闭，-1为不变
+}
+message ProjectRoomSwitchSetReply {
+  bool   success = 1;
+  string msg     = 2;
+}
