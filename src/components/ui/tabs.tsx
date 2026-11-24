@@ -15,8 +15,24 @@ function TabsList(props: React.ComponentProps<typeof TabsPrimitive.List>) {
   return <TabsPrimitive.List data-slot="tabs-list" {...props} />
 }
 
-function TabsTrigger({ className, ...props }: React.ComponentProps<typeof TabsPrimitive.Trigger>) {
-  return <TabsPrimitive.Trigger data-slot="tabs-trigger" className={cn('text-left', className)} {...props} />
+/*
+ * Radix 在 mousedown 里用脚本 focus() 聚焦触发器，Chromium 因此把鼠标点击也当成 :focus-visible。
+ * 这里记下“这次聚焦来自指针”（data-pointer-focus），按键或失焦后清掉；使用方的焦点样式写成
+ * `focus-visible:not-data-[pointer-focus]:…`，鼠标点击不出现，Tab / 方向键进入时出现。
+ */
+function TabsTrigger({ className, onPointerDown, onKeyDown, onBlur, ...props }: React.ComponentProps<typeof TabsPrimitive.Trigger>) {
+  const [pointer, setPointer] = React.useState(false)
+  return (
+    <TabsPrimitive.Trigger
+      data-slot="tabs-trigger"
+      data-pointer-focus={pointer ? '' : undefined}
+      className={cn('text-left', className)}
+      onPointerDown={(e) => { setPointer(true); onPointerDown?.(e) }}
+      onKeyDown={(e) => { setPointer(false); onKeyDown?.(e) }}
+      onBlur={(e) => { setPointer(false); onBlur?.(e) }}
+      {...props}
+    />
+  )
 }
 
 function TabsContent(props: React.ComponentProps<typeof TabsPrimitive.Content>) {

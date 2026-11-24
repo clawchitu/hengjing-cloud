@@ -98,8 +98,8 @@ test.describe('Table', () => {
     await page.mouse.move(1439, 899)
     const table = page.locator('table[data-slot="table"]').first()
     const rows = table.locator('tbody[data-slot="table-body"] > tr')
-    expect(await rows.count()).toBeGreaterThanOrEqual(4)
-    const classes = ['', 'st-off', 'st-err', 'mod'] as const
+    expect(await rows.count()).toBeGreaterThanOrEqual(5)
+    const classes = ['', 'st-off', 'st-err', 'mod', 'cur-row'] as const
     await table.evaluate((t, cls) => {
       t.classList.add('ptable')
       const trs = t.querySelectorAll('tbody[data-slot="table-body"] > tr')
@@ -110,6 +110,7 @@ test.describe('Table', () => {
       ['st-off', 'rgb(255, 247, 247)', HOVER],
       ['st-err', 'rgb(255, 252, 242)', HOVER],
       ['mod', 'rgb(255, 251, 235)', 'rgb(255, 251, 235)'], // !important 仍压过悬停
+      ['cur-row', 'rgb(240, 253, 255)', HOVER],
     ] as const
     for (const [i, [cls, idle, hovered]] of cases.entries()) {
       const td = rows.nth(i).locator('td[data-slot="table-cell"]').first()
@@ -160,5 +161,145 @@ test.describe('Button 悬停', () => {
     await btn.hover()
     await expect(btn).toHaveCSS('background-color', 'rgb(14, 116, 144)')
     expect(await hoverRuleIsUnconditional(page, 'hover\\:bg-\\[\\#0e7490\\]')).toEqual([true])
+  })
+})
+
+test.describe('Select（集成项目）', () => {
+  test('切到不含当前区域的集成项目后，区域回到「全部区域」，列表不被旧区域过滤', async ({ page, login }) => {
+    await open(page, login, '/groups')
+    const area = page.getByRole('combobox', { name: '区域' })
+    await expect(area).toHaveText('全部区域')
+    await area.click()
+    await page.clock.runFor(100)
+    await page.getByRole('option', { name: '浦东新区' }).click()
+    await page.clock.runFor(500)
+    await expect(area).toHaveText('浦东新区')
+    // 滨江别墅区的项目都在滨江区
+    await page.locator('.grp-card', { hasText: '滨江别墅区' }).locator('h4').click()
+    await page.clock.runFor(500)
+    await expect(page.locator('.grp-card.on')).toContainText('滨江别墅区')
+    await expect(area).toHaveText('全部区域')
+    const rows = page.locator('tbody[data-slot="table-body"] > tr')
+    await expect(rows).toHaveCount(5)
+    await expect(rows.first()).toContainText('滨江别墅')
+    // 下拉里只有本集成项目的区域
+    await area.click()
+    await page.clock.runFor(100)
+    await expect(page.getByRole('option')).toHaveText(['全部区域', '滨江区'])
+    await page.keyboard.press('Escape')
+  })
+
+  test('管理员经销商搜索：下拉里只剩命中的经销商；关闭后 body 样式完全恢复', async ({ page, login }) => {
+    await login('admin')
+    await page.goto('/groups')
+    await settle(page)
+    await page.getByPlaceholder('搜索经销商名称 / 编码 / 区域').fill('南京')
+    await page.clock.runFor(500)
+    const trigger = page.getByRole('combobox', { name: '经销商' })
+    await expect(trigger).toContainText('南京')
+    await trigger.click()
+    await page.clock.runFor(100)
+    await expect(page.getByRole('option')).toHaveCount(1)
+    await expect(page.getByRole('option')).toHaveText('南京舒适家系统集成有限公司')
+    // 打开时 Radix 锁滚动：body 上有 data-scroll-locked 和 pointer-events: none
+    expect(await page.evaluate(() => document.body.hasAttribute('data-scroll-locked'))).toBe(true)
+    await page.keyboard.press('Escape')
+    await page.clock.runFor(100)
+    await expect(page.getByRole('listbox')).toHaveCount(0)
+    await expect(trigger).toBeFocused()
+    const body = await page.evaluate(() => ({ style: document.body.getAttribute('style') ?? '', locked: document.body.hasAttribute('data-scroll-locked'), children: document.body.children.length }))
+    expect(body).toEqual({ style: '', locked: false, children: 2 })
+  })
+})
+
+test.describe('Checkbox', () => {
+  const cbColors = (el: Locator) => el.evaluate((n) => {
+    const q = (p: string) => n.querySelector(`[data-part="${p}"]`)
+    const c = (e: Element | null, prop: 'fill' | 'stroke') => (e ? getComputedStyle(e)[prop] : null)
+    return { border: c(q('border'), 'stroke'), borderShown: q('border') ? getComputedStyle(q('border')!).display !== 'none' : false, accent: c(q('accent'), 'fill') }
+  })
+
+  test('登录「记住我」：点文字只切换一次；悬停时描边 / 底色变深', async ({ page }) => {
+    await page.goto('/login')
+    await settle(page)
+    const cb = page.getByRole('checkbox', { name: '记住我' })
+    await expect(cb).toHaveAttribute('aria-checked', 'true')
+    await page.mouse.move(0, 0)
+    expect((await cbColors(cb)).accent).toBe('rgb(8, 145, 178)')
+    await cb.hover()
+    expect((await cbColors(cb)).accent).toBe('rgb(6, 101, 124)')
+    await page.getByText('记住我', { exact: true }).click()
+    await expect(cb).toHaveAttribute('aria-checked', 'false')
+    await page.mouse.move(0, 0)
+    expect(await cbColors(cb)).toEqual({ border: 'rgb(118, 118, 118)', borderShown: true, accent: null })
+    await cb.hover()
+    expect((await cbColors(cb)).border).toBe('rgb(79, 79, 79)')
+    await page.getByText('记住我', { exact: true }).click()
+    await expect(cb).toHaveAttribute('aria-checked', 'true')
+  })
+
+  test('统一控制：「全选在线项目」点文字切换；项目行点击和点复选框都只切换一次；禁用项不响应悬停', async ({ page, login }) => {
+    await open(page, login, '/control')
+    const all = page.getByRole('checkbox', { name: '全选在线项目' })
+    const count = page.locator('.muted', { hasText: '已选' }).first().locator('b')
+    await page.getByText('全选在线项目', { exact: true }).click()
+    await expect(all).toHaveAttribute('aria-checked', 'true')
+    await page.getByText('全选在线项目', { exact: true }).click()
+    await expect(all).toHaveAttribute('aria-checked', 'false')
+    await expect(count).toHaveText('0')
+
+    const row = page.locator('.pick:not(.dis)').first()
+    const cb = row.getByRole('checkbox')
+    await row.locator('b').click()
+    await expect(cb).toHaveAttribute('aria-checked', 'true')
+    await expect(count).toHaveText('1')
+    await cb.click()
+    await expect(cb).toHaveAttribute('aria-checked', 'false')
+    await expect(count).toHaveText('0')
+
+    const dis = page.locator('.pick.dis').first().getByRole('checkbox')
+    await expect(dis).toBeDisabled()
+    await page.mouse.move(0, 0)
+    const idle = await cbColors(dis)
+    expect(idle.border).toBe('rgba(118, 118, 118, 0.3)')
+    await dis.hover({ force: true })
+    expect(await cbColors(dis)).toEqual(idle)
+  })
+})
+
+test.describe('Tabs（新风设备切换）', () => {
+  const RING = 'rgba(6, 182, 212, 0.12)'
+  const shadow = (el: Locator) => el.evaluate((n) => getComputedStyle(n).boxShadow)
+
+  test('Tab 键进入时有焦点外圈，鼠标点击不出现；面板不单独占一个 Tab 停留点', async ({ page, login }) => {
+    await login('dealer', 'PRJ-10252')
+    await page.goto('/fresh-air')
+    await settle(page)
+    const tabs = page.getByRole('tablist', { name: '新风设备' }).getByRole('tab')
+    // 鼠标点击：聚焦但没有外圈
+    await tabs.nth(1).click()
+    await page.clock.runFor(100)
+    await expect(tabs.nth(1)).toBeFocused()
+    expect(await shadow(tabs.nth(1))).not.toContain(RING)
+    // 从顶栏搜索框按 Tab 走到设备切换：落在当前设备上，有外圈，且 :focus-visible 命中
+    await page.getByPlaceholder('搜索项目名称 / 项目ID').focus()
+    let found = false
+    for (let i = 0; i < 60 && !found; i++) {
+      await page.keyboard.press('Tab')
+      found = await tabs.nth(1).evaluate((n) => n === document.activeElement)
+    }
+    expect(found).toBe(true)
+    expect(await tabs.nth(1).evaluate((n) => n.matches(':focus-visible'))).toBe(true)
+    expect(await shadow(tabs.nth(1))).toContain(RING)
+    // 方向键移到下一个设备，外圈跟着走
+    await page.keyboard.press('ArrowRight')
+    await page.clock.runFor(100)
+    await expect(tabs.nth(2)).toBeFocused()
+    expect(await shadow(tabs.nth(2))).toContain(RING)
+    expect(await shadow(tabs.nth(1))).not.toContain(RING)
+    // 再按 Tab：焦点离开标签组，进入面板里的第一个控件，而不是面板本身
+    await page.keyboard.press('Tab')
+    expect(await page.evaluate(() => document.activeElement?.getAttribute('role'))).not.toBe('tabpanel')
+    expect(await shadow(tabs.nth(2))).not.toContain(RING)
   })
 })
