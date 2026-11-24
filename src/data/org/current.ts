@@ -34,14 +34,30 @@ export function subscribeCurrent(fn: () => void) {
 }
 
 export type RejectState = 'refreshing' | 'refreshed'
-const rejected = new Map<string, RejectState>()
-export const getRejected = (k: string) => rejected.get(k)
+/** 「刷新后仍不在范围」的结论只保留这么久，过期后再选会重新刷新一次（例如期间被授予了权限） */
+export const REJECT_TTL_MS = 60_000
+const rejected = new Map<string, { state: RejectState; at: number }>()
+export function getRejected(k: string): RejectState | undefined {
+  const r = rejected.get(k)
+  if (r && r.state === 'refreshed' && Date.now() - r.at > REJECT_TTL_MS) { rejected.delete(k); return undefined }
+  return r?.state
+}
 export function setRejected(k: string, v: RejectState) {
   // 只是提示用的小表，防止无限增长
   if (!rejected.has(k) && rejected.size >= 200) rejected.delete(rejected.keys().next().value!)
-  rejected.set(k, v)
+  rejected.set(k, { state: v, at: Date.now() })
 }
 export const forgetRejected = (k: string) => { rejected.delete(k) }
+
+let scopeSig: string | undefined
+/**
+ * 组织范围（账号、集成项目归属、项目列表）变了就清掉全部「被拒」记录：之前的结论可能已不成立。
+ * 传入范围签名（不含在线状态），与上次不同才清，同一份数据在多个组件里重复上报不会误清
+ */
+export function noteScope(sig: string) {
+  if (scopeSig !== undefined && scopeSig !== sig) rejected.clear()
+  scopeSig = sig
+}
 
 /** 仅供测试：重置模块内状态 */
 export function __resetCurrentForTests() {
@@ -49,4 +65,5 @@ export function __resetCurrentForTests() {
   tick = 0
   subs.clear()
   rejected.clear()
+  scopeSig = undefined
 }

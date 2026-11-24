@@ -40,6 +40,7 @@ export function DealerSelect({ dealers, value, onChange }: { dealers: Loadable<D
   const inputRef = useRef<HTMLInputElement>(null)
   const contentId = useId()
   const labelId = useId()
+  const valueId = useId()
   // 高亮变化时滚进可视区（只滚一次，不跟用户的滚轮抢）
   const scrolled = useRef('')
   const hits = list.filter((d) => matchDealer(d, q))
@@ -62,7 +63,8 @@ export function DealerSelect({ dealers, value, onChange }: { dealers: Loadable<D
         <PopoverTrigger asChild>
           <button
             type="button"
-            aria-labelledby={labelId}
+            // 可访问名称 = 「经销商」+ 当前值，读屏回到触发器时能听到选的是谁
+            aria-labelledby={`${labelId} ${valueId}`}
             disabled={empty}
             onKeyDown={(e) => {
               if (e.key === 'ArrowDown' || e.key === 'Enter' || e.key === ' ') { e.preventDefault(); if (!open) show() }
@@ -72,7 +74,7 @@ export function DealerSelect({ dealers, value, onChange }: { dealers: Loadable<D
               selectArrow,
             )}
           >
-            <span className="min-w-0 grow truncate">{cur ? cur.name : placeholder}</span>
+            <span id={valueId} className="min-w-0 grow truncate">{cur ? cur.name : placeholder}</span>
           </button>
         </PopoverTrigger>
         <PopoverContent

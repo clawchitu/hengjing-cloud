@@ -123,6 +123,7 @@ describe('集成项目页（改动 3、4）', () => {
     const alert = await screen.findByRole('alert', {}, { timeout: 3000 })
     expect(alert.textContent).toContain('集成项目加载失败')
     expect(alert.textContent).toContain('集成项目查询失败')
+    expect(document.querySelector('.page-head .sub')?.textContent).toBe('加载失败')
     mode = 'empty'
     await act(async () => { fireEvent.click(within(alert).getByRole('button', { name: '重试' })) })
     expect(await screen.findByText('该经销商下还没有集成项目，请选择其他经销商')).toBeTruthy()
@@ -140,6 +141,8 @@ describe('经销商选择（可搜索下拉）', () => {
     mountAt('/groups')
     await screen.findByText('科希家办公室')
     expect(trigger().textContent).toContain('科希家研发苏州main')
+    // 可访问名称包含当前值
+    expect(screen.getByRole('button', { name: '经销商 科希家研发苏州main' })).toBe(trigger())
     await act(async () => { fireEvent.keyDown(trigger(), { key: 'Enter' }) })
     await waitFor(() => expect(document.activeElement).toBe(input()))
     expect(options().map((o) => o.textContent)).toEqual(['科希家研发苏州mainKXJ01', '南京舒适家NJ02'])
@@ -151,6 +154,7 @@ describe('经销商选择（可搜索下拉）', () => {
     await act(async () => { fireEvent.keyDown(input(), { key: 'Enter' }) })
     expect(screen.queryByRole('listbox', { name: '经销商' })).toBeNull()
     await screen.findByText('南京的项目')
+    expect(screen.getByRole('button', { name: '经销商 南京舒适家' })).toBe(trigger())
     expect(trigger().textContent).toContain('南京舒适家')
     expect(be.callsTo('/integrated-projects').some((c) => (c.body as Record<string, unknown>).distributor_id === 'D2')).toBe(true)
   })
@@ -238,6 +242,33 @@ describe('首页统计卡与常用项目', () => {
     fail = false
     await act(async () => { fireEvent.click(within(alert).getByRole('button', { name: '重试' })) })
     await waitFor(() => expect(container.querySelectorAll('.proj-card').length).toBe(1))
+  })
+})
+
+describe('首页：组织范围失败与数据不完整', () => {
+  it('组织范围首次失败时常用项目显示失败，点重试会一起重试组织范围并恢复', async () => {
+    let fail = true
+    backend({
+      '/ctrl/projects': () => (fail ? json({ code: 13, message: '项目列表查询失败' }, 500) : json({ project_entities: PROJECTS })),
+      '/projects/frequent': () => json({ project_entities: [{ id: 'p3' }] }),
+    })
+    await signIn('u', 'pw', true)
+    const { container } = render(createElement(QueryClientProvider, { client: createQueryClient() }, createElement(AppProvider, null,
+      createElement(MemoryRouter, { initialEntries: ['/home'] }, createElement(Routes, null, createElement(Route, { path: '/home', element: createElement(Home) }))))))
+    const alert = await screen.findByRole('alert', {}, { timeout: 3000 })
+    expect(alert.textContent).toContain('常用项目加载失败')
+    fail = false
+    await act(async () => { fireEvent.click(within(alert).getByRole('button', { name: '重试' })) })
+    await waitFor(() => expect(container.querySelectorAll('.proj-card').length).toBe(1))
+    expect(container.querySelector('.proj-card')?.textContent).toContain('科希家办公室')
+  })
+
+  it('统计回退时有关联项目不在项目列表里：提示数据不完整', async () => {
+    backend({ '/integrated-projects': (c) => json({ entities: (c.body as Record<string, unknown> | undefined)?.distributor_id ? GROUPS : [...GROUPS, { id: 'g9', code: '9', name: '缺', distributor_id: 'D1', project_ids: ['gone'] }] }) }, { paths: [] })
+    await signIn('u', 'pw', true)
+    const { container } = mountAt('/home')
+    expect((await screen.findByText(/数据不完整：有 1 个集成项目关联的项目不在项目列表中/)).getAttribute('role')).toBe('status')
+    expect([...container.querySelectorAll('.stat')].map((x) => x.textContent)).toEqual(['集成项目4', '项目总数5', '在线项目1 / 5', '离线项目4 / 5'])
   })
 })
 

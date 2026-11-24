@@ -65,7 +65,7 @@ export default function Groups() {
           : [faMagnifyingGlass, '暂无集成项目', isAdmin ? '该经销商下还没有集成项目，请选择其他经销商' : '当前账号下还没有集成项目']
     return (
       <div className="page">
-        <div className="page-head"><div><h1>集成项目</h1><div className="sub">{loading ? '正在加载…' : '暂无集成项目'}</div></div></div>
+        <div className="page-head"><div><h1>集成项目</h1><div className="sub">{failed ? '加载失败' : loading ? '正在加载…' : '暂无集成项目'}</div></div></div>
         <div className="groups"><div>{dealerPick}</div>
           <Card><div className="empty-fav" role={failed ? 'alert' : 'status'}><Icon icon={icon} spin={icon === faSpinner} /><b>{title}</b><small>{note}</small>
             {failed && <Button variant="link" onClick={failed.refetch}>重试</Button>}</div></Card>

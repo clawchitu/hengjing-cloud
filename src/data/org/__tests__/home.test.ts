@@ -224,7 +224,7 @@ describe('useOrgStat（首页统计卡）', () => {
     const { wrapper: w } = wrapper()
     const { result } = renderHook(() => useOrgStat(), { wrapper: w })
     await waitFor(() => expect(result.current.data).not.toBeNull())
-    expect(result.current.data).toEqual({ groups: 2, projects: 3, online: 1, offline: 2 })
+    expect(result.current.data).toEqual({ groups: 2, projects: 3, online: 1, offline: 2, unknown: 0 })
     expect(result.current.source).toBe('scope')
     expect(be.callsTo('/integrated-projects/stat')).toEqual([])
   })
@@ -235,8 +235,72 @@ describe('useOrgStat（首页统计卡）', () => {
     const { wrapper: w } = wrapper()
     const { result } = renderHook(() => useOrgStat(), { wrapper: w })
     await waitFor(() => expect(result.current.source).toBe('scope'), { timeout: 3000 })
-    expect(result.current.data).toEqual({ groups: 2, projects: 3, online: 1, offline: 2 })
+    expect(result.current.data).toEqual({ groups: 2, projects: 3, online: 1, offline: 2, unknown: 0 })
     expect(result.current.error?.message).toBe('统计失败')
+  })
+})
+
+describe('useOrgStat：回退口径（接口文档 6.1：project_total = project_ids 去重数）', () => {
+  it('关联 id 在项目列表里缺失：仍计入总数、按定义算进离线，并标出未知个数', async () => {
+    backend({ '/integrated-projects': () => json({ entities: [...GROUPS, { id: 'g3', code: '4', name: '有缺失', distributor_id: 'D1', project_ids: ['p1', 'gone1', 'gone2'] }] }) }, [])
+    await signIn('u', 'pw', true)
+    const { wrapper: w } = wrapper()
+    const { result } = renderHook(() => useOrgStat(), { wrapper: w })
+    await waitFor(() => expect(result.current.data).not.toBeNull())
+    // p1、p2、p3 + gone1、gone2 = 5；在线只有 p1
+    expect(result.current.data).toEqual({ groups: 3, projects: 5, online: 1, offline: 4, unknown: 2 })
+  })
+})
+
+describe('切换项目：重复选择与「无权查看」的失效', () => {
+  it('再选当前项目：成功但不上报点击', async () => {
+    const be = backend({ '/project/click/p3': () => json({}) })
+    await signIn('u', 'pw', true)
+    const { wrapper: w } = wrapper()
+    const { result } = renderHook(() => useCurrentProject(), { wrapper: w })
+    await waitFor(() => expect(result.current.project?.id).toBe('p1'))
+    act(() => { result.current.setProjectId('p3') })
+    await flush()
+    act(() => { expect(result.current.setProjectId('p3')).toBe(true) })
+    await flush()
+    expect(be.callsTo('/project/click/p3')).toHaveLength(1)
+  })
+
+  async function forbiddenP9(groups: { current: typeof GROUPS }) {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    backend({ '/integrated-projects': () => json({ entities: groups.current }), '/project/click/p9': () => json({}) })
+    await signIn('u', 'pw', true)
+    const { client, wrapper: w } = wrapper()
+    const { result } = renderHook(() => useCurrentProject(), { wrapper: w })
+    await waitFor(() => expect(result.current.project?.id).toBe('p1'))
+    act(() => { expect(result.current.setProjectId('p9')).toBe('refreshing') })
+    await flush()
+    act(() => { expect(result.current.setProjectId('p9')).toBe('forbidden') })
+    return { client, result }
+  }
+
+  it('先无权、随后获得权限：组织范围更新后「无权」结论作废，再选成功', async () => {
+    const groups = { current: GROUPS }
+    const { client, result } = await forbiddenP9(groups)
+    groups.current = [...GROUPS, { id: 'g3', code: '4', name: '新授权', distributor_id: 'D1', project_ids: ['p9'] }]
+    await act(async () => { await client.refetchQueries({ queryKey: ['org'] }); await new Promise((r) => setTimeout(r, 20)) })
+    act(() => { expect(result.current.setProjectId('p9')).toBe(true) })
+  })
+
+  it('组织范围有变化（即使目标仍不在范围里）：之前的「无权」结论作废，再选会重新刷新确认', async () => {
+    const groups = { current: GROUPS }
+    const { client, result } = await forbiddenP9(groups)
+    groups.current = [...GROUPS, { id: 'g3', code: '4', name: '别的组', distributor_id: 'D1', project_ids: ['p2'] }]
+    await act(async () => { await client.refetchQueries({ queryKey: ['org'] }); await new Promise((r) => setTimeout(r, 20)) })
+    act(() => { expect(result.current.setProjectId('p9')).toBe('refreshing') })
+  })
+
+  it('组织范围没变但过了 60 秒：不再直接判无权，重新刷新', async () => {
+    const groups = { current: GROUPS }
+    const { result } = await forbiddenP9(groups)
+    const now = Date.now()
+    vi.spyOn(Date, 'now').mockReturnValue(now + 61_000)
+    act(() => { expect(result.current.setProjectId('p9')).toBe('refreshing') })
   })
 })
 

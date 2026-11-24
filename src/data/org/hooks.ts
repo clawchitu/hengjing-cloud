@@ -2,14 +2,14 @@
 // 查询键都以 ['org', userKey] 开头：按账号隔离缓存，退出时整体清掉（useResetOrgOnSignOut）。
 // 每个 hook 返回 Loadable：data（加载中 / 失败时为空数组或上一次的数据）、status 三态、error、isEmpty。
 import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useCallback, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { getFrequentProjects as getMockFrequent, reportProjectSelect } from '../../api'
 import { isMockMode } from '../../api/config'
 import { ApiError, isApiError } from '../../api/errors'
 import { getFrequentProjects, getIntegratedProjectStat, reportProjectClick } from '../../api/pcfg'
 import { can, useSession } from '../session'
 import { capabilitiesOf, type Capabilities } from './capabilities'
-import { bumpSelectTick, forgetRejected, getRejected, getSelectTick, getStoredProjectId, setRejected, setStoredProjectId, subscribeCurrent } from './current'
+import { bumpSelectTick, forgetRejected, getRejected, getSelectTick, getStoredProjectId, noteScope, setRejected, setStoredProjectId, subscribeCurrent } from './current'
 import { joinScope, resolveCurrentProject, resolveDealerId, withPlatformDealer } from './map'
 import { mockOrg, orgSource, type OrgContext, type ProjectFilter } from './sources'
 import type { Dealer, Group, LoadStatus, Project, Scope } from './types'
@@ -211,13 +211,19 @@ export function useCurrentProject(): CurrentProject {
   const stored = useSyncExternalStore(subscribeCurrent, getStoredProjectId, getStoredProjectId)
   const selectTick = useSyncExternalStore(subscribeCurrent, getSelectTick, getSelectTick)
   const project = resolveCurrentProject(scope.data.projects, stored)
+  // 账号或组织范围变了：之前「刷新后仍不在范围」的结论作废（签名不含在线状态）
+  const sig = useMemo(() => `${userKey}#${scope.data.groups.map((g) => g.id + ':' + g.projectIds.join(',')).join('|')}#${scope.data.projects.map((p) => p.id).join(',')}`, [userKey, scope.data])
+  useEffect(() => { noteScope(sig) }, [sig])
   const user = ctx.user
   const visible = scope.data.projects
   const setProjectId = useCallback((id: string): SetProjectResult => {
     const k = `${userKey}\n${id}`
     if (visible.some((p) => p.id === id)) {
       forgetRejected(k)
+      // 再选当前项目不算一次切换：不上报，免得抬高常用项目的排序
+      const same = id === getStoredProjectId()
       setStoredProjectId(id)
+      if (same) return true
       if (isMockMode()) void reportProjectSelect(user, id).then(bumpSelectTick)
       else reportClick(id)
       return true
@@ -249,10 +255,16 @@ export function useCurrentProject(): CurrentProject {
 export interface OrgStat {
   /** 集成项目数 */
   groups: number
-  /** 集成项目里的项目数（去重） */
+  /** 集成项目里的项目数（project_ids 去重） */
   projects: number
   online: number
+  /** projects - online（接口文档 6.1 的定义） */
   offline: number
+  /**
+   * 只有前端回退计算时有：集成项目关联了、但项目列表里没有的项目数。这些项目拿不到在线状态，
+   * 按定义算进离线，页面提示「数据不完整」
+   */
+  unknown?: number
 }
 
 /**
@@ -272,9 +284,13 @@ export function useOrgStat(): Omit<Loadable<OrgStat | null>, 'isEmpty'> & { sour
     staleTime: REAL_STALE_MS,
   })
   const { groups, projects } = scope.data
+  // 口径照接口文档 6.1：project_total 是集成项目 project_ids 去重后的个数（不是与项目列表的交集），
+  // project_offline = project_total - project_online。列表里没有的关联项目在线状态未知，单独记数供页面提示
   const local = useMemo<OrgStat>(() => {
-    const online = projects.filter((p) => p.online).length
-    return { groups: groups.length, projects: projects.length, online, offline: projects.length - online }
+    const ids = new Set(groups.flatMap((g) => g.projectIds))
+    const known = projects.filter((p) => ids.has(p.id))
+    const online = known.filter((p) => p.online).length
+    return { groups: groups.length, projects: ids.size, online, offline: ids.size - online, unknown: ids.size - known.length }
   }, [groups, projects])
   const qRefetch = q.refetch
   const refetch = useCallback(() => { void qRefetch() }, [qRefetch])
@@ -330,7 +346,10 @@ export function useFrequentProjects(limit = 4): Loadable<FrequentProject[]> & { 
     return out
   }, [q.data, projects, limit])
   const qRefetch = q.refetch
-  const refetch = useCallback(() => { void qRefetch() }, [qRefetch])
+  const scopeRefetch = scope.refetch
+  const scopeFailed = scope.status === 'error'
+  // 失败可能来自组织范围（集成项目 / 项目列表）或常用项目本身：组织范围失败时一起重试
+  const refetch = useCallback(() => { if (scopeFailed) scopeRefetch(); void qRefetch() }, [qRefetch, scopeRefetch, scopeFailed])
   if (!permitted) return { data: NONE, status: authed ? 'success' : 'loading', error: null, staleError: null, isEmpty: authed, refetch: noop, permitted }
   const status: LoadStatus = scope.status !== 'success' ? scope.status : q.data !== undefined ? 'success' : q.isError ? 'error' : 'loading'
   const err = scope.status === 'error' ? scope.error : toApiError(q.error)
