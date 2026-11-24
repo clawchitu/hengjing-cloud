@@ -7,10 +7,10 @@
 //   只计入「全部」，不混进三种状态；
 // - device_name / model / address 缺省为空串，显示 --。
 import { useQuery } from '@tanstack/react-query'
-import { useCallback } from 'react'
+import { useCallback, useLayoutEffect, useRef } from 'react'
 import { getConnections, type Conn, type Project } from '../api'
 import { isMockMode } from '../api/config'
-import type { CtrlReply } from '../api/ctrl'
+import { callCtrl, type CtrlReply } from '../api/ctrl'
 import { isApiError, type ApiError } from '../api/errors'
 import { ctrlQuery } from '../api/query'
 import { PLACEHOLDER } from '../api/values'
@@ -120,16 +120,48 @@ export interface DeviceSummary {
   fetching: boolean
   /** 账号有没有 ctrl 205 的权限（没有就不发请求） */
   permitted: boolean
-  /** 立即重新读一次 205，返回这次的结果 */
-  check: () => Promise<{ rows: ConnRow[] | null; error: ApiError | null }>
+  /**
+   * 立即重新读一次 205。返回这次检测自己发起的请求的结果；页面已卸载、项目已切换、请求被取消，
+   * 或拿到的不是这次检测发起的请求的结果时返回 null（调用方不提示）
+   */
+  check: () => Promise<{ rows: ConnRow[] | null; error: ApiError | null } | null>
 }
 
 const NO_ROWS: ConnRow[] = []
-/** 项目 id → 最近一次 205 返回 503 的时间 */
-const lastUnavailable = new Map<string, number>()
+
+// ---------------------------------------------------------------------------
+// 请求序号：每次真正发出的 205 请求（含重试）分配一个递增序号，不用墙上时钟（时钟回拨、同一毫秒都不影响先后）。
+// - 503 记下该项目的失效序号：序号不大于它的成功结果（即 503 之前读到的明细）不可展示，直到序号更大的请求成功；
+// - 手动检测登记一个「认领」：检测进行期间这个项目发出的请求序号都归这次检测，结果序号不在其中就不算这次检测的结果。
+// 同一查询键的请求不会重叠（TanStack 去重），所以同一项目的序号顺序就是结果顺序。
+
+let seqCounter = 0
+/** 项目 id → 最近一次 503 的请求序号 */
+const unavailableSeq = new Map<string, number>()
+/** 失败请求的序号（错误对象 → 序号） */
+const errorSeq = new WeakMap<object, number>()
+interface Claim { pid: string; seqs: Set<number> }
+const claims = new Set<Claim>()
+
+interface Fetched { seq: number; raw: unknown }
+
+async function runSeq(pid: string, fetcher: (signal: AbortSignal) => Promise<unknown>, signal: AbortSignal): Promise<Fetched> {
+  const seq = ++seqCounter
+  for (const c of claims) if (c.pid === pid) c.seqs.add(seq)
+  try {
+    return { seq, raw: await fetcher(signal) }
+  } catch (e) {
+    if (isApiError(e) && e.kind === 'unavailable' && seq > (unavailableSeq.get(pid) ?? 0)) unavailableSeq.set(pid, seq)
+    if (e && typeof e === 'object') errorSeq.set(e, seq)
+    throw e
+  }
+}
+
 /** 仅供测试 */
-export const __resetConnectionsForTests = () => lastUnavailable.clear()
+export const __resetConnectionsForTests = () => { unavailableSeq.clear(); claims.clear() }
 const asApiError = (e: unknown): ApiError | null => (e == null ? null : isApiError(e) ? e : null)
+
+interface Selected { seq: number; rows: ConnRow[] }
 
 /**
  * 当前项目的设备连接明细。只在项目存在、在线、账号有权限时请求（离线项目不请求，Layout 也不挂载设备页）；
@@ -142,28 +174,42 @@ export function useDeviceSummary(project: Pick<Project, 'id' | 'online'> | null)
   const permitted = mock || can(CONN_ROUTE)
   const enabled = !!pid && project?.online === true && permitted
   const real = ctrlQuery(205, pid)
-  const q = useQuery<unknown, Error, ConnRow[]>({
-    ...(mock
-      ? { queryKey: ['mock', 'connections', pid], queryFn: () => getConnections(pid), select: (d: unknown) => mockConnRows(d as Conn[]) }
-      : { queryKey: real.queryKey, queryFn: real.queryFn as () => Promise<unknown>, select: (d: unknown) => toConnRows(d as CtrlReply<205>) }),
+  const fetcher = mock ? () => getConnections(pid) : (signal: AbortSignal) => callCtrl(205, pid, undefined, { signal })
+  const q = useQuery<Fetched, Error, Selected>({
+    queryKey: [...real.queryKey, mock ? 'mock' : 'real', 'seq'],
+    queryFn: ({ signal }) => runSeq(pid, fetcher, signal),
+    select: (d) => ({ seq: d.seq, rows: mock ? mockConnRows(d.raw as Conn[]) : toConnRows(d.raw as CtrlReply<205>) }),
     enabled,
     refetchInterval: enabled ? CONN_POLL_MS : false,
   })
+
+  // 页面是否仍挂载、当前项目是谁：手动检测结束时据此判断结果还算不算数
+  const live = useRef({ mounted: true, pid })
+  useLayoutEffect(() => {
+    live.current = { mounted: true, pid }
+    return () => { live.current = { mounted: false, pid } }
+  }, [pid])
   const qRefetch = q.refetch
   const check = useCallback(async () => {
-    const r = await qRefetch()
-    return { rows: r.isSuccess ? r.data : null, error: r.isError ? asApiError(r.error) ?? null : null }
-  }, [qRefetch])
-  // 控制屏离线（503）后，之前读到的明细作废：直到下一次 205 成功前都不再显示（之后遇到 500 / 超时也不恢复旧明细）。
-  // 按项目记下最近一次 503 的时间，数据时间不晚于它就不可展示。放在模块里：页面卸载再进入（缓存里仍是旧数据）也成立；
-  // 只比较时间戳，换账号后残留的记录也只会挡住比它更早的数据
-  const offlineAt = q.error && asApiError(q.error)?.kind === 'unavailable' ? q.errorUpdatedAt : 0
-  if (pid && offlineAt > (lastUnavailable.get(pid) ?? 0)) lastUnavailable.set(pid, offlineAt)
-  const lastOfflineAt = lastUnavailable.get(pid) ?? 0
-  const showData = q.data !== undefined && !(lastOfflineAt && q.dataUpdatedAt <= lastOfflineAt)
+    const claim: Claim = { pid, seqs: new Set() }
+    claims.add(claim)
+    try {
+      const r = await qRefetch()
+      if (!live.current.mounted || live.current.pid !== pid) return null
+      if (r.isSuccess && r.data && claim.seqs.has(r.data.seq)) return { rows: r.data.rows, error: null }
+      if (r.isError && r.error && claim.seqs.has(errorSeq.get(r.error) ?? -1)) return { rows: null, error: asApiError(r.error) }
+      return null
+    } finally {
+      claims.delete(claim)
+    }
+  }, [qRefetch, pid])
+
+  // 控制屏离线（503）后，之前读到的明细作废：只有序号比那次 503 大的成功结果才显示（之后遇到 500 / 超时也不恢复旧明细）。
+  // 放在模块里：页面卸载再进入（缓存里仍是旧数据）也成立
+  const showData = q.data !== undefined && q.data.seq > (unavailableSeq.get(pid) ?? 0)
   const status: DeviceSummary['status'] = !enabled ? 'idle' : showData ? 'success' : q.isError ? 'error' : 'loading'
   return {
-    rows: enabled && showData ? q.data ?? NO_ROWS : NO_ROWS,
+    rows: enabled && showData ? q.data?.rows ?? NO_ROWS : NO_ROWS,
     status,
     error: enabled ? asApiError(q.error) : null,
     fetching: enabled && q.isFetching,

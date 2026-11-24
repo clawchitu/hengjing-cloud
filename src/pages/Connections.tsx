@@ -58,6 +58,8 @@ export default function Connections() {
 
   const checkNow = async () => {
     const r = await sum.check()
+    // 页面已离开、项目已切换、请求被取消，或不是这次检测发起的请求：不提示
+    if (!r) return
     if (r.rows) {
       const n = connCounts(r.rows)
       toast(`检测完成：${n.online} 台在线，${n.offline} 台离线，${n.error} 台通讯异常`)

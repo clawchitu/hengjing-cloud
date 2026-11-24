@@ -75,6 +75,7 @@ function mountAt(path: string) {
   return render(createElement(QueryClientProvider, { client }, createElement(AppProvider, null,
     createElement(MemoryRouter, { initialEntries: [path] }, createElement(Routes, null,
       createElement(Route, { element: createElement(Layout) },
+        createElement(Route, { path: '/home', element: createElement('h1', null, '首页标题') }),
         createElement(Route, { path: '/connections', element: createElement(Connections) }),
         createElement(Route, { path: '/sensors', element: page('传感器') }),
         createElement(Route, { path: '/thermostat', element: page('温控') }),
@@ -521,10 +522,123 @@ describe('离线页：自动重取、按钮反馈、恢复后的焦点（评审�
     mountAt('/connections')
     await screen.findByText('项目离线，暂无数据')
     online = true
-    await act(async () => { fireEvent.click(screen.getByRole('button', { name: '重新获取在线状态' })) })
+    const btn = screen.getByRole('button', { name: '重新获取在线状态' })
+    btn.focus()
+    await act(async () => { fireEvent.click(btn) })
     await screen.findByText('网络HUB')
     await waitFor(() => expect(document.activeElement?.tagName).toBe('H1'))
     expect(document.activeElement?.textContent).toBe('设备连接状态')
     expect(document.activeElement?.getAttribute('tabindex')).toBe('-1')
+  })
+})
+
+describe('第二轮评审：手动检测的归属、503 失效按请求顺序、焦点只在离线空态里时才移', () => {
+  it('已有数据 → 手动检测挂起 → 切换项目：迟到的结果不提示', async () => {
+    let gate: ReturnType<typeof deferred> | null = null
+    backend({ '/ctrl/device-summary-get': async () => { if (gate) await gate.gate; return reply(ROWS) } })
+    await signIn('u', 'pw', true)
+    mountAt('/connections')
+    await screen.findByText('网络HUB')
+    gate = deferred()
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: '立即检测' })) })
+    const { setStoredProjectId } = await import('../data/org/current')
+    await act(async () => { setStoredProjectId('p3') })
+    await act(async () => { gate!.release(); await new Promise((r) => setTimeout(r, 50)) })
+    expect(toasts()).not.toContain('检测完成')
+  })
+
+  it('已有数据 → 手动检测挂起 → 离开页面：迟到的结果不提示', async () => {
+    let gate: ReturnType<typeof deferred> | null = null
+    backend({ '/ctrl/device-summary-get': async () => { if (gate) await gate.gate; return reply(ROWS) } })
+    await signIn('u', 'pw', true)
+    mountAt('/connections')
+    await screen.findByText('网络HUB')
+    gate = deferred()
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: '立即检测' })) })
+    await act(async () => { fireEvent.click(screen.getByText('室内空气传感器')) })
+    await screen.findByText('传感器页内容')
+    await act(async () => { gate!.release(); await new Promise((r) => setTimeout(r, 50)) })
+    expect(toasts()).not.toContain('检测完成')
+  })
+
+  it('手动检测正常完成：提示的是这次请求的结果', async () => {
+    let n = 0
+    backend({ '/ctrl/device-summary-get': () => { n += 1; return reply(n === 1 ? ROWS : [{ deviceName: 'X', connStatus: 0 }]) } })
+    await signIn('u', 'pw', true)
+    mountAt('/connections')
+    await screen.findByText('网络HUB')
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: '立即检测' })) })
+    await waitFor(() => expect(toasts()).toContain('检测完成：0 台在线，1 台离线，0 台通讯异常'))
+  })
+
+  // 时钟取在令牌有效期内（登录后的真实时间附近），免得会话层把令牌当过期
+  const T0 = Date.now()
+  for (const [label, clock] of [
+    ['同一毫秒', () => T0],
+    ['时钟回拨', (() => { let t = T0 + 600_000; return () => (t -= 1_000) })()],
+  ] as const) {
+    it(`503 之后的成功按请求顺序解除失效，与墙上时钟无关（${label}）`, async () => {
+      let mode: 'ok' | '503' = 'ok'
+      backend({ '/ctrl/device-summary-get': () => (mode === 'ok' ? reply(ROWS) : unavailable()) })
+      await signIn('u', 'pw', true)
+      mountAt('/connections')
+      await screen.findByText('网络HUB')
+      const now = vi.spyOn(Date, 'now').mockImplementation(clock)
+      try {
+        mode = '503'
+        await act(async () => { fireEvent.click(screen.getByRole('button', { name: '立即检测' })) })
+        expect(await screen.findByText('控制屏未连接')).toBeTruthy()
+        mode = 'ok'
+        await act(async () => { fireEvent.click(screen.getByRole('button', { name: '立即检测' })) })
+        expect(await screen.findByText('网络HUB')).toBeTruthy()
+        expect(screen.queryByText('正在读取设备连接状态')).toBeNull()
+      } finally { now.mockRestore() }
+    })
+  }
+
+  it('焦点在侧栏时项目自动恢复在线：焦点不动', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    localStorage.setItem('hjc-project', 'p2')
+    let online = false
+    backend({ '/ctrl/projects': () => json({ project_entities: PROJECTS.map((p) => (p.id === 'p2' ? { ...p, online: online || undefined } : p)) }) })
+    await signIn('u', 'pw', true)
+    mountAt('/connections')
+    await screen.findByText('项目离线，暂无数据')
+    const side = screen.getByText('室内空气传感器').closest('a') as HTMLElement
+    side.focus()
+    online = true
+    await act(async () => { await vi.advanceTimersByTimeAsync(OFFLINE_RECHECK_MS + 500) })
+    await screen.findByText('网络HUB')
+    await act(async () => { await vi.advanceTimersByTimeAsync(50) })
+    expect(document.activeElement).toBe(side)
+  })
+
+  it('焦点在离线空态里，但只是导航到非设备页（项目仍离线）：不移焦点到新页面标题', async () => {
+    localStorage.setItem('hjc-project', 'p2')
+    backend()
+    await signIn('u', 'pw', true)
+    mountAt('/connections')
+    await screen.findByText('项目离线，暂无数据')
+    screen.getByRole('button', { name: '重新获取在线状态' }).focus()
+    await act(async () => { fireEvent.click(screen.getByText('欢迎首页')) })
+    await screen.findByText('首页标题')
+    await act(async () => { await new Promise((r) => setTimeout(r, 30)) })
+    expect(document.activeElement).toBe(document.body) // 不移到新页面标题，也不移到主区域
+  })
+
+  it('没有焦点（在 body）时项目自动恢复在线：不主动移焦点', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    localStorage.setItem('hjc-project', 'p2')
+    let online = false
+    backend({ '/ctrl/projects': () => json({ project_entities: PROJECTS.map((p) => (p.id === 'p2' ? { ...p, online: online || undefined } : p)) }) })
+    await signIn('u', 'pw', true)
+    mountAt('/connections')
+    await screen.findByText('项目离线，暂无数据')
+    ;(document.activeElement as HTMLElement | null)?.blur()
+    online = true
+    await act(async () => { await vi.advanceTimersByTimeAsync(OFFLINE_RECHECK_MS + 500) })
+    await screen.findByText('网络HUB')
+    await act(async () => { await vi.advanceTimersByTimeAsync(50) })
+    expect(document.activeElement).toBe(document.body)
   })
 })

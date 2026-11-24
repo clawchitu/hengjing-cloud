@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useId, useRef, useState } from 'react'
+import { Fragment, useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
 import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import {
   faCloudSun, faLayerGroup, faSliders, faLeaf, faTemperatureHalf, faFan, faSitemap, faGear, faRightFromBracket,
@@ -343,7 +343,15 @@ function OfflineBanner({ p }: { p: Project }) {
   )
 }
 
-function OfflinePage({ p, title }: { p: Project; title: string }) {
+function OfflinePage({ p, title, onLeave }: { p: Project; title: string; onLeave: (hadFocus: boolean) => void }) {
+  // 卸载时（DOM 移除之前）告诉 Layout 焦点是否在空态里：只有这种情况恢复在线后才移焦点
+  const box = useRef<HTMLDivElement>(null)
+  const leave = useRef(onLeave)
+  useLayoutEffect(() => { leave.current = onLeave })
+  useLayoutEffect(() => {
+    const el = box.current
+    return () => leave.current(!!el && el.contains(document.activeElement))
+  }, [])
   const org = useOrgScope()
   // 组织数据（项目列表、集成项目等，都是只读接口）正在请求：按钮禁用，不重复发
   const fetching = useIsFetching({ queryKey: orgKeys.all }) > 0
@@ -357,7 +365,7 @@ function OfflinePage({ p, title }: { p: Project; title: string }) {
   // 手动重取后失败（有旧数据时后台刷新失败记在 staleError）：提示可重试
   const failed = asked && !fetching ? org.staleError : null
   return (
-    <div className="page offline-page">
+    <div className="page offline-page" ref={box}>
       <OfflineBanner p={p} />
       <div className="page-head"><div><h1>{title}</h1><div className="sub">{p.name}</div></div></div>
       <Card className="placeholder" role="status">
@@ -383,20 +391,26 @@ export default function Layout() {
   const noProject = !project.id
 
   useEffect(() => { window.scrollTo(0, 0) }, [loc.pathname])
-  // 当前项目从离线恢复在线：空态（含被点的按钮）卸载，焦点会掉到 body。移到页面标题（tabIndex=-1），页面还没有标题时移到主区域
-  const wasOffline = useRef({ id: project.id, offline })
+  // 同一项目由离线变为在线（看 project.online，不看路由），且焦点原本在即将卸载的离线空态里（如刚点的「重新获取在线状态」）：
+  // 焦点会掉到 body，移到页面标题（tabIndex=-1），页面还没有标题时移到主区域。导航离开、焦点在侧栏等其他地方时不动
+  const offlineHadFocus = useRef(false)
+  const noteOfflineLeave = useCallback((had: boolean) => { offlineHadFocus.current = had }, [])
+  const prevState = useRef({ id: project.id, online: project.online })
   useEffect(() => {
-    const prev = wasOffline.current
-    wasOffline.current = { id: project.id, offline }
-    if (!(prev.offline && !offline && prev.id === project.id)) return
+    const prev = prevState.current
+    prevState.current = { id: project.id, online: project.online }
+    const had = offlineHadFocus.current
+    offlineHadFocus.current = false
+    if (!(had && isProjectPage && prev.id === project.id && !prev.online && project.online)) return
     const t = setTimeout(() => {
+      if (document.activeElement && document.activeElement !== document.body) return // 期间用户已把焦点放到别处
       const h = document.querySelector<HTMLElement>('.main .page h1') ?? document.querySelector<HTMLElement>('.main')
       if (!h) return
       if (!h.hasAttribute('tabindex')) h.tabIndex = -1
       h.focus()
     }, 0)
     return () => clearTimeout(t)
-  }, [offline, project.id])
+  }, [project.id, project.online, isProjectPage])
   // 确认弹窗随离开失效：路由变化（含后退）或 Layout 卸载（如会话过期换成登录页）时按取消结算
   useCancelConfirmOnLeave()
 
@@ -456,7 +470,7 @@ export default function Layout() {
         {isProjectPage && noProject ? (
           <div className="page"><div className="empty-fav" role="status"><b>暂无可用项目</b><small>当前账号下没有可查看的项目，请到「集成项目」确认，或联系管理员</small></div></div>
         ) : offline ? (
-          <OfflinePage p={project} title={cur?.label ?? ''} />
+          <OfflinePage p={project} title={cur?.label ?? ''} onLeave={noteOfflineLeave} />
         ) : <Fragment key={project.id}><Outlet /></Fragment>}
       </div>
     </div>
