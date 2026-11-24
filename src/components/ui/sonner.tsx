@@ -24,11 +24,17 @@ function Toaster(props: ToasterProps) {
       expand
       visibleToasts={Infinity}
       duration={2600}
+      // 读屏区域名称用中文；不注册 Alt+T 快捷键（旧版没有）
+      containerAriaLabel="通知"
+      customAriaLabel="通知"
+      hotkey={[]}
       className="flex! w-auto! flex-col-reverse! items-center gap-2 font-[inherit]!"
       toastOptions={{
         unstyled: true,
         className: cn(
-          'static! transition-none! [--y:none]! data-[removed=true]:hidden! animate-[pop_.2s]',
+          // after:hidden!：Sonner 给展开的条目加了一条向上伸出 gap 高度的透明 ::after（悬停桥），条目改成 static 后它落在
+          // 列表上方 y≈63–72 处，会挡住下面的点击并让倒计时暂停
+          'static! transition-none! [--y:none]! data-[removed=true]:hidden! after:hidden! animate-[pop_.2s]',
           'flex items-center gap-[10px] rounded-lg border border-solid border-border bg-white px-4 py-[10px] text-[13.5px] shadow-[0_8px_28px_rgba(2,6,23,.16)]',
         ),
         classNames: { icon: 'flex' },
