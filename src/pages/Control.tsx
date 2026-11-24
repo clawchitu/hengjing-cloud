@@ -4,6 +4,7 @@ import { Icon, useAsync } from '../components/legacy'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Slider } from '@/components/ui/slider'
 import { Checkbox } from '@/components/ui/checkbox'
 import { InputGroup, InputGroupInput } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger } from '@/components/ui/select'
@@ -133,7 +134,9 @@ export default function Control() {
               <div className="temp-box" style={keep ? { opacity: 0.5, pointerEvents: 'none' } : undefined}>
                 <div className="tv"><button className="round" onClick={() => setTemp(fix(temp - 0.5))}>−</button><b className="num">{temp.toFixed(1)}<small>°C</small></b><button className="round plus" onClick={() => setTemp(fix(temp + 0.5))}>+</button></div>
                 <div className="c muted" style={{ fontSize: 12, textAlign: 'center', marginTop: 4 }}>推荐夏季 26°C</div>
-                <input type="range" min={16} max={30} step={0.5} value={temp} onChange={(e) => setTemp(+e.target.value)} />
+                {/* 盒子同原生 range：宽 100%、左右 UA 默认外边距 2px（右侧溢出 4px 与旧版一致）、上边距 18px。
+                    原生 range 的基线在边框盒底边、不含 2px 下外边距；这里的滑块基线是外边距盒底边，所以不写下外边距，行高结果相同 */}
+                <Slider className="mx-[2px] mt-[18px] w-full" aria-label="房间温度设定" min={16} max={30} step={0.5} value={[temp]} onValueChange={([v]) => setTemp(v)} />
                 <div className="ticks num"><span>16°C</span><span>20°C</span><span>25°C</span><span>30°C</span></div>
               </div>
               {noRoomP.length > 0 && <div className="cap-note"><Icon icon={faCircleInfo} />已选项目中有 {noRoomP.length} 个新风单机版项目（{noRoomP.map((p) => p.name).join('、')}）无房间设置，对其仅下发系统开关与运行模式。</div>}
