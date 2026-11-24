@@ -7,6 +7,7 @@ import {
 } from '@fortawesome/free-solid-svg-icons'
 import { Avatar, Icon, LogoMark } from './legacy'
 import { Badge } from '@/components/ui/badge'
+import { InputGroup, InputGroupInput } from '@/components/ui/input'
 import { useApp } from '../app/store'
 import { gatewayOf, type Project } from '../api'
 
@@ -80,9 +81,11 @@ function ProjectSearch() {
   const gname = (id: string) => scope.groups.find((g) => g.id === id)?.name ?? ''
   const pick = (p: Project) => { setProjectId(p.id); setQ(''); setOpen(false); toast(`当前项目已切换为「${p.name}」`) }
   return (
-    <form className="search" ref={ref} onSubmit={(e) => { e.preventDefault(); if (hits[0]) pick(hits[0]) }}>
-      <Icon icon={faMagnifyingGlass} />
-      <input placeholder="搜索项目名称 / 项目ID" value={q} onFocus={() => setOpen(true)} onChange={(e) => { setQ(e.target.value); setOpen(true) }} />
+    <form className="relative w-[280px] text-[13px] text-faint" ref={ref} onSubmit={(e) => { e.preventDefault(); if (hits[0]) pick(hits[0]) }}>
+      <InputGroup variant="search">
+        <Icon icon={faMagnifyingGlass} />
+        <InputGroupInput className="min-w-0 text-foreground placeholder:text-faint" placeholder="搜索项目名称 / 项目ID" value={q} onFocus={() => setOpen(true)} onChange={(e) => { setQ(e.target.value); setOpen(true) }} />
+      </InputGroup>
       {open && s && (
         <div className="search-pop">
           {hits.length ? hits.map((p) => (

@@ -4,6 +4,8 @@ import { expect, shot, test } from './fixtures'
 
 /** 交互后推进假时钟，让 mock 数据和防抖跑完 */
 const tick = (page: Page, ms = 500) => page.clock.runFor(ms)
+/** 顶栏项目搜索框 */
+const topSearch = (page: Page) => page.getByPlaceholder('搜索项目名称 / 项目ID')
 
 test.describe('经销商 首页', () => {
   for (const [v, tag] of [['0', '0'], ['2', '2'], ['4+', '4plus']] as const) {
@@ -22,11 +24,11 @@ test.describe('经销商 首页', () => {
     await login('dealer')
     await page.goto('/home')
     await tick(page, 1500)
-    await page.locator('.search input').fill('西溪')
+    await topSearch(page).fill('西溪')
     await tick(page)
     await expect(page.locator('.sp-empty')).toBeVisible()
     await shot(page, 'dealer-search-empty')
-    await page.locator('.search input').fill('地库')
+    await topSearch(page).fill('地库')
     await tick(page)
     await expect(page.locator('.sp-row').first()).toBeVisible()
     await shot(page, 'dealer-search-hit')
@@ -101,11 +103,20 @@ test.describe('管理员 集成项目', () => {
     await login('admin')
     await page.goto('/groups')
     await tick(page, 1500)
-    const opts = await page.locator('.dealer-pick option').evaluateAll((o) => o.map((x) => (x as HTMLOptionElement).value))
+    // 经销商下拉是 Radix Select：展开后读出全部选项，再逐个点选（选项上的 data-value 是经销商编码）
+    const trigger = page.getByRole('combobox', { name: '经销商' })
+    await trigger.click()
+    await tick(page, 100)
+    const opts = await page.getByRole('option').evaluateAll((o) => o.map((x) => x.getAttribute('data-value') ?? ''))
+    await page.keyboard.press('Escape')
+    await tick(page, 100)
     expect(opts.length).toBeGreaterThanOrEqual(2)
     for (const d of opts) {
-      await page.locator('.dealer-pick select').selectOption(d)
+      await trigger.click()
+      await tick(page, 100)
+      await page.locator(`[role=option][data-value="${d}"]`).click()
       await tick(page)
+      await expect(page.getByRole('listbox')).toHaveCount(0)
       await shot(page, `admin-groups-${d}`)
     }
   })
@@ -114,10 +125,12 @@ test.describe('管理员 集成项目', () => {
     await login('admin')
     await page.goto('/groups')
     await tick(page, 1500)
-    const q = page.locator('.dp-search input')
+    const q = page.getByPlaceholder('搜索经销商名称 / 编码 / 区域')
     await q.fill('南京')
     await tick(page)
-    await expect(page.locator('.dealer-pick option')).toHaveCount(1)
+    // 只剩一个经销商且已自动选中（下拉收起时选项不在 DOM 里，用计数文案和触发器文字断言）
+    await expect(page.getByText('匹配 1 / 3 个经销商')).toBeVisible()
+    await expect(page.getByRole('combobox', { name: '经销商' })).toContainText('南京')
     await expect(page.getByText('河西府住宅组').first()).toBeVisible()
     await shot(page, 'admin-groups-dealer-search')
     await q.fill('杭州')
@@ -138,7 +151,7 @@ test.describe('管理员 集成项目', () => {
     await login('admin')
     await page.goto('/home')
     await tick(page, 1500)
-    await page.locator('.search input').fill('西溪')
+    await topSearch(page).fill('西溪')
     await tick(page)
     await expect(page.locator('.sp-row').first()).toBeVisible()
     await shot(page, 'admin-search-hit')

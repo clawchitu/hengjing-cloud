@@ -174,7 +174,7 @@ test.describe('顶栏搜索', () => {
     await login('dealer')
     await page.goto('/home')
     await tick(page, 1500)
-    await page.locator('.search input').fill('朝阳壹号院')
+    await page.getByPlaceholder('搜索项目名称 / 项目ID').fill('朝阳壹号院')
     await tick(page)
     await expect(page.locator('.sp-row')).toHaveCount(8)
     await shotView(page, 'dealer-search-hit-8')
