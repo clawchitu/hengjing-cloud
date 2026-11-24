@@ -125,7 +125,7 @@ interface Entry {
   record?: SentRecord
   sentAt?: number
   expiryTimer?: ReturnType<typeof setTimeout>
-  verifyFn?: (signal: AbortSignal) => Promise<boolean>
+  verifyFn?: VerifyFn
   verifying: boolean
 }
 
@@ -182,6 +182,12 @@ let version = 0
 const subs = new Set<() => void>()
 function emit() { version += 1; for (const fn of subs) { try { fn() } catch { /* 订阅者出错不影响锁 */ } } }
 const rereadSubs = new Set<(e: { keys: readonly string[]; projectId: string }) => void>()
+/**
+ * 核对结果：true / false，或带「提交」的候选结果。commit 只在写锁确认这次核对仍然有效（锁没换、没超时、没取消、账号没变）之后才调，
+ * 调用方据此提交逐字段的结束状态；无效的核对（迟到、超时、换账号）不提交
+ */
+export type VerifyOutcome = boolean | { same: boolean; commit: () => void }
+export type VerifyFn = (signal: AbortSignal) => Promise<VerifyOutcome>
 const verifiers = new Map<number, (record: StoredLock, signal: AbortSignal) => Promise<boolean>>()
 const newOp = () => `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`
 
@@ -204,7 +210,7 @@ function ownerOf(e: Entry): LockOwner {
 const storedOf = (e: Entry): StoredLock | null => (e.record && e.sentAt !== undefined
   ? { v: 1, op: e.op, keys: e.keys, projectId: e.projectId, userId: e.account.user, sentAt: e.sentAt, msg: e.record.msg, deviceId: e.record.deviceId, target: e.record.target }
   : null)
-const verifierOf = (e: Entry): ((signal: AbortSignal) => Promise<boolean>) | undefined => {
+const verifierOf = (e: Entry): VerifyFn | undefined => {
   if (e.verifyFn) return e.verifyFn
   const rec = storedOf(e)
   const fn = rec ? verifiers.get(rec.msg) : undefined
@@ -438,7 +444,7 @@ export function markOverdue(token: LockToken): void {
 }
 
 /** 登记本次的核对函数（新读成功且目标值一致返回 true；不登记则用 registerVerifier 按消息号注册的核对器） */
-export function requireVerify(token: LockToken, fn: (signal: AbortSignal) => Promise<boolean>): void {
+export function requireVerify(token: LockToken, fn: VerifyFn): void {
   const e = entryOf(token)
   if (!e) return
   e.verifyFn = fn
@@ -482,10 +488,10 @@ export async function verify(keyOrTarget: string | LockTarget, signal?: AbortSig
   const timeout = new Promise<never>((_, reject) => { timer = setTimeout(() => { ac.abort(); reject(new Error('核对超时')) }, VERIFY_TIMEOUT_MS) })
   e.verifying = true
   emit()
-  let same = false
+  let got: VerifyOutcome = false
   let err: unknown = null
   try {
-    same = (await Promise.race([fn(ac.signal), timeout])) === true
+    got = await Promise.race([fn(ac.signal), timeout])
   } catch (x) {
     err = x ?? new Error('核对失败')
   } finally {
@@ -496,9 +502,13 @@ export async function verify(keyOrTarget: string | LockTarget, signal?: AbortSig
   }
   if (!sameAccount(currentAccount(), cur)) return 'account-changed'
   if (signal?.aborted) return 'aborted'
+  // 超时会先中止内部信号再报错：核对函数若一收到中止就同步返回结果，可能先于超时错误胜出。中止过的一律作废，不提交、不放锁
+  if (ac.signal.aborted && !err) return 'failed'
   if (err) return isApiError(err) && err.kind === 'unavailable' ? 'offline' : 'failed'
-  if (!same) return 'mismatch'
   if (!isLive(e)) return 'none'
+  // 到这里这次核对仍然有效：先提交候选结果，再按结论放锁
+  if (typeof got === 'object' && got) { try { got.commit() } catch { /* 提交失败不影响锁 */ } }
+  if (!(got === true || (typeof got === 'object' && got?.same === true))) return 'mismatch'
   drop(e)
   return 'released'
 }

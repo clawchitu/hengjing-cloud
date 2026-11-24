@@ -2,7 +2,7 @@
 // 下发核对口径（Fable 11/24）：success=true 之后按下发后回读判结果。
 // - 无法核对三种情况：a 没有房间条目；b 200 回包为空 {}；c 下发的字段 200 里根本没有（系统开关、运行模式）
 // - 回读请求本身失败（网络错误、超时、非 2xx）单独算「结果未知」，不并进无法核对
-// - 混合字段：能核对的照常判，整体按最不确定的算；锁照常持有，到期释放
+// - 混合字段：能核对的照常判，整体按排序 B（Fable 11/25）：结果未知 > 未变化 > 无法核对 > 已生效；锁按字段判断，到期释放
 // 回读走真实的 readUnifiedSnapshot（ctrl 200 解码 + summarizeRooms），fetch 用假后端替换；下发函数注入。
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { setCurrentUserId } from '@/api/auth'
@@ -110,13 +110,13 @@ describe('回读请求本身失败 → 结果未知（不并进无法核对）�
   })
 })
 
-describe('混合字段：能核对的照常判，整体按最不确定的算', () => {
-  it('房间开关读到了但不一致 + 系统开关读不到 → 无法核对；房间开关的不一致照常列出', async () => {
+describe('混合字段：能核对的照常判，整体按排序 B（结果未知 > 未变化 > 无法核对 > 已生效）', () => {
+  it('房间开关读到了但不一致 + 系统开关读不到 → 未变化；房间开关的不一致照常列出', async () => {
     backendWith(() => roomsBody(OFF2))
     const end = await run({ systemSwitch: 1, roomSwitch: 1 })
-    expect(end.status).toBe('unverifiable')
+    expect(end.status).toBe('unapplied')
     expect(kinds(end)).toEqual([['systemSwitch', 'unreadable'], ['roomSwitch', 'differ']])
-    expect(end.status === 'unverifiable' && end.mismatches[1].message).toBe('房间开关下发 开启，回读 关闭')
+    expect(end.status === 'unapplied' && end.mismatches[1].message).toBe('房间开关下发 开启，回读 关闭')
   })
 
   it('房间开关一致 + 运行模式读不到 → 无法核对（不能判已生效）', async () => {
@@ -126,19 +126,19 @@ describe('混合字段：能核对的照常判，整体按最不确定的算', (
     expect(kinds(end)).toEqual([['systemMode', 'unreadable']])
   })
 
-  it('温度不一致 + 有房间没回报开关（null）→ 无法核对', async () => {
+  it('温度不一致 + 有房间没回报开关（null）→ 未变化', async () => {
     backendWith(() => roomsBody([{ switch: 1, setTemp: 26, isConnected: true }, { switch: 65536, setTemp: 26, isConnected: true }]))
     const end = await run({ roomSwitch: 1, roomTemp: 26.5 })
-    expect(end.status).toBe('unverifiable')
+    expect(end.status).toBe('unapplied')
     expect(kinds(end)).toEqual([['roomSwitch', 'missing'], ['roomTemp', 'differ']])
   })
 
-  it('同一字段：一个房间读到关闭（不一致）、一个房间没回报（无效值）→ 无法核对，不一致照常列出', async () => {
+  it('同一字段：一个房间读到关闭（不一致）、一个房间没回报（无效值）→ 未变化，不一致照常列出', async () => {
     backendWith(() => roomsBody([{ switch: 0, setTemp: 26, isConnected: true }, { switch: 65536, setTemp: 26, isConnected: true }]))
     const end = await run({ roomSwitch: 1 })
-    expect(end.status).toBe('unverifiable')
+    expect(end.status).toBe('unapplied')
     expect(kinds(end)).toEqual([['roomSwitch', 'differ'], ['roomSwitch', 'missing']])
-    expect(end.status === 'unverifiable' && end.mismatches[0].message).toBe('房间开关下发 开启，回读 关闭（2 个房间中 1 个）')
+    expect(end.status === 'unapplied' && end.mismatches[0].message).toBe('房间开关下发 开启，回读 关闭（2 个房间中 1 个）')
   })
 
   it('只有能核对的字段、且读到的不一致 → 未变化', async () => {
@@ -167,11 +167,11 @@ describe('写锁：无法核对照常持有，到期释放', () => {
   const okSend: BatchSender = async (_p, _q, o) => { if (!o.beforeSend()) throw new ApiError('write_blocked', 'x'); return { success: true, msg: '' } }
   const flush = async (n = 5) => { for (let i = 0; i < n; i++) await new Promise((r) => setTimeout(r, 0)) }
 
-  for (const [name, draft, after] of [
-    ['a. 没有房间条目', { roomSwitch: 1 }, () => roomsBody([])],
-    ['b. 回包为空 {}', { roomSwitch: 1 }, () => json({ body: '' })],
-    ['c. 系统开关', { systemSwitch: 1 }, () => roomsBody(ON2)],
-    ['混合：系统开关 + 房间开关不一致', { systemSwitch: 1, roomSwitch: 1 }, () => roomsBody(OFF2)],
+  for (const [name, draft, after, status] of [
+    ['a. 没有房间条目', { roomSwitch: 1 }, () => roomsBody([]), 'unverifiable'],
+    ['b. 回包为空 {}', { roomSwitch: 1 }, () => json({ body: '' }), 'unverifiable'],
+    ['c. 系统开关', { systemSwitch: 1 }, () => roomsBody(ON2), 'unverifiable'],
+    ['混合：系统开关 + 房间开关不一致（未变化）', { systemSwitch: 1, roomSwitch: 1 }, () => roomsBody(OFF2), 'unapplied'],
   ] as const) {
     it(name, async () => {
       vi.useFakeTimers({ shouldAdvanceTime: true })
@@ -184,7 +184,7 @@ describe('写锁：无法核对照常持有，到期释放', () => {
         expect(b.prepare(['p1'], draft).phase).toBe('confirming')
         const done = await b.start()
         await flush()
-        expect(done.rows[0].status).toBe('unverifiable')
+        expect(done.rows[0].status).toBe(status)
         expect(L.lockOf('screen:S1')?.phase).toBe('unknown')
         vi.advanceTimersByTime(L.DEFAULT_TTL_MS + 10)
         expect(L.lockOf('screen:S1')).toBeNull()

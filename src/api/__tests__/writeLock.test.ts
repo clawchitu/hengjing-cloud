@@ -293,6 +293,18 @@ describe('核对', () => {
     vi.useRealTimers()
     expect(await verify(KEY)).toBe('released')
   })
+  it('超时：核对函数一收到中止就同步返回候选结果（先于超时错误胜出）→ 作废，不提交、不放锁', async () => {
+    const t = await unknownSettled()
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    const commit = vi.fn()
+    requireVerify(t, (sig) => new Promise((resolve) => { sig.addEventListener('abort', () => resolve({ same: true, commit })) }))
+    const v = verify(KEY)
+    await vi.advanceTimersByTimeAsync(L.VERIFY_TIMEOUT_MS + 1)
+    expect(await v).toBe('failed')
+    expect(commit).not.toHaveBeenCalled()
+    expect(lockOf(PA)).toMatchObject({ verifying: false, phase: 'unknown' })
+    vi.useRealTimers()
+  })
 })
 
 describe('核对不绑定账号；发起者信息防泄露', () => {

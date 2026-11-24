@@ -100,4 +100,9 @@ export const TEXT = {
   echoUnreadable: (label: string) => `${label}无法回读（未核对）`,
   echoPart: (total: number, bad: number) => `（${total} 个房间中 ${bad} 个）`,
   echoDiffer: (label: string, sent: string, got: string) => `${label}下发 ${sent}，回读 ${got}`,
+  /** 逐字段结果（四种之一，Fable 11/25） */
+  fieldStatus: { applied: '已生效', unchanged: '未变化', unverifiable: '无法核对', unknown: '结果未知' },
+  /** 混合时标题里的计数（「1 项未生效，1 项无法核对」：计数里未变化写作「未生效」，沿用裁定原文） */
+  fieldCount: (n: number, s: 'applied' | 'unchanged' | 'unverifiable' | 'unknown') =>
+    `${n} 项${({ applied: '已生效', unchanged: '未生效', unverifiable: '无法核对', unknown: '结果未知' } as const)[s]}`,
 } as const

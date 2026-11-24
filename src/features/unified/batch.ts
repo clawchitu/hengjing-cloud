@@ -9,8 +9,10 @@
 //   对不上（项目被移除或 code 变了）按本地拦截处理（write_blocked，肯定没发出）。
 // - 写锁（src/api/writeLock.ts，接入见 lock.ts）：每个项目发送前 acquire（同一块控制屏 / DTU / 项目被占 → 不发，提示「上一条下发还在
 //   处理中」）；beforeSend 链里 claim(token) 放在最后；拿到写 Promise 立刻 markSent。结算口径（Fable 11/24 裁定）：
-//   明确被拒或没发出 → fail；应答 success=true 只算「已下发」，不立刻放锁，等状态机下发后回读：逐字段一致（已生效）→ ok 放锁，
-//   未变化 / 无法核对 / 结果未知 → unknown，交给写锁核对，核对一致或有效期到期才放；应答结果未知 → unknown。
+//   明确被拒或没发出 → fail；应答 success=true 只算「已下发」，不立刻放锁。
+//   放锁按字段判断，跟总结果无关（Fable 11/25）：每个下发了的字段要么回读一致、要么锁到期，才算这个字段结束；所有字段都结束才放锁。
+//   下发后回读里一致的字段先记为结束；还有没结束的 → unknown，交给写锁核对（本次登记的核对函数，见 fieldVerifier），之后复核读到
+//   一致的字段也记为结束，全部结束即放；未变化 / 无法核对 / 结果未知都不提前放锁。应答结果未知 → unknown。
 //   批次截止时间只影响界面上的标注，不放锁。
 import { callCtrl, writeCtrl, type CtrlReply, type WriteQuery } from '@/api/ctrl'
 import { ApiError } from '@/api/errors'
@@ -18,8 +20,8 @@ import type { WriteProject } from '@/api/guard'
 import { TEXT } from './constants'
 import { consoleLogger, type UnifiedLogger } from './log'
 import { createUnifiedController, isDone, outcomeOf, type UnifiedController, type UnifiedState } from './machine'
-import { describeQuery, type UnifiedContext, type UnifiedDraft, type UnifiedEcho } from './rules'
-import { acquire, claim, lockOf, markOverdue, markSent, OTHER_ACCOUNT_TEXT, settle, verify, type LockToken } from '@/api/writeLock'
+import { changedFields, describeQuery, fieldResults, type EchoField, type UnifiedContext, type UnifiedDraft, type UnifiedEcho } from './rules'
+import { acquire, claim, lockOf, markOverdue, markSent, OTHER_ACCOUNT_TEXT, requireVerify, settle, verify, type LockToken } from '@/api/writeLock'
 import { LOCK_BUSY_TEXT, lockTargetOf, recordOf } from './lock'
 
 /** 页面传进来的项目（S6a 的 Project 直接可用） */
@@ -187,6 +189,11 @@ export function createUnifiedBatch(deps: BatchDeps) {
     batch: number
     /** 写锁令牌（acquire 成功后才有） */
     token?: LockToken
+    /** 本次下发的值，和还没结束（没回读一致过）的字段：全部结束才放锁 */
+    query?: WriteQuery<203>
+    open?: Set<EchoField>
+    /** 正在进行的核对（锁的 verify 同一时刻只跑一个，正在跑时再调会直接返回） */
+    checking?: Promise<unknown>
     /** 截止时冻结的结果 */
     final?: { status: 'not-sent' | 'unknown' | 'failure'; note: string; notExecuted?: boolean }
   }
@@ -255,6 +262,20 @@ export function createUnifiedBatch(deps: BatchDeps) {
     let out: Promise<CtrlReply<203>>
     try { out = send(p, q, { beforeSend, signal: ac.signal }) } catch (x) { settle(token, 'fail'); return Promise.reject(x) }
     markSent(token, out, recordOf(q))
+    e.query = q
+    e.open = new Set(changedFields(q))
+    // 本次的核对函数：只看还没结束的字段，读到一致的作为候选；写锁确认这次核对仍有效（锁没换、没超时、没取消、账号没变）
+    // 才提交（commit）为结束。候选提交后全部结束才算一致（放锁）。迟到或失效的核对不改字段状态
+    requireVerify(token, (signal) => {
+      const run = (async () => {
+        if (!e.open!.size) return true
+        const snap = await readBack(p.id, signal)
+        const done = closableFields(e, snap)
+        return { same: [...e.open!].every((f) => done.includes(f)), commit: () => { for (const f of done) e.open!.delete(f) } }
+      })()
+      e.checking = run
+      return run
+    })
     out.then((r) => {
       const ok = r?.success === true
       if (e.sent) e.reply = ok ? 'ok' : 'rejected'
@@ -271,14 +292,30 @@ export function createUnifiedBatch(deps: BatchDeps) {
     return out
   }
 
+  /** 这次读数里回读一致的字段记为结束（逐字段口径与结果卡片同一套：rules.ts fieldResults；有房间离线的不算一致） */
+  const closableFields = (e: Entry, snap: UnifiedSnapshot | null | undefined): EchoField[] =>
+    !e.query || !e.open || !snap ? [] : fieldResults(e.query, snap).filter((r) => r.status === 'applied' && e.open!.has(r.field)).map((r) => r.field)
+  const closeFields = (e: Entry, snap: UnifiedSnapshot | null | undefined) => {
+    for (const f of closableFields(e, snap)) e.open?.delete(f)
+  }
+
   /**
-   * 状态机结束后按回读结论结算写锁：已生效 → ok（放锁），并让锁再核对一次（应答未知、锁已是 unknown 的，核对一致即放开）；
-   * 应答 success=true 但未变化 / 无法核对 / 回读失败 → unknown（锁等核对一致或到期）。被拒、没发出的已在写 Promise 上结算过
+   * 状态机结束后按字段结算写锁（不看总结果）：下发后回读一致的字段记为结束；全部结束 → ok（放锁），并让锁再核对一次
+   * （应答未知、锁已是 unknown 的：没有未结束的字段，核对直接放开）。还有没结束的字段、且应答 success=true → unknown
+   * （锁等之后的核对把剩下的字段都读到一致，或到期）。被拒、没发出的已在写 Promise 上结算过
    */
   const settleByReadback = (e: Entry, st: UnifiedState<UnifiedSnapshot>) => {
-    if (!e.token || !e.sent) return
-    if (st.status === 'success') { settle(e.token, 'ok'); void verify(e.token.key); return }
-    if (e.reply === 'ok' && (st.status === 'unapplied' || st.status === 'unverifiable' || st.status === 'unknown')) settle(e.token, 'unknown')
+    if (!e.token || !e.sent || e.reply === 'rejected') return
+    if ('after' in st) closeFields(e, st.after)
+    if (e.open && e.open.size === 0) {
+      settle(e.token, 'ok')
+      const key = e.token.key
+      void verify(key)
+      // 有核对正在跑（它读之前这些字段还没结束）：这次 verify 会被跳过，等它跑完再核对一次（没有未结束的字段，直接放开）
+      void e.checking?.catch(() => false).then(() => setTimeout(() => { void verify(key) }, 0))
+      return
+    }
+    if (e.reply === 'ok') settle(e.token, 'unknown')
   }
 
   function clear() {

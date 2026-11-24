@@ -29,7 +29,8 @@ import * as api from '../api'
 import { lockOf, lockVersion, onForceReread, OTHER_ACCOUNT_TEXT, subscribe as subscribeLock } from '../api/writeLock'
 import {
   clampTemp, LOCK_BUSY_TEXT, lockTargetOf, rereadHits, MODE_OPTIONS, readUnifiedSnapshot, resolveTempRange, TEXT, tempAvailability, unifiedAppCode, useUnifiedBatch,
-  type BatchRow, type RowStatus, type UnifiedDraft, type UnifiedSnapshot,
+  fieldResults, resultTitle,
+  type BatchRow, type FieldStatus, type RowStatus, type UnifiedDraft, type UnifiedSnapshot,
 } from '../features/unified'
 
 type Tri = '开启' | '关闭' | '不变'
@@ -60,6 +61,19 @@ export interface ResultRow {
   notExecuted?: boolean
   /** 原因与前后回读（只在「下发核对」区显示，不进结果卡片） */
   detail?: string
+  /** 逐字段结果（Fable 11/25）：标题（单一结果是那个词，混合是计数）+ 每个字段各自的状态。只在「下发核对」区显示 */
+  title?: string
+  fields?: Array<{ label: string; status: FieldStatus; messages: string[] }>
+}
+
+const FIELD_BADGE: Record<FieldStatus, 'green' | 'orange' | 'amber'> = { applied: 'green', unchanged: 'orange', unverifiable: 'amber', unknown: 'orange' }
+
+/** 逐字段结果：下发后有结论的四种（已生效 / 未变化 / 无法核对 / 结果未知）才列；截止时冻结的以批次判定为准，不列 */
+function rowFields(r: BatchRow): Pick<ResultRow, 'title' | 'fields'> {
+  const s = r.state
+  if (r.note || (s.status !== 'success' && s.status !== 'unapplied' && s.status !== 'unverifiable' && s.status !== 'unknown')) return {}
+  const fs = fieldResults(s.query, s.after, { replied: s.status !== 'unknown' || s.replied })
+  return { title: resultTitle(fs), fields: fs.map(({ label, status, messages }) => ({ label, status, messages })) }
 }
 
 const STATUS: Record<ResultRow['status'], { label: string; variant: 'green' | 'red' | 'orange' | 'amber' | 'gray' }> = {
@@ -91,15 +105,16 @@ function rowDetail(r: BatchRow): string {
   switch (s.status) {
     case 'success':
       return [s.via === 'reply' ? TEXT.success : `${TEXT.success}（${TEXT.verified}）`, echo(s.before, s.after)].join('；')
+    // 逐字段的不一致 / 没回报放在字段明细里（rowFields），这里只留结论、未重试说明和前后回读
     case 'unapplied':
-      return [TEXT.unapplied, ...s.mismatches.map((m) => m.message), TEXT.retryHint, echo(s.before, s.after)].join('；')
+      return [TEXT.unapplied, TEXT.retryHint, echo(s.before, s.after)].join('；')
     case 'unverifiable':
-      return [TEXT.unverifiable, ...s.mismatches.map((m) => m.message), TEXT.retryHint, echo(s.before, s.after)].join('；')
+      return [TEXT.unverifiable, TEXT.retryHint, echo(s.before, s.after)].join('；')
     case 'failure':
       return [s.error, s.afterError, TEXT.retryHint, s.before ? echo(s.before, s.after) : ''].filter(Boolean).join('；')
     case 'unknown':
       // 回读请求本身失败（after=null）：只提示回读失败，不列逐字段的「设备未回报」（那是回读成功但没读数，不是一回事）
-      return [s.error, s.cause, s.afterError, ...(s.after === null ? [] : s.mismatches.map((m) => m.message)), TEXT.retryHint, echo(s.before, s.after)].filter(Boolean).join('；')
+      return [s.error, s.cause, s.afterError, TEXT.retryHint, echo(s.before, s.after)].filter(Boolean).join('；')
     case 'idle':
       return s.errors.join('；') || TEXT.aborted
     default:
@@ -124,7 +139,9 @@ function readLast(key: string | null): ResultRow[] | null {
   if (!key) return null
   try {
     const v: unknown = JSON.parse(sessionStorage.getItem(LAST_KEY + key) ?? 'null')
-    return Array.isArray(v) ? v.filter(isRow) : null
+    // 逐字段明细不合规（旧版本存的、被改过的）就丢掉明细，只按原来的说明显示
+    const okFields = (f: unknown) => Array.isArray(f) && f.every((x) => x && typeof x.label === 'string' && Object.hasOwn(FIELD_BADGE, x.status) && Array.isArray(x.messages))
+    return Array.isArray(v) ? v.filter(isRow).map((r) => (typeof r.title === 'string' && okFields(r.fields) ? r : { ...r, title: undefined, fields: undefined })) : null
   } catch { return null }
 }
 function writeLast(key: string | null, rows: ResultRow[]) {
@@ -133,7 +150,7 @@ function writeLast(key: string | null, rows: ResultRow[]) {
 }
 
 const toResult = (r: BatchRow): ResultRow => ({
-  name: r.name, code: r.code, at: r.at ?? '—', detail: rowDetail(r),
+  name: r.name, code: r.code, at: r.at ?? '—', detail: rowDetail(r), ...rowFields(r),
   notExecuted: r.notExecuted === true || (r.status === 'failure' && r.state.status === 'failure' && r.state.outcome === 'not-sent'),
   status: r.status === 'waiting' || r.status === 'sending' ? 'not-sent' : r.status,
 })
@@ -380,7 +397,8 @@ export default function Control() {
                 <TableRow key={r.code + r.name}>
                   <TableCell style={{ fontWeight: 500 }}>{r.name}</TableCell>
                   <TableCell className="num muted">{r.code}</TableCell>
-                  <TableCell><Badge variant={STATUS[r.status].variant}>{r.notExecuted ? '失败（未执行）' : STATUS[r.status].label}</Badge></TableCell>
+                  {/* 状态列：有逐字段结果的显示标题（单一结果是那个词，混合是计数，Fable 11/25）；逐字段明细在「下发核对」 */}
+                  <TableCell><Badge variant={STATUS[r.status].variant}>{r.notExecuted ? '失败（未执行）' : r.title ?? STATUS[r.status].label}</Badge></TableCell>
                   <TableCell className="num muted">{r.at}</TableCell>
                 </TableRow>
               ))}
@@ -399,7 +417,20 @@ export default function Control() {
           </button>
           {showNotes && (
             <ul id="unified-notes" className="unified-notes" style={{ margin: 0, padding: '0 22px 18px 40px', fontSize: 12.5, lineHeight: 1.7 }}>
-              {last.filter((r) => r.detail).map((r) => <li key={r.code + r.name} className="muted"><b style={{ color: 'var(--text)' }}>{r.name}（{r.code}）</b>：{r.detail}</li>)}
+              {last.filter((r) => r.detail).map((r) => (
+                <li key={r.code + r.name} className="muted">
+                  <b style={{ color: 'var(--text)' }}>{r.name}（{r.code}）</b>：{r.title ? <b style={{ color: 'var(--text)' }}>{r.title}</b> : r.detail}
+                  {/* 逐字段明细：标题下面的紧凑列表，每个字段四种状态之一 */}
+                  {r.title && r.fields && (
+                    <ul className="unified-fields" aria-label="逐字段结果" style={{ margin: '2px 0 0', padding: '0 0 0 16px', listStyle: 'disc' }}>
+                      {r.fields.map((f) => (
+                        <li key={f.label}>{f.label}：<Badge variant={FIELD_BADGE[f.status]}>{TEXT.fieldStatus[f.status]}</Badge>{f.messages.length ? `（${f.messages.join('；')}）` : ''}</li>
+                      ))}
+                    </ul>
+                  )}
+                  {r.title && <div>{r.detail}</div>}
+                </li>
+              ))}
             </ul>
           )}
         </Card>
