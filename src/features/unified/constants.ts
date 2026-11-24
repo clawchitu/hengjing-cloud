@@ -72,6 +72,7 @@ export const TEXT = {
   success: '已生效',
   unapplied: '已下发，设备状态尚未变化，请稍后刷新确认',
   sentUnknown: '已下发，结果未知',
+  roomsOffline: '下发后回读时有房间离线，读数不可信，请稍后刷新确认',
   unverifiable: '已下发，设备未回报开关状态，无法确认是否生效',
   failure: '下发失败',
   retryHint: '未自动重试，请核对设备状态后再决定是否重新下发',

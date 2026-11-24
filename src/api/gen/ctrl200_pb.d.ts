@@ -583,11 +583,11 @@ export declare type RoomTemperatureDataGetReply_RoomTemperatureData = Message<"c
   dewPoint: number;
 
   /**
-   * 设定温度（optional：要分清「没回报」和 0，见 S12b 回读核对）
+   * 设定温度
    *
-   * @generated from field: optional float set_temp = 6;
+   * @generated from field: float set_temp = 6;
    */
-  setTemp?: number | undefined;
+  setTemp: number;
 
   /**
    * 设定湿度
@@ -611,11 +611,11 @@ export declare type RoomTemperatureDataGetReply_RoomTemperatureData = Message<"c
   eco: number;
 
   /**
-   * 开关 - 1为开启，0为关闭，-1为不变（optional：缺失 = 设备没回报，不能当成「关」）
+   * 开关 - 1为开启，0为关闭，-1为不变
    *
-   * @generated from field: optional int32 switch = 13;
+   * @generated from field: int32 switch = 13;
    */
-  switch?: number | undefined;
+  switch: number;
 
   /**
    * 工作模式 - 0为制冷，1为制热，2为通风

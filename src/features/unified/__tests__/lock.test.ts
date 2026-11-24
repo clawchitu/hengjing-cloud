@@ -76,7 +76,10 @@ describe('S12b 接入写锁', () => {
     spy.mockRestore()
   })
 
-  it('结果未知持锁：批次截止只改标注不放锁；回读一致前锁一直在，原 Promise 迟到成功才放', async () => {
+  it('结果未知持锁：批次截止只改标注不放锁；原 Promise 迟到成功只算已下发 → 按结果未知交给锁核对，核对一致才放', async () => {
+    L.configureWriteLock({ resolveProject: (id) => (id === 'u' ? { id: 'u', controlScreenId: 'S9' } : null) })
+    const verifier = vi.fn(async () => true)
+    L.registerVerifier(203, verifier)
     let finish!: (v: { success: boolean; msg: string }) => void
     const send: BatchSender = (_p, _q, o) => { if (!o.beforeSend()) return Promise.reject(new ApiError('write_blocked', 'x')); return new Promise((r) => { finish = r }) }
     const b = createUnifiedBatch({ getProjects: () => [P('u', 'S9')], readBack: async () => snap, send, log: () => {}, deadlineMs: 20 })
@@ -86,6 +89,7 @@ describe('S12b 接入写锁', () => {
     expect(L.lockOf({ id: 'u', controlScreenId: 'S9' })?.phase).toBe('sent') // 锁仍在
     finish({ success: true, msg: '' })
     await flush()
+    expect(verifier).toHaveBeenCalled()
     expect(L.lockOf({ id: 'u', controlScreenId: 'S9' })).toBeNull()
   })
 
@@ -254,8 +258,8 @@ describe('注册了 203 核对器时', () => {
       expect(L.lockOf('screen:Sa3')?.phase).toBe('unknown')
     })
 
-    it('成功但房间没回报 switch（200 里缺字段）→ 无法核对，不判不一致；锁保持', async () => {
-      const b = batchWith('a4', [off, { rooms: 3, roomSwitch: null, roomTemp: null, perRoom: { roomSwitch: [null, null, null], roomTemp: [21.5, 24.5, 24.5] } }])
+    it('成功但 200 回包为空（没有房间条目）→ 无法核对；锁保持', async () => {
+      const b = batchWith('a4', [off, { rooms: 0, roomSwitch: null, roomTemp: null, perRoom: { roomSwitch: [], roomTemp: [] } }])
       const done = await runOnce(b, ['a4'])
       await flush()
       expect(done.rows[0].status).toBe('unverifiable')

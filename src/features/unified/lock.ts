@@ -41,6 +41,8 @@ const TEMP_EPS = 0.01
 /** 203 核对：回读快照里房间开关、设定温度（全部房间一致）都等于目标才算一致；无法核对的一律不一致 */
 export function match203(t: { [k: string]: Scalar }, snap: UnifiedSnapshot): boolean {
   if (!verifiable203(t) || !snap || snap.rooms <= 0) return false
+  // 有房间离线：读数不可信，不算一致
+  if (snap.offline) return false
   if (t.roomSwitch !== -1 && snap.roomSwitch !== t.roomSwitch) return false
   if (t.roomTemp !== -1 && (typeof t.roomTemp !== 'number' || snap.roomTemp == null || Math.abs(snap.roomTemp - t.roomTemp) >= TEMP_EPS)) return false
   return true

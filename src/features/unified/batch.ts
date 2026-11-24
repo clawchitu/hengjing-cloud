@@ -58,13 +58,17 @@ const same = (xs: Array<number | null>): number | null => (xs.length && xs.every
 
 /**
  * 200 的房间列表 → 快照。汇总值：全部房间读到且一致才给值，否则为 null；perRoom 留逐房间读数，核对按房间逐个比。
- * switch / set_temp 是 optional：设备没回报（undefined）记 null（无法核对），不能当成 0（关）。
+ * switch / set_temp 是普通 proto3 标量：0 值服务端不编码，解码出来就是 0（关），按真实读数核对。
+ * 没有房间条目（含 200 回包为空 {}）→ 无法核对。is_connected=false 的房间读数不可信：不参与核对，记 offline（结果未知）。
  * 系统开关 / 运行模式没有读接口，不给这两个键（核对时记「未核对」）
  */
-export function summarizeRooms(rooms: ReadonlyArray<{ switch?: number; setTemp?: number }>): UnifiedSnapshot {
-  const sws = rooms.map((r) => num(r.switch))
-  const ts = rooms.map((r) => { const v = num(r.setTemp); return v === null ? null : Math.round(v * 100) / 100 })
-  return { rooms: rooms.length, roomSwitch: same(sws), roomTemp: same(ts), perRoom: { roomSwitch: sws, roomTemp: ts } }
+export function summarizeRooms(rooms: ReadonlyArray<{ switch?: number; setTemp?: number; isConnected?: boolean }>): UnifiedSnapshot {
+  const online = rooms.filter((r) => r.isConnected !== false)
+  const sws = online.map((r) => num(r.switch))
+  const ts = online.map((r) => { const v = num(r.setTemp); return v === null ? null : Math.round(v * 100) / 100 })
+  const snap: UnifiedSnapshot = { rooms: rooms.length, roomSwitch: same(sws), roomTemp: same(ts), perRoom: { roomSwitch: sws, roomTemp: ts } }
+  if (online.length < rooms.length) snap.offline = rooms.length - online.length
+  return snap
 }
 
 /** 真实回读：ctrl 200（只读） */
@@ -250,8 +254,10 @@ export function createUnifiedBatch(deps: BatchDeps) {
     out.then((r) => {
       const ok = r?.success === true
       if (e.sent) e.reply = ok ? 'ok' : 'rejected'
-      // success=true 只算「已下发」：已认领的不在这里放锁，等下发后回读的结论（见 settleByReadback）
+      // success=true 只算「已下发」：已认领的不在这里放锁，等下发后回读的结论（见 settleByReadback）。
+      // 截止后才到的成功应答（这一项已冻结、页面可能已 reset 取消订阅）：按结果未知结算，交给锁核对或到期
       if (!ok || !e.sent) settle(token, ok ? 'ok' : 'fail')
+      else if (e.final) settle(token, 'unknown')
     }, (err) => {
       const o = outcomeOf(err)
       if (e.sent) e.reply = o === 'unknown' ? 'error' : 'rejected'

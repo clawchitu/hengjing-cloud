@@ -111,11 +111,11 @@ message RoomTemperatureDataGetReply {
     float  temperature                 = 3;  // 室内温度
     float  humidity                    = 4;  // 湿度
     float  dew_point                   = 5;  // 露点
-    optional float set_temp            = 6;  // 设定温度（optional：要分清「没回报」和 0，见 S12b 回读核对）
+    float  set_temp                    = 6;  // 设定温度
     float  set_humi                    = 7;  // 设定湿度
     int32  wind_speed                  = 8;  // 风速 - 数字即为风速档位，100为自动风速
     int32  eco                         = 9;  // 节能模式 - 1为节能，0为标准
-    optional int32 switch              = 13; // 开关 - 1为开启，0为关闭，-1为不变（optional：缺失 = 设备没回报，不能当成「关」）
+    int32 switch                       = 13; // 开关 - 1为开启，0为关闭，-1为不变
     int32                 mode         = 14; // 工作模式 - 0为制冷，1为制热，2为通风
     repeated WorkModeData end_modes    = 15;
     bool                  is_connected = 16; // 是否连接

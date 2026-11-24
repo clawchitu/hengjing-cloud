@@ -46,7 +46,7 @@ const GROUPS = [
   { id: 'g2', code: '3', name: '独立空气系统', distributor_id: 'D1', project_ids: ['p2'] },
   { id: 'g3', code: '4', name: '空气单机', distributor_id: 'D1', project_ids: ['p4'] },
 ]
-const rooms = (sw: number, t: number) => json({ body: encodeMessage(pb.RoomTemperatureDataGetReplySchema, { data: [{ id: 1, name: '客厅', switch: sw, setTemp: t }, { id: 2, name: '主卧', switch: sw, setTemp: t }] }) })
+const rooms = (sw: number, t: number) => json({ body: encodeMessage(pb.RoomTemperatureDataGetReplySchema, { data: [{ id: 1, name: '客厅', switch: sw, setTemp: t, isConnected: true }, { id: 2, name: '主卧', switch: sw, setTemp: t, isConnected: true }] }) })
 const reply = (success: boolean, msg = '') => json({ body: encodeMessage(pb.UnifiedCtrlSetReplySchema, { success, msg }) })
 
 type Handler = (c: Call, n: number) => Response | Promise<Response>
@@ -395,16 +395,31 @@ describe('下发', () => {
     expect(notes).not.toContain('房间开关下发')
   })
 
-  it('200 里房间没有 switch 字段 → 无法核对，回读显示「开关未知」而不是「关」', async () => {
-    const noSwitch = (t: number) => json({ body: encodeMessage(pb.RoomTemperatureDataGetReplySchema, { data: [{ id: 1, name: '客厅', setTemp: t }, { id: 2, name: '主卧', setTemp: t }] }) })
+  it('200 里房间没有 switch 字段（0 值不编码）→ 按「关」核对：下发开启 → 未变化（测试服 240829001 那次）', async () => {
+    const noSwitch = () => json({ body: encodeMessage(pb.RoomTemperatureDataGetReplySchema, { data: [{ id: 1, name: '房间11', setTemp: 26, isConnected: true }, { id: 2, name: '房间13', setTemp: 26, isConnected: true }] }) })
+    backend({ '/ctrl/room-temperature-data-get': noSwitch, '/ctrl/unified-ctrl-set': () => reply(true) })
+    await click(okIn(await prepare()))
+    await screen.findByText('未变化', { selector: '[data-slot=badge]' }, { timeout: 3000 })
+    expect(await openNotes()).toContain('房间开关下发 开启，回读 关闭')
+  })
+
+  it('下发后 200 回包为空（{}，没有房间条目）→ 无法核对', async () => {
     let be!: ReturnType<typeof backend>
-    be = backend({ '/ctrl/room-temperature-data-get': () => noSwitch(be.callsTo('/ctrl/unified-ctrl-set').length ? 26.5 : 26), '/ctrl/unified-ctrl-set': () => reply(true) })
+    be = backend({ '/ctrl/room-temperature-data-get': () => (be.callsTo('/ctrl/unified-ctrl-set').length ? json({ body: '' }) : rooms(0, 26)), '/ctrl/unified-ctrl-set': () => reply(true) })
     await click(okIn(await prepare()))
     await screen.findByText('无法核对', { selector: '[data-slot=badge]' }, { timeout: 3000 })
     const notes = await openNotes()
     expect(notes).toContain(TEXT.unverifiable)
-    expect(notes).toContain('房间开关未知')
-    expect(notes).not.toMatch(/房间关|回读 关闭/)
+    expect(notes).toContain('下发后 无房间')
+  })
+
+  it('下发后回读时房间离线（is_connected=false）、旧值碰巧一致 → 结果未知，不报已生效', async () => {
+    const off = () => json({ body: encodeMessage(pb.RoomTemperatureDataGetReplySchema, { data: [{ id: 1, name: '客厅', switch: 1, setTemp: 26.5, isConnected: false }, { id: 2, name: '主卧', switch: 1, setTemp: 26.5, isConnected: true }] }) })
+    let be!: ReturnType<typeof backend>
+    be = backend({ '/ctrl/room-temperature-data-get': () => (be.callsTo('/ctrl/unified-ctrl-set').length ? off() : rooms(0, 26)), '/ctrl/unified-ctrl-set': () => reply(true) })
+    await click(okIn(await prepare()))
+    await screen.findByText('结果未知', { selector: '[data-slot=badge]' }, { timeout: 3000 })
+    expect(await openNotes()).toContain(TEXT.roomsOffline)
   })
 
   it('500 且回读不一致 → 结果未知，提示刷新查看，不重试', async () => {

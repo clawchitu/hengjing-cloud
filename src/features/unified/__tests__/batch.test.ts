@@ -38,9 +38,9 @@ describe('summarizeRooms（ctrl 200 → 回读快照）', () => {
     expect(summarizeRooms([])).toEqual({ rooms: 0, roomSwitch: null, roomTemp: null, perRoom: { roomSwitch: [], roomTemp: [] } })
   })
 
-  it('switch / set_temp 缺失（设备没回报，optional 解码为 undefined）记 null，不当成 0（关）；系统开关 / 运行模式不给键', () => {
-    const s = summarizeRooms([{ setTemp: 21.5 }, { switch: 1, setTemp: 24.5 }])
-    expect(s).toEqual({ rooms: 2, roomSwitch: null, roomTemp: null, perRoom: { roomSwitch: [null, 1], roomTemp: [21.5, 24.5] } })
+  it('is_connected=false 的房间不参与核对，记 offline；系统开关 / 运行模式不给键', () => {
+    const s = summarizeRooms([{ switch: 0, setTemp: 21.5, isConnected: false }, { switch: 1, setTemp: 24.5, isConnected: true }])
+    expect(s).toEqual({ rooms: 2, roomSwitch: 1, roomTemp: 24.5, offline: 1, perRoom: { roomSwitch: [1], roomTemp: [24.5] } })
     expect('systemSwitch' in s || 'systemMode' in s).toBe(false)
   })
 })

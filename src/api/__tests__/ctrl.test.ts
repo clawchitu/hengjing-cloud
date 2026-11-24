@@ -34,15 +34,10 @@ const ROOM = {
 }
 
 describe('ctrl 编解码', () => {
-  it('200 的 switch / set_temp 是 optional：没回报（字段缺失）解码为 undefined，回报 0 才是 0', () => {
-    const missing = encodeMessage(pb.RoomTemperatureDataGetReplySchema, { data: [{ id: 1, name: '房间11', temperature: 22 }] })
-    const r1 = decodeReply(pb.RoomTemperatureDataGetReplySchema, missing) as { data: Array<Record<string, unknown>> }
-    expect(r1.data[0].switch).toBeUndefined()
-    expect(r1.data[0].setTemp).toBeUndefined()
-    const zero = encodeMessage(pb.RoomTemperatureDataGetReplySchema, { data: [{ id: 1, name: '房间11', switch: 0, setTemp: 0 }] })
-    const r0 = decodeReply(pb.RoomTemperatureDataGetReplySchema, zero) as { data: Array<Record<string, unknown>> }
-    expect(r0.data[0].switch).toBe(0)
-    expect(r0.data[0].setTemp).toBe(0)
+  it('200 的 switch / set_temp 是普通 proto3 标量：值为 0 时不上线，解码为 0（关），是真实读数', () => {
+    const r = decodeReply(pb.RoomTemperatureDataGetReplySchema, encodeMessage(pb.RoomTemperatureDataGetReplySchema, { data: [{ id: 1, name: '房间11', temperature: 22 }] })) as { data: Array<Record<string, unknown>> }
+    expect(r.data[0].switch).toBe(0)
+    expect(r.data[0].setTemp).toBe(0)
   })
 
   it('11 条消息都有路由和 Query/Reply；写消息正好是 201/203/204/206', () => {

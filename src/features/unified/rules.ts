@@ -137,10 +137,12 @@ export interface UnifiedEcho {
   systemMode?: number | null
   roomSwitch?: number | null
   roomTemp?: number | null
-  /** 逐房间读数（null = 该房间没回报或取值无效）。给了就按房间逐个核对，不看上面的汇总值 */
+  /** 离线（is_connected=false）的房间数：这些房间不参与核对；有离线房间且没有不一致的 → 结果未知 */
+  offline?: number
+  /** 逐房间读数（只含在线房间；null = 取值无效）。给了就按房间逐个核对，不看上面的汇总值 */
   perRoom?: { roomSwitch?: ReadonlyArray<number | null>; roomTemp?: ReadonlyArray<number | null> }
 }
-export type EchoField = Exclude<keyof UnifiedEcho, 'perRoom'>
+export type EchoField = Exclude<keyof UnifiedEcho, 'perRoom' | 'offline'>
 export const ECHO_FIELDS: readonly EchoField[] = ['systemSwitch', 'systemMode', 'roomSwitch', 'roomTemp']
 /**
  * 逐字段核对结论（只列没核对一致的字段）：
@@ -197,9 +199,15 @@ export function echoMismatches(q: WriteQuery<203>, after: UnifiedEcho | null | u
  * - applied：下发的字段全部读到且一致（已生效）
  * - unchanged：有字段读到了、但和下发的不一样（未变化）
  * - unverifiable：没有不一致的，但有字段没回报 / 接口读不到（无法核对）
+ * - unknown：没有不一致的，但有房间离线（读数不可信，结果未知）
  */
-export type EchoVerdict = 'applied' | 'unchanged' | 'unverifiable'
-export function echoVerdict(ms: readonly EchoMismatch[]): EchoVerdict {
+export type EchoVerdict = 'applied' | 'unchanged' | 'unverifiable' | 'unknown'
+/**
+ * 优先级：读到的值有不一致 → 未变化（确定没全部生效，比「无法核对」信息更多）；否则有离线房间 → 结果未知；
+ * 否则有字段读不到 → 无法核对；全部一致 → 已生效
+ */
+export function echoVerdict(ms: readonly EchoMismatch[], after?: UnifiedEcho | null): EchoVerdict {
   if (ms.some((m) => m.kind === 'differ')) return 'unchanged'
+  if (after?.offline) return 'unknown'
   return ms.length ? 'unverifiable' : 'applied'
 }

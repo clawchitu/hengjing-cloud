@@ -141,6 +141,9 @@ describe('echoMismatches（逐字段核对）', () => {
     expect(echoVerdict([])).toBe('applied')
     expect(echoVerdict([{ field: 'roomSwitch', kind: 'missing', message: '' }, { field: 'roomTemp', kind: 'differ', message: '' }])).toBe('unchanged')
     expect(echoVerdict([{ field: 'systemSwitch', kind: 'unreadable', message: '' }])).toBe('unverifiable')
+    // 有离线房间、没有不一致 → 结果未知
+    expect(echoVerdict([], { roomSwitch: 1, offline: 1 })).toBe('unknown')
+    expect(echoVerdict([{ field: 'roomSwitch', kind: 'differ', message: '' }], { offline: 1 })).toBe('unchanged')
   })
   it('回读为空：所有下发字段都算没读到', () => {
     expect(echoMismatches(q, null).map((m) => [m.field, m.kind])).toEqual([['systemSwitch', 'missing'], ['systemMode', 'missing'], ['roomTemp', 'missing']])

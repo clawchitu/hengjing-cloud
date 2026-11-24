@@ -200,10 +200,10 @@ export function createUnifiedController<S>(deps: UnifiedDeps<S>): UnifiedControl
     try { log(makeEntry(event, { projectCode: t?.projectCode, ...p })) } catch { /* 日志失败不影响下发 */ }
   }
 
-  /** 逐字段核对；toEcho 抛错算全部字段没读到 */
-  const verify = (query: WriteQuery<203>, after: S | null): EchoMismatch[] => {
-    if (after === null) return echoMismatches(query, null)
-    try { return echoMismatches(query, deps.toEcho(after)) } catch { return echoMismatches(query, null) }
+  /** 回读 → 核对用的形状；toEcho 抛错算全部字段没读到（null） */
+  const echoOf = (after: S | null): UnifiedEcho | null => {
+    if (after === null) return null
+    try { return deps.toEcho(after) } catch { return null }
   }
 
   async function run(target: UnifiedTarget, draft: UnifiedDraft, query: WriteQuery<203>, myGen: number, signal: AbortSignal): Promise<UnifiedState<S>> {
@@ -269,8 +269,9 @@ export function createUnifiedController<S>(deps: UnifiedDeps<S>): UnifiedControl
       readErr = e
       write('read-after', target, { codes: ['READ_FAILED'], error: e })
     }
-    const mismatches = verify(query, after)
-    const verdict = after === null ? null : echoVerdict(mismatches)
+    const echo = echoOf(after)
+    const mismatches = echoMismatches(query, echo)
+    const verdict = after === null ? null : echoVerdict(mismatches, echo)
     const byKind = (...kinds: EchoMismatch['kind'][]) => mismatches.filter((m) => kinds.includes(m.kind)).map((m) => m.field)
 
     if (outcome === null) {
@@ -284,6 +285,10 @@ export function createUnifiedController<S>(deps: UnifiedDeps<S>): UnifiedControl
       if (verdict === 'applied') {
         write('success', target, { codes: ['REPLY_OK', 'VERIFIED'], fields })
         dispatch({ type: 'SUCCEED', via: 'reply', before, after })
+      } else if (verdict === 'unknown') {
+        // 有房间离线：读数不可信，结果未知
+        write('unknown', target, { codes: ['REPLY_OK', 'OFFLINE'], fields })
+        dispatch({ type: 'UNKNOWN', replied: true, cause: '', before, after, afterError: TEXT.roomsOffline, mismatches })
       } else if (verdict === 'unchanged') {
         write('unapplied', target, { codes: ['REPLY_OK', 'ECHO_MISMATCH'], fields: byKind('differ') })
         dispatch({ type: 'UNAPPLIED', before, after, mismatches })
