@@ -45,7 +45,8 @@ export async function settle(page: Page) {
 export async function shot(page: Page, name: string, opts: { h1?: boolean } = {}) {
   await settle(page)
   if (opts.h1 !== false) await expect(page.locator('h1').first()).toBeVisible()
-  await expect(page).toHaveScreenshot(`${name}.png`, { fullPage: true })
+  // soft：一个用例里多张截图时全部比完再报错，一次看到所有差异
+  await expect.soft(page).toHaveScreenshot(`${name}.png`, { fullPage: true })
 }
 
 export { expect }
