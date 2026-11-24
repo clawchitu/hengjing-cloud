@@ -1,14 +1,15 @@
 // 组织数据 hooks（TanStack Query，沿用 S4 的 QueryClient 默认值：读请求网络/超时/服务器错误重试 1 次）。
 // 查询键都以 ['org', userKey] 开头：按账号隔离缓存，退出时整体清掉（useResetOrgOnSignOut）。
 // 每个 hook 返回 Loadable：data（加载中 / 失败时为空数组或上一次的数据）、status 三态、error、isEmpty。
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useCallback, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
-import { reportProjectSelect } from '../../api'
+import { getFrequentProjects as getMockFrequent, reportProjectSelect } from '../../api'
 import { isMockMode } from '../../api/config'
 import { ApiError, isApiError } from '../../api/errors'
-import { useSession } from '../session'
+import { getFrequentProjects, getIntegratedProjectStat, reportProjectClick } from '../../api/pcfg'
+import { can, useSession } from '../session'
 import { capabilitiesOf, type Capabilities } from './capabilities'
-import { bumpSelectTick, getSelectTick, getStoredProjectId, setStoredProjectId, subscribeCurrent } from './current'
+import { bumpSelectTick, forgetRejected, getRejected, getSelectTick, getStoredProjectId, setRejected, setStoredProjectId, subscribeCurrent } from './current'
 import { joinScope, resolveCurrentProject, resolveDealerId, withPlatformDealer } from './map'
 import { mockOrg, orgSource, type OrgContext, type ProjectFilter } from './sources'
 import type { Dealer, Group, LoadStatus, Project, Scope } from './types'
@@ -37,6 +38,8 @@ export const orgKeys = {
   groups: (userKey: string | null, dealerId: string | null) => ['org', userKey, 'groups', dealerId] as const,
   projects: (userKey: string | null, filter: ProjectFilter) => ['org', userKey, 'projects', { onlyOnline: !!filter.onlyOnline }] as const,
   apps: (userKey: string | null) => ['org', userKey, 'apps'] as const,
+  stat: (userKey: string | null) => ['org', userKey, 'stat'] as const,
+  frequent: (userKey: string | null, tick: number) => ['org', userKey, 'frequent', tick] as const,
 }
 
 const toApiError = (e: unknown): ApiError | null =>
@@ -164,9 +167,10 @@ export interface CurrentProject {
   /** 当前项目；可见项目为空（加载中、失败、无数据）时为 null */
   project: Project | null
   /**
-   * 切换当前项目，同步返回是否成功。目标在当前可见范围里：写入并返回 true；
-   * 不在（例如按经销商取的集成项目比全量缓存新）：返回 false、不写存储、不上报，同时在后台刷新一次组织范围
-   * （只刷新数据，不提交任何选择）。调用方用 whenProjectSet()，只有成功才跳转、提示成功
+   * 切换当前项目，同步返回结果（见 SetProjectResult）。目标在当前可见范围里：写入、上报点击并返回 true；
+   * 不在（例如按经销商取的集成项目比全量缓存新）：不写存储、不上报，在后台刷新一次组织范围
+   * （只刷新数据，不提交任何选择），返回 'refreshing'；这次刷新成功后再选它仍不在范围里，返回 'forbidden'。
+   * 调用方用 whenProjectSet()，只有成功才跳转、提示成功
    */
   setProjectId: (id: string) => SetProjectResult
   /** 每次切换上报完成后加一（常用项目据此刷新） */
@@ -175,17 +179,30 @@ export interface CurrentProject {
   error: ApiError | null
 }
 
-export type SetProjectResult = boolean
+/** true 切换成功；'refreshing' 不在缓存的可见范围里、正在后台刷新；'forbidden' 刷新成功后仍不在可见范围里 */
+export type SetProjectResult = true | 'refreshing' | 'forbidden'
 
-/** 处理 setProjectId 的结果（同步）：成功才执行 ok（提示、跳转），否则执行 fail */
-export function whenProjectSet(r: SetProjectResult, ok: () => void, fail: () => void) {
-  if (r) ok(); else fail()
+/** 切换失败的提示文案 */
+export const SET_PROJECT_FAIL_TEXT: Record<Exclude<SetProjectResult, true>, string> = {
+  refreshing: '项目列表正在刷新，请稍后重试',
+  forbidden: '无权查看该项目',
+}
+
+/** 处理 setProjectId 的结果（同步）：成功才执行 ok（提示、跳转），否则把失败文案交给 fail */
+export function whenProjectSet(r: SetProjectResult, ok: () => void, fail: (text: string) => void) {
+  if (r === true) ok(); else fail(SET_PROJECT_FAIL_TEXT[r] ?? SET_PROJECT_FAIL_TEXT.refreshing)
+}
+
+/** 真实接口：切换成功后上报一次点击（POST /project/click/{id}，只记次数，不是下发接口）。没有该路由的权限就不发 */
+function reportClick(id: string) {
+  if (!can(`/v1/project/click/${id}`)) return
+  reportProjectClick(id).then(bumpSelectTick, (e: unknown) => console.warn('[org] 项目点击上报失败', isApiError(e) ? e.message : e))
 }
 
 /**
  * 当前项目：持久化在 localStorage 的 hjc-project，在可见范围（useOrgScope().projects）里解析，
- * 失效或换了账号就回退到第一个可见项目。切换时上报：演示数据记入本地计数；真实接口的
- * POST /project/click/{id} 由 S6b 接上（S6a 只读，不发）。
+ * 失效或换了账号就回退到第一个可见项目。切换时上报：演示数据记入本地计数；真实接口发 POST /project/click/{id}
+ * （失败只记日志，不影响切换）。上报完成后 selectTick 加一，常用项目据此重取。
  */
 export function useCurrentProject(): CurrentProject {
   const { ctx, userKey } = useOrgCtx()
@@ -197,21 +214,127 @@ export function useCurrentProject(): CurrentProject {
   const user = ctx.user
   const visible = scope.data.projects
   const setProjectId = useCallback((id: string): SetProjectResult => {
-    const commit = () => {
+    const k = `${userKey}\n${id}`
+    if (visible.some((p) => p.id === id)) {
+      forgetRejected(k)
       setStoredProjectId(id)
       if (isMockMode()) void reportProjectSelect(user, id).then(bumpSelectTick)
-      else bumpSelectTick()
+      else reportClick(id)
       return true
     }
-    if (visible.some((p) => p.id === id)) return commit()
-    // 不在缓存的可见范围里（演示数据、过期链接、缓存旧了）：失败，不写存储、不上报；后台刷新项目列表和全量集成项目，
-    // 刷新结果只更新数据，不提交任何选择（用户再点一次时按新数据判断）
+    // 不在缓存的可见范围里（演示数据、过期链接、缓存旧了）：失败，不写存储、不上报。
+    // 第一次：后台刷新项目列表和全量集成项目，刷新结果只更新数据，不提交任何选择（用户再点一次时按新数据判断）；
+    // 刷新进行中再点：仍提示正在刷新，不重复刷新；刷新两份都成功后仍不在范围里：无权查看。刷新失败则忘掉，下次再刷
     console.warn('[org] 忽略不在可见范围内的项目', id)
-    void qc.refetchQueries({ queryKey: orgKeys.projects(userKey, {}), exact: true })
-    void qc.refetchQueries({ queryKey: orgKeys.groups(userKey, null), exact: true })
-    return false
+    const st = getRejected(k)
+    if (st === 'refreshed') return 'forbidden'
+    if (st !== 'refreshing') {
+      setRejected(k, 'refreshing')
+      const keys = [orgKeys.projects(userKey, {}), orgKeys.groups(userKey, null)]
+      // refetchQueries 在查询失败时也会正常结束（旧数据保留），所以逐个看查询状态，不能只看 Promise
+      void Promise.all(keys.map((queryKey) => qc.refetchQueries({ queryKey, exact: true }))).then(() => {
+        if (getRejected(k) !== 'refreshing') return // 期间已成功切换（被清掉）
+        if (keys.every((queryKey) => qc.getQueryState(queryKey)?.status === 'success')) setRejected(k, 'refreshed')
+        else forgetRejected(k)
+      })
+    }
+    return 'refreshing'
   }, [user, visible, qc, userKey])
   return { project, setProjectId, selectTick, status: scope.status, error: scope.error }
+}
+
+// ---------------------------------------------------------------------------
+// 首页
+
+export interface OrgStat {
+  /** 集成项目数 */
+  groups: number
+  /** 集成项目里的项目数（去重） */
+  projects: number
+  online: number
+  offline: number
+}
+
+/**
+ * 首页 4 张统计卡。真实接口：POST /integrated-projects/stat（接口文档 6.1，字段一一对应）；
+ * 演示数据、没有该路由权限（测试经销商账号目前 403）、或统计接口失败时，按可见组织范围在前端算
+ * （口径相同：集成项目数、集成项目里去重后的项目数、其中在线 / 离线数），error 里留着失败原因。
+ * 统计接口加载中时 data 为 null（卡片显示占位）。
+ */
+export function useOrgStat(): Omit<Loadable<OrgStat | null>, 'isEmpty'> & { source: 'api' | 'scope' } {
+  const { userKey, authed } = useOrgCtx()
+  const scope = useOrgScope()
+  const api = !isMockMode() && can('/v1/integrated-projects/stat')
+  const q = useQuery({
+    queryKey: orgKeys.stat(userKey),
+    queryFn: ({ signal }) => getIntegratedProjectStat({ signal }),
+    enabled: authed && api,
+    staleTime: REAL_STALE_MS,
+  })
+  const { groups, projects } = scope.data
+  const local = useMemo<OrgStat>(() => {
+    const online = projects.filter((p) => p.online).length
+    return { groups: groups.length, projects: projects.length, online, offline: projects.length - online }
+  }, [groups, projects])
+  const qRefetch = q.refetch
+  const refetch = useCallback(() => { void qRefetch() }, [qRefetch])
+  if (api && q.data) {
+    const d = q.data
+    return { data: { groups: d.total, projects: d.projectTotal, online: d.projectOnline, offline: d.projectOffline }, status: 'success', error: null, staleError: q.isError ? toApiError(q.error) : null, source: 'api', refetch }
+  }
+  if (api && !q.isError) return { data: null, status: 'loading', error: null, staleError: null, source: 'api', refetch }
+  const fromScope = scope.status === 'success' ? local : null
+  return { data: fromScope, status: scope.status, error: api ? toApiError(q.error) : scope.error, staleError: null, source: 'scope', refetch: api ? refetch : scope.refetch }
+}
+
+export interface FrequentProject {
+  project: Project
+  /** 选择次数（只有演示数据有） */
+  count?: number
+}
+
+/** 常用项目向后端多要一些：按可见范围过滤后仍尽量凑满 limit 个 */
+const FREQUENT_FETCH = 20
+
+/**
+ * 常用项目（首页）：真实接口 POST /projects/frequent（按点击次数降序），演示数据为本地计数。
+ * 只保留当前可见组织范围里的项目，项目对象取自组织范围（与侧栏、搜索同一份），最多 limit 个。
+ * 切换项目上报完成后（selectTick 变化）重取，重取期间保留上一份结果。
+ * permitted=false：账号没有该路由的权限（测试经销商账号目前 403），不发请求，页面显示「未开通」。
+ */
+export function useFrequentProjects(limit = 4): Loadable<FrequentProject[]> & { permitted: boolean } {
+  const { ctx, userKey, authed } = useOrgCtx()
+  const scope = useOrgScope()
+  const tick = useSyncExternalStore(subscribeCurrent, getSelectTick, getSelectTick)
+  const mock = isMockMode()
+  const permitted = mock || can('/v1/projects/frequent')
+  const user = ctx.user
+  const q = useQuery({
+    queryKey: orgKeys.frequent(userKey, tick),
+    queryFn: async ({ signal }): Promise<{ id: string; count?: number }[]> =>
+      mock ? getMockFrequent(user) : (await getFrequentProjects(FREQUENT_FETCH, { signal })).map((e) => ({ id: e.id })),
+    enabled: authed && permitted,
+    // 重取期间保留上一份结果，但只限同一账号（换账号绝不沿用上一个账号的数据）
+    placeholderData: (prev, prevQuery) => (prevQuery?.queryKey[1] === userKey ? keepPreviousData(prev) : undefined),
+    staleTime: mock ? Infinity : REAL_STALE_MS,
+  })
+  const projects = scope.data.projects
+  const data = useMemo(() => {
+    const byId = new Map(projects.map((p) => [p.id, p]))
+    const out: FrequentProject[] = []
+    for (const f of q.data ?? NONE) {
+      const p = byId.get(f.id)
+      if (p && !out.some((x) => x.project.id === p.id)) out.push(f.count === undefined ? { project: p } : { project: p, count: f.count })
+      if (out.length >= limit) break
+    }
+    return out
+  }, [q.data, projects, limit])
+  const qRefetch = q.refetch
+  const refetch = useCallback(() => { void qRefetch() }, [qRefetch])
+  if (!permitted) return { data: NONE, status: authed ? 'success' : 'loading', error: null, staleError: null, isEmpty: authed, refetch: noop, permitted }
+  const status: LoadStatus = scope.status !== 'success' ? scope.status : q.data !== undefined ? 'success' : q.isError ? 'error' : 'loading'
+  const err = scope.status === 'error' ? scope.error : toApiError(q.error)
+  return { data: status === 'success' ? data : NONE, status, error: status === 'error' ? err : null, staleError: status === 'success' && q.isError ? err : null, isEmpty: status === 'success' && data.length === 0, refetch, permitted }
 }
 
 /** 项目能力（是否有房间温控、是否有新风运行设置等），按 app_code 派生；project 为空按「未知应用」 */

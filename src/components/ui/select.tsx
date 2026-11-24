@@ -21,7 +21,7 @@ function Select(props: React.ComponentProps<typeof SelectPrimitive.Root>) {
   return <SelectPrimitive.Root data-slot="select" {...props} />
 }
 
-const arrow =
+export const selectArrow =
   "bg-white bg-no-repeat bg-[url(data:image/svg+xml,%3Csvg%20xmlns=%27http://www.w3.org/2000/svg%27%20width=%2710%27%20height=%276%27%3E%3Cpath%20d=%27M1%201l4%204%204-4%27%20stroke=%27%2364748b%27%20fill=%27none%27%20stroke-width=%271.4%27/%3E%3C/svg%3E)] bg-position-[right_11px_center]"
 const box = 'h-9 rounded-md border border-border pr-[30px] pl-3 font-normal text-text-2 outline-none'
 
@@ -34,7 +34,7 @@ function SelectTrigger({
   const trigger = (
     <SelectPrimitive.Trigger
       data-slot="select-trigger"
-      className={cn(box, arrow, 'inline-flex cursor-default items-center text-left whitespace-pre', sizer && 'col-start-1 row-start-1 w-full', className)}
+      className={cn(box, selectArrow, 'inline-flex cursor-default items-center text-left whitespace-pre', sizer && 'col-start-1 row-start-1 w-full', className)}
       {...props}
     >
       {/* Radix 的 Value 会丢掉 className / style，排版类放在外层 span 上 */}

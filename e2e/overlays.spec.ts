@@ -160,13 +160,21 @@ test.describe('toast', () => {
     await shotView(page, 'toast-stack', { settle: false })
   })
 
+  // 原来点集成项目页的「编辑」（已按改动文档移除，S6b），改为统一控制页不选项目就下发
   test('失败', async ({ page, login }) => {
     await login('dealer')
-    await page.goto('/groups')
+    await page.goto('/control')
     await settle(page)
-    await page.getByRole('button', { name: '编辑', exact: true }).click()
+    const all = page.getByRole('checkbox', { name: '全选在线项目' })
+    // 点一次全选、再点一次全不选（默认勾选的若正好是全部在线项目，第一次点就已经清空）
+    await all.click()
+    await tick(page, 100)
+    if (await page.locator('.pick.on').count()) await all.click()
+    await tick(page, 100)
+    await expect(page.locator('.pick.on')).toHaveCount(0)
+    await page.getByRole('button', { name: '确认下发' }).click()
     await tick(page, 300)
-    const t = page.locator('.toast').filter({ hasText: '编辑：演示环境为只读' })
+    const t = page.locator('.toast').filter({ hasText: '请至少选择一个项目' })
     await expect(t).toBeVisible()
     await expect(t).toHaveClass(/err/)
     await shotView(page, 'toast-error', { settle: false })

@@ -56,16 +56,13 @@ const CK = 'hjc-mock-select-counts'
 type Counts = Record<string, Record<string, number>>
 const readCounts = (): Counts => { try { return JSON.parse(localStorage.getItem(CK) || '{}') } catch { return {} } }
 const writeCounts = (c: Counts) => localStorage.setItem(CK, JSON.stringify(c))
-type Seed = Record<string, number>
-const SEEDS: Record<'0' | '2' | '4+', (u: O.User) => Seed> = {
-  '0': () => ({}),
-  '2': (u): Seed => (u.role === 'admin' ? { 'PRJ-50101': 6, 'PRJ-60014': 3 } : { 'PRJ-10241': 6, 'PRJ-10252': 2 }),
-  '4+': (u): Seed => (u.role === 'admin' ? { 'PRJ-50101': 9, 'PRJ-10241': 7, 'PRJ-60014': 4, 'PRJ-50103': 3, 'PRJ-20117': 1 } : { 'PRJ-10241': 18, 'PRJ-10242': 11, 'PRJ-20117': 7, 'PRJ-30056': 5, 'PRJ-10252': 3 }),
-}
+/** 演示账号首次使用时的初始计数：管理员 2 个常用项目，经销商 5 个（首页显示前 4 个） */
+const seedOf = (u: O.User): Record<string, number> =>
+  u.role === 'admin' ? { 'PRJ-50101': 6, 'PRJ-60014': 3 } : { 'PRJ-10241': 18, 'PRJ-10242': 11, 'PRJ-20117': 7, 'PRJ-30056': 5, 'PRJ-10252': 3 }
 function userCounts(u: O.User): Record<string, number> {
   if (!__HJC_MOCK__) return {}
   const c = readCounts()
-  if (!c[u.username]) { c[u.username] = SEEDS[u.role === 'admin' ? '2' : '4+'](u); writeCounts(c) }
+  if (!c[u.username]) { c[u.username] = seedOf(u); writeCounts(c) }
   return c[u.username]
 }
 /** POST /api/projects/select { projectId } — backend increments the user's counter */
@@ -78,24 +75,19 @@ export async function reportProjectSelect(u: O.User, projectId: string) {
   return delay({ ok: true, count: mine[projectId] }, 40)
 }
 /**
- * GET /api/projects/frequent → top 4 most-selected visible projects (may be fewer, or empty)。
- * 只是演示数据：真实接口模式下返回空列表（首页显示「暂无常用项目」），不把演示项目混进真实账号；
- * 真实的 POST /projects/frequent 由 S6b 接上，并按当前可见组织范围过滤。
+ * 演示数据的常用项目：本地计数最多的 4 个可见项目 { id, count }（可能不足 4 个或为空）。
+ * 只用于演示数据模式；真实接口模式返回空列表（真实的 POST /projects/frequent 见 src/api/pcfg.ts，
+ * 由 src/data/org 的 useFrequentProjects 调用），不把演示项目混进真实账号。
  */
-export function getFrequentProjects(u: O.User): Promise<{ project: O.Project; count: number }[]> {
+export function getFrequentProjects(u: O.User): Promise<{ id: string; count: number }[]> {
   if (!__HJC_MOCK__ || !isMockMode()) return delay([])
   const visible = new Set(scopeOf(u).projects.map((p) => p.id))
   const list = Object.entries(userCounts(u))
     .filter(([id, n]) => n > 0 && visible.has(id))
     .sort((a, b) => b[1] - a[1])
     .slice(0, 4)
-    .map(([id, count]) => ({ project: findProject(id)!, count }))
+    .map(([id, count]) => ({ id, count }))
   return delay(list)
-}
-/** demo only: reset the mock counters to a preset */
-export function seedFrequent(u: O.User, preset: '0' | '2' | '4+') {
-  if (!__HJC_MOCK__) return
-  writeCounts({ ...readCounts(), [u.username]: SEEDS[preset](u) })
 }
 
 // rooms ----------------------------------------------------------------

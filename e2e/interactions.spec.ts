@@ -33,25 +33,26 @@ async function tabTo(page: Page, el: Locator) {
 }
 
 test.describe('Button 键盘', () => {
+  // 集成项目页的「编辑」「新建项目」已按改动文档移除（S6b），默认 / primary 按钮改用传感器页「导出」、连接状态页「立即检测」
   for (const key of ['Enter', 'Space'] as const) {
     test(`默认按钮：${key} 触发 onClick，焦点可见`, async ({ page, login }) => {
-      await open(page, login, '/groups')
-      const btn = page.getByRole('button', { name: '编辑', exact: true })
+      await open(page, login, '/sensors')
+      const btn = page.getByRole('button', { name: '导出', exact: true })
       await expect(btn).toHaveAttribute('data-variant', 'default')
       await tabTo(page, btn)
       await expectFocusVisible(btn)
       await page.keyboard.press(key)
-      await expect(page.locator('.toast').filter({ hasText: '编辑：演示环境为只读' })).toBeVisible()
+      await expect(page.locator('.toast').filter({ hasText: '已导出：' })).toBeVisible()
     })
 
     test(`primary 按钮：${key} 触发 onClick，焦点可见`, async ({ page, login }) => {
-      await open(page, login, '/groups')
-      const btn = page.getByRole('button', { name: '新建项目', exact: true })
+      await open(page, login, '/connections')
+      const btn = page.getByRole('button', { name: '立即检测', exact: true })
       await expect(btn).toHaveAttribute('data-variant', 'primary')
       await tabTo(page, btn)
       await expectFocusVisible(btn)
       await page.keyboard.press(key)
-      await expect(page.locator('.toast').filter({ hasText: '新建项目：演示环境为只读' })).toBeVisible()
+      await expect(page.locator('.toast').filter({ hasText: '检测完成' })).toBeVisible()
     })
 
     test(`link 按钮：${key} 触发 onClick，焦点可见`, async ({ page, login }) => {
@@ -141,8 +142,8 @@ test.describe('Button 悬停', () => {
   }
 
   test('默认按钮：悬停变 #f8fafc 底、#cbd5e1 边', async ({ page, login }) => {
-    await open(page, login, '/groups')
-    const btn = page.getByRole('button', { name: '编辑', exact: true })
+    await open(page, login, '/sensors')
+    const btn = page.getByRole('button', { name: '导出', exact: true })
     await page.mouse.move(0, 0)
     await expect(btn).toHaveCSS('background-color', 'rgb(255, 255, 255)')
     await expect(btn).toHaveCSS('border-top-color', 'rgb(231, 236, 242)')
@@ -154,8 +155,8 @@ test.describe('Button 悬停', () => {
   })
 
   test('primary 按钮：悬停变 #0e7490 底', async ({ page, login }) => {
-    await open(page, login, '/groups')
-    const btn = page.getByRole('button', { name: '新建项目', exact: true })
+    await open(page, login, '/connections')
+    const btn = page.getByRole('button', { name: '立即检测', exact: true })
     await page.mouse.move(0, 0)
     await expect(btn).toHaveCSS('background-color', 'rgb(8, 145, 178)')
     await btn.hover()
@@ -193,27 +194,29 @@ test.describe('Select（集成项目）', () => {
     await page.keyboard.press('Escape')
   })
 
-  test('管理员经销商搜索：下拉里只剩命中的经销商；关闭后 body 样式完全恢复', async ({ page, login }) => {
+  test('管理员经销商下拉：搜索后只剩命中的经销商；非模态，不锁页面滚动，关闭后 body 完全恢复', async ({ page, login }) => {
     await login('admin')
     await page.goto('/groups')
     await settle(page)
-    await page.getByPlaceholder('搜索经销商名称 / 编码 / 区域').fill('南京')
-    await page.clock.runFor(500)
-    const trigger = page.getByRole('combobox', { name: '经销商' })
-    await expect(trigger).toContainText('南京')
-    const childrenBefore = await page.evaluate(() => document.body.children.length)
+    const trigger = page.getByRole('button', { name: /^经销商/ })
+    const bodyBefore = await page.evaluate(() => ({ style: document.body.getAttribute('style') ?? '', locked: document.body.hasAttribute('data-scroll-locked'), children: document.body.children.length }))
     await trigger.click()
     await page.clock.runFor(100)
-    await expect(page.getByRole('option')).toHaveCount(1)
-    await expect(page.getByRole('option')).toHaveText('南京舒适家系统集成有限公司')
-    // 打开时 Radix 锁滚动：body 上有 data-scroll-locked 和 pointer-events: none
-    expect(await page.evaluate(() => document.body.hasAttribute('data-scroll-locked'))).toBe(true)
+    await page.getByRole('combobox', { name: '搜索经销商' }).fill('南京')
+    await page.clock.runFor(100)
+    const list = page.getByRole('listbox', { name: '经销商' })
+    await expect(list.getByRole('option')).toHaveCount(1)
+    await expect(list.getByRole('option')).toContainText('南京舒适家系统集成有限公司')
+    // Popover 非模态（同项目切换菜单）：不锁滚动、不屏蔽页面指针事件
+    expect(await page.evaluate(() => document.body.hasAttribute('data-scroll-locked'))).toBe(false)
     await page.keyboard.press('Escape')
     await page.clock.runFor(100)
-    await expect(page.getByRole('listbox')).toHaveCount(0)
+    await expect(list).toHaveCount(0)
     await expect(trigger).toBeFocused()
+    // 只是关闭，没有选：仍是原来的经销商
+    await expect(trigger).toContainText('上海恒境暖通')
     const body = await page.evaluate(() => ({ style: document.body.getAttribute('style') ?? '', locked: document.body.hasAttribute('data-scroll-locked'), children: document.body.children.length }))
-    expect(body).toEqual({ style: '', locked: false, children: childrenBefore })
+    expect(body).toEqual(bodyBefore)
   })
 })
 

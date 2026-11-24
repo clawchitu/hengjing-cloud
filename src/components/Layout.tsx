@@ -8,10 +8,11 @@ import { Avatar, Icon, LogoMark } from './legacy'
 import { Badge } from '@/components/ui/badge'
 import { InputGroup, InputGroupInput } from '@/components/ui/input'
 import { Command, CommandEmpty, CommandItem, CommandList } from '@/components/ui/command'
+import { AfterRender, itemById, setActive } from '@/components/ui/command-sync'
 import { Popover, PopoverAnchor, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { cn } from '@/lib/utils'
 import { useApp } from '../app/store'
-import { projectsInGroup, whenProjectSet } from '../data/org'
+import { dealerSections, projectsInGroup, useOrgScope, whenProjectSet } from '../data/org'
 import { gatewayOf, type Project } from '../api'
 
 export const NAV_MAIN = [
@@ -27,9 +28,21 @@ export const NAV_PROJECT = [
 ]
 const ALL = [...NAV_MAIN, ...NAV_PROJECT, { to: '/settings', label: '系统设置', icon: faGear }]
 
+/** 组织数据后台刷新失败（有旧数据）、经销商列表失败时，弹层顶部的提示；可重试 */
+function OrgHint({ text, onRetry }: { text: string; onRetry: () => void }) {
+  return (
+    <div role="status" className="flex items-center justify-between gap-2 px-2.5 pt-1 pb-1.5 text-[11.5px] text-orange">
+      <span>{text}</span>
+      <button type="button" className="shrink-0 cursor-pointer text-primary hover:underline" onMouseDown={(e) => e.preventDefault()} onClick={onRetry}>重试</button>
+    </div>
+  )
+}
+
 /** 打开菜单时没有高亮（同旧版）；按上下键先高亮当前项目，回车选中 */
 function ProjectSwitch() {
-  const { project, setProjectId, toast, scope, user } = useApp()
+  const { project, setProjectId, toast, user } = useApp()
+  const org = useOrgScope()
+  const scope = org.data
   const [open, setOpen] = useState(false)
   const [value, setValue] = useState('')
   const listRef = useRef<HTMLDivElement>(null)
@@ -63,14 +76,17 @@ function ProjectSwitch() {
   const lastPointer = useRef(false)
   const pending = useRef(false)
   const [pointerFocus, setPointerFocus] = useState(false)
+  const isAdmin = user.role === 'admin'
+  // 平台账号按经销商分段；经销商列表里没有的归属（列表失败等）归到最后的「其他」，菜单里不丢项目
+  const sections = dealerSections(scope.dealers, scope.groups)
   // 一个项目可能出现在多个集成项目下：菜单项的 cmdk 值用「组 id:项目 id」保证唯一（后端 ObjectId 与演示 id 都不含冒号），
   // 选中时仍传项目 id。当前项目的高亮落在菜单里它第一次出现的位置（按经销商 → 集成项目的渲染顺序）
   const currentValue = (() => {
-    for (const d of scope.dealers) for (const g of scope.groups) if (g.dealerId === d.id && g.projectIds.includes(project.id)) return itemValue(g.id, project.id)
+    for (const sec of sections) for (const g of sec.groups) if (g.projectIds.includes(project.id)) return itemValue(g.id, project.id)
     return ''
   })()
   const show = (keyboard: boolean) => { setValue(keyboard ? currentValue : ''); scrolled.current = ''; if (keyboard) lastPointer.current = false; setOpen(true) }
-  const pick = (p: Project) => { const r = setProjectId(p.id); setOpen(false); whenProjectSet(r, () => toast(`已切换到「${p.name}」`), () => toast('项目列表已更新，请稍后重试', true)) }
+  const pick = (p: Project) => { const r = setProjectId(p.id); setOpen(false); whenProjectSet(r, () => toast(`已切换到「${p.name}」`), (t) => toast(t, true)) }
   // 打开后焦点在列表（listbox）上。高亮项的 id 写到列表的 aria-activedescendant：cmdk 只在它自己移动高亮时更新这个属性，
   // 高亮由这里改变（键盘打开、先高亮当前项目、鼠标移动清除）时它会过时，所以每次渲染后按实际高亮盖掉。
   // 高亮变化时滚进可视区（只滚一次，不跟用户的滚轮抢）。鼠标打开时没有高亮，菜单停在顶部（同旧版）
@@ -114,8 +130,9 @@ function ProjectSwitch() {
       {/*
         旧菜单绝对定位在 .proj-switch 的内边距盒里（左右各让出 1px 边框、上沿距边框 5px），这里用对齐偏移复刻；
         旧菜单在侧栏的滚动区里，阴影被侧栏右沿裁掉，Portal 出来后用 clip-path 照裁。右沿在菜单右侧 15px 处 =
-        global.css 的 .sb-scroll 右内边距 12px + .proj-switch 右外边距 2px + 右边框 1px（侧栏 232px 定宽）。例外：窗口矮到滚动区出现占宽的竖向滚动条时（Windows 等非覆盖式滚动条），旧版阴影在滚动条左沿就被裁掉，这里仍裁在侧栏右沿，阴影会多盖住滚动条那一窄条；
-        改这几处数值时同步改这里。
+        global.css 的 .sb-scroll 右内边距 12px + .proj-switch 右外边距 2px + 右边框 1px（侧栏 232px 定宽）。
+        窗口矮到滚动区出现占宽的竖向滚动条时（Windows 等非覆盖式滚动条），触发器和菜单随滚动区一起变窄，
+        「菜单右沿 + 15px」正好落在滚动条左沿，阴影同旧版一样裁在那里，不会盖住滚动条。改这几处数值时同步改这里。
         高度不超过视口里实际可用的高度（矮窗口下整个菜单仍在屏内，可滚动到最后一项）
       */}
       <PopoverContent
@@ -144,28 +161,35 @@ function ProjectSwitch() {
             if (e.key === 'Tab') { e.preventDefault(); setOpen(false) }
           }}
         >
+          {/* 演示数据不会出现这两条（截图不变）：后台刷新失败时项目在线状态可能过期；经销商列表失败时分段名缺失 */}
+          {org.staleError && <OrgHint text="项目列表刷新失败，数据可能已过期" onRetry={org.refetch} />}
+          {isAdmin && org.dealersError && <OrgHint text="经销商列表加载失败，部分分组暂按「其他」显示" onRetry={org.refetch} />}
           <CommandList ref={listRef} label="切换当前项目">
-            {scope.dealers.map((d) => (
-              <div key={d.id} role="presentation">
-                {user.role === 'admin' && <div aria-hidden className="border-t border-line-2 px-2.5 pt-2.5 pb-0.5 text-[11px] font-bold text-primary">{d.short}</div>}
-                {scope.groups.filter((g) => g.dealerId === d.id).map((g) => (
-                  <div key={g.id} role="group" aria-label={user.role === 'admin' ? `${d.short} · ${g.name}` : g.name}>
-                    <div aria-hidden className="px-2.5 pt-2 pb-1 text-[11px] text-faint">{g.name}</div>
-                    {projectsInGroup(g, scope.projects).map((p) => (
-                      <CommandItem
-                        key={p.id}
-                        value={itemValue(g.id, p.id)}
-                        onSelect={() => pick(p)}
-                        data-current={p.id === project.id || undefined}
-                        className={cn('rounded-[7px] text-[13px]', p.id === project.id ? 'bg-primary-soft font-semibold text-primary' : 'hover:bg-background')}
-                      >
-                        <span>{p.name}</span><small className="num text-[11px] text-faint">{p.online ? p.code : '离线'}</small>
-                      </CommandItem>
-                    ))}
-                  </div>
-                ))}
-              </div>
-            ))}
+            {sections.map(({ dealer: d, groups }) => {
+              const label = d ? d.short : '其他'
+              return (
+                <div key={d?.id ?? 'other:'} role="presentation">
+                  {isAdmin && <div aria-hidden className="border-t border-line-2 px-2.5 pt-2.5 pb-0.5 text-[11px] font-bold text-primary">{label}</div>}
+                  {groups.map((g) => (
+                    <div key={g.id} role="group" aria-label={isAdmin ? `${label} · ${g.name}` : g.name}>
+                      <div aria-hidden className="px-2.5 pt-2 pb-1 text-[11px] text-faint">{g.name}</div>
+                      {projectsInGroup(g, scope.projects).map((p) => (
+                        <CommandItem
+                          key={p.id}
+                          value={itemValue(g.id, p.id)}
+                          onSelect={() => pick(p)}
+                          data-current={p.id === project.id || undefined}
+                          className={cn('rounded-[7px] text-[13px]', p.id === project.id ? 'bg-primary-soft font-semibold text-primary' : 'hover:bg-background')}
+                        >
+                          <span>{p.name}</span><small className="num text-[11px] text-faint">{p.online ? p.code : '离线'}</small>
+                        </CommandItem>
+                      ))}
+                    </div>
+                  ))}
+                </div>
+              )
+            })}
+            {!scope.projects.length && <div className="px-2.5 py-3 text-[12.5px] text-muted-foreground">暂无可用项目</div>}
             <AfterRender run={sync} />
           </CommandList>
         </Command>
@@ -176,7 +200,9 @@ function ProjectSwitch() {
 
 /** 项目搜索: only single projects inside the user's visible 集成项目; picking one makes it the 当前项目 */
 function ProjectSearch() {
-  const { scope, setProjectId, toast, project } = useApp()
+  const { setProjectId, toast, project } = useApp()
+  const org = useOrgScope()
+  const scope = org.data
   const [q, setQ] = useState('')
   const [open, setOpen] = useState(false)
   const [value, setValue] = useState('')
@@ -188,13 +214,17 @@ function ProjectSearch() {
   const s = q.trim().toLowerCase()
   const hits = s ? scope.projects.filter((p) => (p.name + ' ' + p.code).toLowerCase().includes(s)).slice(0, 8) : []
   // 一个项目可能属于多个集成项目：列出全部所属组名
-  const gname = (p: Project) => scope.groups.filter((g) => projectsInGroup(g, [p]).length).map((g) => g.name).join('、')
+  // 同名的集成项目（测试环境就有两个「五恒集成项目」）后面带上编码区分
+  const gname = (p: Project) => {
+    const gs = scope.groups.filter((g) => projectsInGroup(g, [p]).length)
+    return gs.map((g) => (gs.some((x) => x !== g && x.name === g.name) ? `${g.name}（${g.code}）` : g.name)).join('、')
+  }
   const shown = open && !!s
   const active = shown && value && hits.some((p) => p.id === value) ? itemId : undefined
   // 关闭（Esc、Tab 离开、点外部、选中）和重新打开都清掉高亮：重开后回车只会选第一条，不会选到之前高亮过的项
   const show = () => { setValue(''); setOpen(true) }
   const close = () => { setValue(''); setOpen(false) }
-  const pick = (p: Project) => { const r = setProjectId(p.id); setQ(''); close(); whenProjectSet(r, () => toast(`当前项目已切换为「${p.name}」`), () => toast('项目列表已更新，请稍后重试', true)) }
+  const pick = (p: Project) => { const r = setProjectId(p.id); setQ(''); close(); whenProjectSet(r, () => toast(`当前项目已切换为「${p.name}」`), (t) => toast(t, true)) }
   const inForm = (t: EventTarget | null) => t instanceof Node && !!formRef.current?.contains(t)
   const sync = () => {
     const c = document.getElementById(contentId), a = formRef.current?.getBoundingClientRect()
@@ -259,6 +289,7 @@ function ProjectSearch() {
               // 点弹层任何地方（结果、空白、“未找到”文字）都不让输入框失焦
               onMouseDown={(e) => e.preventDefault()}
             >
+              {org.staleError && <OrgHint text="项目列表刷新失败，搜索结果可能已过期" onRetry={org.refetch} />}
               <CommandList label="项目搜索结果">
                 {hits.map((p) => (
                   <CommandItem
@@ -283,28 +314,8 @@ function ProjectSearch() {
   )
 }
 
-/**
- * 放在弹层内容里：弹层经 Portal 晚一拍挂载，父组件的 effect 看不到它；这里每次渲染后（含挂载）执行一次。
- * 用 useEffect 而不是 useLayoutEffect：挂载那一次，子组件的 layout effect 早于父元素的 ref 绑定
- */
-function AfterRender({ run, onResize = false }: { run: () => void; onResize?: boolean }) {
-  useEffect(run)
-  // 窗口尺寸变化（含缩放）时也执行一次
-  useEffect(() => {
-    if (!onResize) return
-    window.addEventListener('resize', run)
-    return () => window.removeEventListener('resize', run)
-  }, [onResize, run])
-  return null
-}
-/** cmdk 选项上带 data-value（项目编号） */
+/** cmdk 选项上带 data-value（菜单为「组 id:项目 id」） */
 const itemValue = (groupId: string, projectId: string) => groupId + ':' + projectId
-const itemById = (root: Element | null, v: string) => root?.querySelector<HTMLElement>(`[cmdk-item][data-value="${CSS.escape(v)}"]`) ?? null
-/** 组合框的 aria-activedescendant 指向当前高亮项（没有高亮时去掉） */
-const setActive = (owner: Element | null, item: HTMLElement | null) => {
-  if (item?.id) owner?.setAttribute('aria-activedescendant', item.id)
-  else owner?.removeAttribute('aria-activedescendant')
-}
 
 function OfflineBanner({ p }: { p: Project }) {
   return (
