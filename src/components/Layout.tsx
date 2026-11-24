@@ -318,9 +318,9 @@ export default function Layout() {
   const nav = useNavigate()
   const cur = ALL.find((n) => loc.pathname.startsWith(n.to))
   const isProjectPage = NAV_PROJECT.some((n) => n.to === cur?.to)
-  // 没有可见项目（真实接口账号下无项目）时 project 是 id 为空的占位：不算离线，设备页显示空态、不挂载
+  const offline = isProjectPage && !project.online
+  // 没有可见项目（真实接口账号下无项目）时 project 是 id 为空的占位：不算离线，设备页显示空态、不挂载（下面先于 offline 判断）
   const noProject = !project.id
-  const offline = isProjectPage && !noProject && !project.online
 
   useEffect(() => { window.scrollTo(0, 0) }, [loc.pathname])
 
