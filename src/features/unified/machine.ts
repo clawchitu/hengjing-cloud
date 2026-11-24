@@ -160,6 +160,8 @@ export function createUnifiedController<S>(deps: UnifiedDeps<S>): UnifiedControl
   /** 世代号：abort() 加一；进行中的流程发现世代变了就终止 */
   let gen = 0
   let ac: AbortController | null = null
+  /** 已调用 send 的那一轮的世代号；-1 表示本轮还没调用 send */
+  let sentGen = -1
   const subs = new Set<() => void>()
 
   const dispatch = (e: UnifiedEvent<S>) => {
@@ -168,8 +170,8 @@ export function createUnifiedController<S>(deps: UnifiedDeps<S>): UnifiedControl
     state = next
     for (const fn of subs) fn()
   }
-  const write = (event: UnifiedLogEvent, t: UnifiedTarget | undefined, p: Omit<EntryInput, 'projectCode' | 'projectId'> = {}) => {
-    try { log(makeEntry(event, { projectCode: t?.projectCode, projectId: t?.projectId, ...p })) } catch { /* 日志失败不影响下发 */ }
+  const write = (event: UnifiedLogEvent, t: UnifiedTarget | undefined, p: Omit<EntryInput, 'projectCode'> = {}) => {
+    try { log(makeEntry(event, { projectCode: t?.projectCode, ...p })) } catch { /* 日志失败不影响下发 */ }
   }
 
   /** 逐字段核对；toEcho 抛错算全部字段没读到 */
@@ -199,18 +201,22 @@ export function createUnifiedController<S>(deps: UnifiedDeps<S>): UnifiedControl
       return state
     }
 
-    // 2. 真正发送前的最后核对：没取消、世代没变、项目 code 没变、按最新上下文校验仍通过。不符就终止回 idle
+    // 2. 真正发送前的最后核对：没取消、世代没变、项目 id/code 没变、按最新上下文校验仍通过。不符就终止回 idle。
+    //    「最后核对 → 调用 send」是紧挨着的同步代码，中间不调日志、不通知订阅者；这些一律放到 send 调用之后
     if (stopped()) return abortRun('ABORTED', [TEXT.aborted])
     const stale = recheck(deps.getContext(), target, draft, query)
     if (stale) return abortRun('PROJECT_CHANGED', stale.changed ? [TEXT.projectChanged] : stale.issues.map((i) => i.message))
-    write('read-before', target, { codes: ['OK'] })
+    // 3. 下发一次，不重试。sentGen 在调用 send 的同一刻记下：从这里起 abort() 视为已发出
+    let pending: Promise<unknown>
+    sentGen = myGen
+    try { pending = send(target.projectId, query) } catch (e) { pending = Promise.reject(e) }
 
-    // 3. 下发一次，不重试
+    write('read-before', target, { codes: ['OK'] })
     dispatch({ type: 'STEP', step: 'send', before })
     write('send', target, { fields })
     let sendError: unknown = null
     try {
-      await send(target.projectId, query)
+      await pending
     } catch (e) {
       sendError = e
     }
@@ -292,11 +298,15 @@ export function createUnifiedController<S>(deps: UnifiedDeps<S>): UnifiedControl
         dispatch({ type: 'ABORT', errors: stale.changed ? [TEXT.projectChanged] : stale.issues.map((i) => i.message) })
         return Promise.resolve(state)
       }
-      write('confirm', target, { fields: changedFields(query) })
+      // 先建好信号、记下世代号，再通知订阅者 / 写日志：回调里调 abort() 能作废本轮
+      const myAc = new AbortController()
+      ac = myAc
+      const myGen = gen
+      sentGen = -1
       dispatch({ type: 'CONFIRM' })
-      ac = new AbortController()
-      const myAc = ac
-      const p: Promise<UnifiedState<S>> = run(target, draft, query, gen, myAc.signal).finally(() => {
+      write('confirm', target, { fields: changedFields(query) })
+      if (myGen !== gen || myAc.signal.aborted) return Promise.resolve(state)
+      const p: Promise<UnifiedState<S>> = run(target, draft, query, myGen, myAc.signal).finally(() => {
         if (inflight === p) inflight = null
         if (ac === myAc) ac = null
       })
@@ -305,9 +315,9 @@ export function createUnifiedController<S>(deps: UnifiedDeps<S>): UnifiedControl
     },
     reset() { dispatch({ type: 'RESET' }) },
     abort() {
-      // 已经发出（send / read-after）的不作废：下发可能已生效，必须走完回读
+      // send 已经调用过的不作废：下发可能已生效，必须走完回读
       const s = state
-      if (!(s.status === 'confirming' || (s.status === 'sending' && s.step === 'read-before'))) return
+      if (!(s.status === 'confirming' || (s.status === 'sending' && s.step === 'read-before' && sentGen !== gen))) return
       gen++
       ac?.abort()
       ac = null

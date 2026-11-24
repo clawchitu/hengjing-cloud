@@ -1,5 +1,5 @@
-// 统一控制的下发日志（脱敏）。只记：事件、固定的结果/错误码、ApiError 的 kind、字段名、项目编号、
-// 首尾 4 位的项目 id。不记任何错误原文、文案、下发的值、user_id、令牌、回读内容。
+// 统一控制的下发日志（脱敏）。只记：事件、固定的结果/错误码、ApiError 的 kind、字段名、项目编号
+// （code，下发测试记录要靠它对照，经 Chitu 决定保留）。不记项目 id。不记任何错误原文、文案、下发的值、user_id、令牌、回读内容。
 // makeEntry() 对每一项按白名单过滤，调用方传了别的东西也进不了日志。
 import type { ApiErrorKind } from '@/api/errors'
 import { ECHO_FIELDS, type EchoField, type IssueCode } from './rules'
@@ -29,8 +29,6 @@ export interface UnifiedLogEntry {
   event: UnifiedLogEvent
   at: string
   projectCode?: string
-  /** 后端项目 id，只留首尾 4 位 */
-  projectId?: string
   codes?: LogCode[]
   /** 出错时 ApiError 的 kind；不是 ApiError 记 'other' */
   errorKind?: ApiErrorKind | 'other'
@@ -40,16 +38,8 @@ export interface UnifiedLogEntry {
 
 export type UnifiedLogger = (entry: UnifiedLogEntry) => void
 
-/** 长 id 只保留首尾 4 位；8 位及以下全部打码 */
-export function maskId(id: string | undefined | null): string | undefined {
-  if (!id) return undefined
-  const s = String(id)
-  return s.length <= 8 ? '***' : `${s.slice(0, 4)}…${s.slice(-4)}`
-}
-
 export interface EntryInput {
   projectCode?: string
-  projectId?: string
   codes?: readonly string[]
   error?: unknown
   fields?: readonly string[]
@@ -65,8 +55,6 @@ export function errorKindOf(e: unknown): ApiErrorKind | 'other' | undefined {
 export function makeEntry(event: UnifiedLogEvent, p: EntryInput = {}, now = new Date()): UnifiedLogEntry {
   const e: UnifiedLogEntry = { event: EVENTS.has(event) ? event : ('blocked' as UnifiedLogEvent), at: now.toISOString() }
   if (p.projectCode && PROJECT_CODE.test(String(p.projectCode))) e.projectCode = String(p.projectCode)
-  const id = maskId(p.projectId)
-  if (id) e.projectId = id
   const codes = [...new Set((p.codes ?? []).filter((c) => LOG_CODES.has(c)))] as LogCode[]
   if (codes.length) e.codes = codes
   const kind = errorKindOf(p.error)

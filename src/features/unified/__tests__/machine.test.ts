@@ -270,6 +270,93 @@ describe('控制器：abort（页面卸载、切换项目）', () => {
     expect(readBack).toHaveBeenCalledTimes(2)
   })
 
+  it('CONFIRM 通知里订阅者调用 abort：本轮作废，不读不发，回 idle', async () => {
+    const { ctl, readBack, send } = setup()
+    ctl.subscribe(() => { if (ctl.getState().status === 'sending') ctl.abort() })
+    ctl.request({ roomSwitch: 1 })
+    const end = await ctl.confirm()
+    expect(end).toEqual({ status: 'idle', errors: [TEXT.aborted] })
+    expect(readBack).not.toHaveBeenCalled()
+    expect(send).not.toHaveBeenCalled()
+    // 之后还能正常开始新一轮（没有残留的 inflight）
+    ctl.request({ roomSwitch: 1 })
+    expect(ctl.getState().status).toBe('confirming')
+  })
+
+  it('confirm 日志回调里调用 abort：本轮作废，不读不发', async () => {
+    let ctlRef: { abort: () => void } | null = null
+    const { ctl, readBack, send } = setup({ log: (e) => { if (e.event === 'confirm') ctlRef!.abort() } })
+    ctlRef = ctl
+    ctl.request({ roomSwitch: 1 })
+    expect(await ctl.confirm()).toEqual({ status: 'idle', errors: [TEXT.aborted] })
+    expect(readBack).not.toHaveBeenCalled()
+    expect(send).not.toHaveBeenCalled()
+  })
+
+  it('「最后核对 → send」之间不触发任何回调：日志和通知都在 send 调用之后', async () => {
+    const order: string[] = []
+    let ctlRef: { getState: () => UnifiedState<Snap> } | null = null
+    const send = vi.fn(async () => { order.push('send'); return { success: true, msg: '' } })
+    const readBack = vi.fn(async () => { order.push('readBack'); return order.filter((x) => x === 'readBack').length > 1 ? AFTER : BEFORE })
+    const { ctl } = setup({ send, readBack, log: (e) => order.push(`log:${e.event}`) })
+    ctlRef = ctl
+    ctl.subscribe(() => { const st = ctlRef!.getState(); order.push(`notify:${st.status}${st.status === 'sending' ? ':' + st.step : ''}`) })
+    ctl.request({ roomTemp: 24 })
+    await ctl.confirm()
+    const i = order.indexOf('send')
+    // 前读完成之后、send 之前什么都没有
+    expect(order[i - 1]).toBe('readBack')
+    expect(order.slice(i + 1, i + 4)).toEqual(['log:read-before', 'notify:sending:send', 'log:send'])
+    // confirm 时先通知再写日志，然后才开始前读
+    expect(order.slice(0, 4)).toEqual(['notify:confirming', 'notify:sending:read-before', 'log:confirm', 'readBack'])
+  })
+
+  it.each([
+    ['read-before 日志回调', 'log'],
+    ['STEP send 的订阅通知', 'notify'],
+  ] as const)('send 调用之后（%s 里）切换项目并 abort：视为已发出，abort 无效，照常走完回读', async (_n, where) => {
+    let ctlRef: { abort: () => void; getState: () => UnifiedState<Snap> } | null = null
+    let setCtx: ((c: UnifiedContext | null) => void) | null = null
+    let fired = false
+    const fire = () => { if (fired) return; fired = true; setCtx!({ ...CTX, projectId: 'other-project-000000', projectCode: '260911001' }); ctlRef!.abort() }
+    const { ctl, send, readBack, setContext } = setup({ log: (e) => { if (where === 'log' && e.event === 'read-before') fire() } })
+    ctlRef = ctl; setCtx = setContext
+    ctl.subscribe(() => { const st = ctl.getState(); if (where === 'notify' && st.status === 'sending' && st.step === 'send') fire() })
+    ctl.request({ roomTemp: 24 })
+    const end = await ctl.confirm()
+    expect(fired).toBe(true)
+    expect(send).toHaveBeenCalledTimes(1)
+    expect(readBack).toHaveBeenCalledTimes(2)
+    expect(end).toMatchObject({ status: 'success', verified: true })
+  })
+
+  it('send 内部同步调用 abort：已视为发出，abort 无效', async () => {
+    let ctlRef: { abort: () => void } | null = null
+    const send = vi.fn(async (_id: string, _q: typeof Q) => ({ success: true, msg: '' }))
+    const sendWrap = vi.fn((id: string, q: typeof Q) => { ctlRef!.abort(); return send(id, q) })
+    const { ctl } = setup({ send: sendWrap })
+    ctlRef = ctl
+    ctl.request({ roomTemp: 24 })
+    expect(await ctl.confirm()).toMatchObject({ status: 'success' })
+    expect(send).toHaveBeenCalledTimes(1)
+  })
+
+  it('上一轮已发出的标记不影响下一轮：新一轮前读期间 abort 仍能终止', async () => {
+    const gate = deferred<Snap>()
+    const readBack = vi.fn().mockResolvedValueOnce(BEFORE).mockResolvedValueOnce(AFTER).mockReturnValueOnce(gate.promise)
+    const { ctl, send } = setup({ readBack })
+    ctl.request({ roomSwitch: 1 })
+    expect((await ctl.confirm()).status).toBe('success')
+    ctl.reset()
+    ctl.request({ roomSwitch: 0 })
+    const p = ctl.confirm()
+    ctl.abort()
+    expect(ctl.getState()).toEqual({ status: 'idle', errors: [TEXT.aborted] })
+    gate.resolve(BEFORE)
+    await p
+    expect(send).toHaveBeenCalledTimes(1)
+  })
+
   it('idle 时 abort 无副作用', () => {
     const { ctl, logs } = setup()
     ctl.abort()
