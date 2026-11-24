@@ -311,4 +311,33 @@ describe('写请求：不重放、发送前同步复核（S12b）', () => {
     await expect(p).rejects.toMatchObject({ kind: 'write_blocked', message: WRITE_LOGIN_ABNORMAL_TEXT })
     expect(be.callsTo(route)).toHaveLength(0)
   })
+
+  it.each([
+    ['空串', ''], ['只有空白', '  '], ['数字', 123], ['null', null],
+  ])('sub 为%s：按没有 sub 处理，201/204/206 都拦下，fetch 0 次', async (_n, sub) => {
+    const tok = `h.${btoa(JSON.stringify({ sub }))}.s`
+    writeTokens({ accessToken: tok, refreshToken: 'R1', expiresAt: Date.now() + 2 * HOUR })
+    const routes = ['/ctrl/room-temperature-set', '/ctrl/running-ctrl-set', route]
+    const be = fakeBackend(Object.fromEntries(routes.map((r) => [r, () => json({ body: '' })])))
+    for (const op of ['ctrl-201', 'ctrl-204', 'ctrl-206'] as const) {
+      await expect(requestWrite(op, [P], { body: 'x' }), op).rejects.toMatchObject({ kind: 'write_blocked', message: WRITE_LOGIN_ABNORMAL_TEXT })
+    }
+    for (const r of routes) expect(be.callsTo(r), r).toHaveLength(0)
+  })
+
+  it('等待续期期间存储里的令牌被换成没有 sub 的：不发，提示「登录状态异常，请重新登录后下发」', async () => {
+    writeTokens({ accessToken: J(1), refreshToken: 'R1', expiresAt: Date.now() + 10_000 })
+    let release!: () => void
+    const gate = new Promise<void>((r) => { release = r })
+    const be = fakeBackend({ [route]: () => json({ body: '' }), '/auth/refresh': async () => { await gate; return json({ access_token: J(2), refresh_token: 'R2', expires_in: 7200 }) } })
+    const p = requestWrite('ctrl-206', [P], { body: 'x' })
+    await vi.waitFor(() => expect(be.callsTo('/auth/refresh')).toHaveLength(1))
+    // 续期期间存储被换成没有 sub 的令牌（refreshSession 发现存储已变，直接返回它）
+    writeTokens({ accessToken: `h.${btoa(JSON.stringify({ sub: '' }))}.s`, refreshToken: 'R3', expiresAt: Date.now() + 2 * HOUR })
+    release()
+    const e = (await p.catch((x: unknown) => x)) as { kind?: string; message?: string; status?: number }
+    expect(e).toMatchObject({ kind: 'write_blocked', message: WRITE_LOGIN_ABNORMAL_TEXT })
+    expect(e.status).toBeUndefined()
+    expect(be.callsTo(route)).toHaveLength(0)
+  })
 })

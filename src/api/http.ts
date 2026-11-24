@@ -286,10 +286,11 @@ async function writeOnce<T>(path: string, opts: WriteOptions & { method: 'POST';
     if (rest.signal?.aborted) throw new ApiError('write_blocked', WRITE_CANCELLED_TEXT)
     // 账号绑定：要用的令牌必须仍是存储里当前账号的令牌（续期期间别的标签页换了账号就不发）
     const cur = readTokens()?.accessToken
-    // 发起时或实际要用的令牌解析不出 sub：无法可靠绑定身份，不发（本地拦截，确定没执行）
-    if (startSub === null || jwtSub(token) === null) throw new ApiError('write_blocked', WRITE_LOGIN_ABNORMAL_TEXT)
-    if (jwtSub(token) !== startSub) throw new ApiError('write_blocked', WRITE_ACCOUNT_TEXT)
-    if (cur !== token && (!cur || jwtSub(cur) !== jwtSub(token))) throw new ApiError('write_blocked', WRITE_ACCOUNT_TEXT)
+    const curSub = jwtSub(cur)
+    // 发起时、实际要用的、存储里当前的令牌，任一解析不出 sub（含空串、空白、非字符串）或已退出：
+    // 无法可靠绑定身份，不发（本地拦截，确定没执行）。201/203/204/206 与批量都经这里
+    if (startSub === null || jwtSub(token) === null || curSub === null) throw new ApiError('write_blocked', WRITE_LOGIN_ABNORMAL_TEXT)
+    if (jwtSub(token) !== startSub || curSub !== startSub) throw new ApiError('write_blocked', WRITE_ACCOUNT_TEXT)
     let ok = false
     try { ok = beforeSend ? beforeSend() === true : true } catch { ok = false }
     if (!ok) throw new ApiError('write_blocked', WRITE_RECHECK_TEXT)

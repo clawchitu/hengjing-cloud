@@ -170,7 +170,6 @@ export default function Control() {
     // 确认后、整批开始前强制重新拉一次项目列表（每批一次，直接调数据源，不经 S6a 的 hooks 缓存）
     refreshProjects: (signal) => orgSource().projects({ user: session.user, dealerAccount: session.dealerAccount }, {}, signal),
     // 账号绑定：确认时记下，发送前核对
-    // 真实模式以存储里令牌的 sub 为准（就是实际要用的令牌的账号），没有 sub 才用 /me 的 user id
     // 真实模式只认存储里令牌的 sub（就是实际要用的令牌的账号）；解析不出 sub 一律不发（登录状态异常）
     getAccount: () => (mock ? user.username || null : jwtSub(readTokens()?.accessToken) || null),
   })
