@@ -29,8 +29,9 @@ describe('路径改写', () => {
     expect(upstreamUrl(UP, new URL(SITE + '/api/ctrl/projects')).href).toBe(UP + '/ctrl/projects')
   })
 
-  it('越出上游 /v1/ 前缀或换主机的路径一律拒绝', () => {
-    for (const p of ['/api', '/api/', '/api/%2e%2e/admin', '/api/%2E%2E/%2e%2e/x', '/api/.%2e/x']) {
+  it('越出上游 /v1/ 前缀、编码分隔符、反斜杠一律拒绝', () => {
+    for (const p of ['/api', '/api/', '/api/%2e%2e/admin', '/api/%2E%2E/%2e%2e/x', '/api/.%2e/x',
+      '/api/%2F..%2F..%2Fadmin', '/api/..%2fadmin', '/api/%5c..%5cx', '/api/me%2Fx', '/api/a%2Eb', '/api/a%5Cb']) {
       expect(upstreamUrl(UP, new URL(SITE + p)), p).toBeNull()
     }
     // //evil.com 拼在上游路径后面仍是上游主机
@@ -42,7 +43,7 @@ describe('路径改写', () => {
     const body = JSON.stringify({ mobile: '1', password: 'p', isdp: true })
     const res = await worker.fetch(new Request(SITE + '/api/auth/login', {
       method: 'POST', body,
-      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer t0k', Cookie: 'a=b', Origin: SITE, 'X-Other': '1' },
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json', Authorization: 'Bearer t0k', Cookie: 'a=b', Origin: SITE, 'X-Other': '1' },
     }), realEnv())
     expect(res.status).toBe(200)
     expect(calls).toHaveLength(1)
@@ -55,6 +56,7 @@ describe('路径改写', () => {
     const h = c.init.headers
     expect(h.get('authorization')).toBe('Bearer t0k')
     expect(h.get('content-type')).toBe('application/json')
+    expect(h.get('accept')).toBeNull()
     expect(h.get('cookie')).toBeNull()
     expect(h.get('origin')).toBeNull()
     expect(h.get('x-other')).toBeNull()
@@ -66,6 +68,41 @@ describe('路径改写', () => {
     expect(calls[0].url).toBe(UP + '/me')
     expect(calls[0].init.method).toBe('GET')
     expect(calls[0].init.body).toBeUndefined()
+  })
+})
+
+describe('方法与编码路径', () => {
+  it('编码分隔符的请求 404，不发请求', async () => {
+    for (const p of ['/api/%2F..%2F..%2Fadmin', '/api/..%2fadmin', '/api/%5c..%5cx']) {
+      const calls = stubUpstream()
+      expect((await worker.fetch(new Request(SITE + p), realEnv())).status, p).toBe(404)
+      expect(calls).toHaveLength(0)
+    }
+  })
+
+  it('除 GET / HEAD / POST 外一律 405，不发请求', async () => {
+    for (const m of ['PUT', 'DELETE', 'PATCH', 'OPTIONS']) {
+      const calls = stubUpstream()
+      const res = await worker.fetch(new Request(SITE + '/api/me', { method: m }), realEnv())
+      expect(res.status, m).toBe(405)
+      expect(res.headers.get('allow')).toBe('GET, HEAD, POST')
+      expect(calls).toHaveLength(0)
+    }
+  })
+
+  it('HEAD 转发且不带请求体', async () => {
+    const calls = stubUpstream(() => new Response(null, { status: 200 }))
+    const res = await worker.fetch(new Request(SITE + '/api/me', { method: 'HEAD' }), realEnv())
+    expect(res.status).toBe(200)
+    expect(calls[0].init.method).toBe('HEAD')
+    expect(calls[0].init.body).toBeUndefined()
+  })
+
+  it('上游 3xx 透传状态码，但不带 Location', async () => {
+    stubUpstream(() => new Response(null, { status: 302, headers: { Location: 'https://elsewhere.example/' } }))
+    const res = await worker.fetch(new Request(SITE + '/api/me'), realEnv())
+    expect(res.status).toBe(302)
+    expect(res.headers.get('location')).toBeNull()
   })
 })
 
@@ -117,21 +154,28 @@ describe('上游响应与错误', () => {
     })
   }
 
-  it('去掉 Set-Cookie、CORS 头和 Location，加 no-store', async () => {
-    stubUpstream(() => new Response('{}', { status: 200, headers: { 'Set-Cookie': 's=1', 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Credentials': 'true', Location: 'https://evil/' } }))
+  it('去掉 Set-Cookie、CORS 头、Location、指纹头，加 no-store、nosniff、CSP sandbox', async () => {
+    stubUpstream(() => new Response('<html>x</html>', { status: 404, headers: { 'Content-Type': 'text/html', 'Set-Cookie': 's=1', 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Credentials': 'true', Location: 'https://evil/', Server: 'nginx/1.2', 'X-Powered-By': 'Go' } }))
     const res = await worker.fetch(new Request(SITE + '/api/me'), realEnv())
     expect(res.headers.get('set-cookie')).toBeNull()
     expect(res.headers.get('access-control-allow-origin')).toBeNull()
     expect(res.headers.get('access-control-allow-credentials')).toBeNull()
     expect(res.headers.get('location')).toBeNull()
     expect(res.headers.get('cache-control')).toBe('no-store')
+    expect(res.headers.get('server')).toBeNull()
+    expect(res.headers.get('x-powered-by')).toBeNull()
+    expect(res.headers.get('x-content-type-options')).toBe('nosniff')
+    expect(res.headers.get('content-security-policy')).toBe("default-src 'none'; frame-ancestors 'none'; sandbox")
   })
 
   it('上游超时 → 504；连接失败 → 502', async () => {
     stubUpstream(() => { throw new DOMException('timeout', 'TimeoutError') })
     expect((await worker.fetch(new Request(SITE + '/api/me'), realEnv())).status).toBe(504)
     stubUpstream(() => { throw new TypeError('network') })
-    expect((await worker.fetch(new Request(SITE + '/api/me'), realEnv())).status).toBe(502)
+    const bad = await worker.fetch(new Request(SITE + '/api/me'), realEnv())
+    expect(bad.status).toBe(502)
+    // 不带 gRPC 码，前端不会误判为 14 控制屏未连接
+    expect((await bad.json()).code).toBeUndefined()
     expect(UPSTREAM_TIMEOUT_MS).toBeGreaterThan(12_000)
   })
 })
@@ -175,9 +219,10 @@ describe('/config.js', () => {
     expect(text).not.toContain('writeProjectCodes')
   })
 
-  it('演示站用构建产物里的 config.js', async () => {
+  it('演示站生成 mock 配置（不受构建变量影响）', async () => {
     const env = mockEnv()
-    await worker.fetch(new Request(SITE + '/config.js'), env)
-    expect(env.ASSETS.fetch).toHaveBeenCalledOnce()
+    const text = await (await worker.fetch(new Request(SITE + '/config.js'), env)).text()
+    expect(env.ASSETS.fetch).not.toHaveBeenCalled()
+    expect(JSON.parse(text.replace(/^window\.__HJC_CONFIG__ = /, ''))).toEqual({ dataSource: 'mock' })
   })
 })

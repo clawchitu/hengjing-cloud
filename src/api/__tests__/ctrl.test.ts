@@ -136,6 +136,20 @@ describe('callCtrl', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 
+  it('Worker 代理连不上后端（502，不带 code）：写操作提示结果未知，不当作控制屏未连接，只发一次', async () => {
+    setConfig({ apiBase: '/api', apiEnv: 'test' })
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ message: '后端连接失败' }), { status: 502, headers: { 'Content-Type': 'application/json' } }))
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(writeCtrl(201, P1, buildRoomTemperatureSet(1, { temperature: 26 }))).rejects.toMatchObject({ kind: 'network', message: '网络中断，下发结果未知' })
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('上游真实的 503 code 14 仍是控制屏未连接（确定未下发）', async () => {
+    setConfig({ apiBase: '/api', apiEnv: 'test' })
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ code: 14, message: '控制屏未连接' }), { status: 503, headers: { 'Content-Type': 'application/json' } })))
+    await expect(writeCtrl(201, P1, buildRoomTemperatureSet(1, { temperature: 26 }))).rejects.toMatchObject({ kind: 'unavailable' })
+  })
+
   it('写消息成功：201 只改温度时，其余字段编码后为 -1、末端为空', async () => {
     setConfig({ apiBase: '/api', apiEnv: 'test' })
     const be = fakeBackend({ '/ctrl/room-temperature-set': () => json({ body: encodeMessage(pb.RoomTemperatureSetReplySchema, { success: true }) }) })

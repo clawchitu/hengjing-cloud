@@ -34,6 +34,7 @@ enabled = true
 [observability.logs]
 invocation_logs = false
 
+# 注意：routes 会被环境继承。新增环境必须覆盖 routes，否则会抢走 hvac-demo 的自定义域名。
 [env.mock]
 name = "hvac-mock"
 routes = [ { pattern = "hvac-mock.haoqianglyu.com", custom_domain = true } ]

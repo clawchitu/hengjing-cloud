@@ -13,7 +13,7 @@ describe('错误归一（依据实测记录-1124）', () => {
     [500, J, '{"code":13,"message":"项目信息查询失败"}', 'server', '项目信息查询失败'],
     [503, J, '{"code":14,"message":"控制屏消息发送失败"}', 'unavailable', '控制屏消息发送失败'],
     [504, J, '{"code":4,"message":"deadline"}', 'timeout', 'deadline'],
-    [502, 'text/html', '<html>bad gateway</html>', 'server', '服务器错误'],
+    [502, 'text/html', '<html>bad gateway</html>', 'network', '网络连接失败'],
     [500, J, 'not json', 'server', '服务器错误'],
     [400, J, '{"code":3}', 'bad_request', '请求参数有误'],
   ])('%i %s %s → %s', (status, ct, body, kind, message) => {
