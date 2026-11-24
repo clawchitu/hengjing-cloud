@@ -170,3 +170,47 @@ export function seriesDaily(seed: string, base: Base, days: number): DayPoint[] 
     return pt as unknown as DayPoint
   })
 }
+
+// ------------------------------------------------------------------ air sensor (ctrl 207 / 208 shapes)
+/** 设备读数「无数据」：无探头 / 未初始化（与真实设备一致） */
+const NO_DATA = 65536
+const MOCK_SENSOR_ID0 = 1001
+
+/** 传感器列表，按 ctrl 207 的 Reply 形状：无探头的字段为 65536，离线的 is_connected=false */
+export function airSensorsFor(projectId: string) {
+  return sensorsFor(projectId).map((s, i) => ({
+    id: MOCK_SENSOR_ID0 + i,
+    name: s.room,
+    temperature: s.online ? s.temp : 0,
+    humidity: s.online ? s.hum : 0,
+    dewPoint: s.online ? s.dew : 0,
+    pm25: s.pm25 === undefined ? NO_DATA : s.online ? s.pm25 : 0,
+    co2: s.co2 === undefined ? NO_DATA : s.online ? s.co2 : 0,
+    isConnected: s.online,
+  }))
+}
+
+const HOUR = 3_600_000
+const CST = 8 * HOUR
+/** 按时间戳确定的噪声（同一小时在 24 小时 / 7 日 / 30 日里取到同一个值） */
+const noise = (seed: string, ts: number) => rng(`${seed}:${ts}`)() - 0.5
+
+/** 小时数据，按 ctrl 208 的 Reply 形状：[start, end] 内每个整点一条；离线传感器没有数据 */
+export function airSensorHoursFor(projectId: string, deviceId: number, start: number, end: number) {
+  const s = sensorsFor(projectId)[deviceId - MOCK_SENSOR_ID0]
+  if (!s || !s.online) return []
+  const seed = `${projectId}/${s.id}`
+  const out = []
+  for (let ts = Math.ceil(start / HOUR) * HOUR; ts <= end; ts += HOUR) {
+    const h = new Date(ts + CST).getUTCHours()
+    const day = Math.floor((ts + CST) / (24 * HOUR))
+    const shape = 0.55 * Math.sin((h - 8) / 3.6) + 0.25 * Math.sin(h * 1.3) + 0.15 * Math.cos(h * 2.1) + 0.35 * Math.sin(day / 2.7)
+    const v = (k: MetricKey, base: number | undefined) => (base === undefined ? NO_DATA : round(k, base + AMP[k] * shape + noise(seed + k, ts) * AMP[k] * 0.4))
+    out.push({
+      id: deviceId, date: ts, hour: h,
+      temperature: v('temp', s.temp), floorTemperature: 0, humidity: v('hum', s.hum), dewPoint: v('dew', s.dew),
+      co2: v('co2', s.co2), pm25: v('pm25', s.pm25),
+    })
+  }
+  return out
+}

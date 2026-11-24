@@ -139,22 +139,14 @@ type Weather = typeof M.weather
 export const getWeather = (_city: string): Promise<Weather | null> => delay(__HJC_MOCK__ ? M.weather : null)
 
 // sensors ----------------------------------------------------------------------
-/** GET /api/projects/:id/sensors — pm25 / co2 absent when the sensor has no such probe */
-export const getSensors = (projectId: string): Promise<M.Sensor[]> => delay(__HJC_MOCK__ ? G.sensorsFor(projectId) : [])
-const sensorBase = (projectId: string, sensorId: string) => {
-  const s = __HJC_MOCK__ ? G.sensorsFor(projectId).find((x) => x.id === sensorId) : undefined
-  return s && { temp: s.temp, hum: s.hum, dew: s.dew, pm25: s.pm25, co2: s.co2 }
-}
-/** GET /api/projects/:id/sensors/:sensorId/stats/24h — hourly points for today (its own endpoint) */
-export function getSensorStats24h(projectId: string, sensorId: string) {
-  const b = sensorBase(projectId, sensorId)
-  return delay(__HJC_MOCK__ && b ? G.series24h(`${projectId}/${sensorId}`, b) : [])
-}
-/** GET /api/projects/:id/sensors/:sensorId/stats/daily?days=7|30 — shared by 7日 and 30日, per-day avg/max/min */
-export function getSensorStatsDaily(projectId: string, sensorId: string, days: 7 | 30) {
-  const b = sensorBase(projectId, sensorId)
-  return delay(__HJC_MOCK__ && b ? G.seriesDaily(`${projectId}/${sensorId}`, b, days) : [])
-}
+// 室内空气传感器页的演示数据源（真实接口是 ctrl 207 / 208，见 src/data/sensors/source.ts）。
+// 返回与 callCtrl 解码后相同的形状：无探头的字段为 65536，时间是毫秒，页面走同一套映射与统计。
+/** ctrl 207 AirSensorGet 的演示回复 */
+export const getMockAirSensors = (projectId: string): Promise<{ data: ReturnType<typeof G.airSensorsFor> }> =>
+  delay({ data: __HJC_MOCK__ ? G.airSensorsFor(projectId) : [] })
+/** ctrl 208 AirSensorDataHourGet 的演示回复：[start, end]（毫秒）内每个整点一条 */
+export const getMockAirSensorHours = (projectId: string, deviceId: number, start: number, end: number): Promise<{ data: ReturnType<typeof G.airSensorHoursFor> }> =>
+  delay({ data: __HJC_MOCK__ ? G.airSensorHoursFor(projectId, deviceId, start, end) : [] })
 
 // live ticking ---------------------------------------------------------------
 export const walk = (v: number, step: number, min: number, max: number, digits = 1) =>
