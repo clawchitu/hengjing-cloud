@@ -1,3 +1,6 @@
+// 【已废弃，勿运行】早期的手动点检 + 截图脚本，已由 e2e/（pages / states / overlays / popover 等 spec）全部取代。
+// 依赖的演示账号已在 S5 删除，选择器也已过时：.search / .dp-search（S2b 换成 Input / Select）、.sp-row / .sp-empty（S3b 换成
+// Popover + Command，结果是 role=listbox「项目搜索结果」下的 role=option，空结果是“未找到匹配的项目”文字）。保留只作历史参考。
 // Click-through + screenshots for both roles at 1440 wide.
 // Usage: node scripts/shoot.mjs <baseUrl> <outDir> <dealerPw> <adminPw>
 import { chromium } from 'playwright-core'

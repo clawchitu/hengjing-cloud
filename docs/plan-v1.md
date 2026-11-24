@@ -318,11 +318,11 @@ CI（GitHub Actions，每个 PR 触发）：`oxlint` → `tsc -b` → `vitest` �
 | S0 | Chitu | 建私有仓库 `clawchitu/hengjing-cloud` 并推送现有历史（推送前检查历史里无密钥；`.dev.vars` 已确认未入库）；main 分支保护；PR 模板；CI 五步；引入 vitest；把 `shoot.mjs` 改写成 Playwright 测试并录截图基线；重写 README | 1 天 | 无 | 空改动 PR 上 CI 全绿；基线截图入库；直接推 main 被拒 | 截图基线全量；1 个 vitest 冒烟用例 |
 | S1 | Chitu | 接入 Tailwind 4 与 shadcn 基础配置；`@theme` token 映射；不改任何组件 | 0.5 天 | S0 | 截图零差异；构建体积增量记录在 PR | 截图对比 |
 | S2 | Claw | 组件迁移 A：Button、Switch、ToggleGroup、Select、Checkbox、Input、Pagination、Table | 1 天 | S1 | 每页差异 ≤ 0.5% 且逐条说明；global.css 对应旧样式删除 | 截图对比；键盘操作用例 |
-| S3 | Claw | 组件迁移 B，子段顺序 S3-0（补基线）→ S3b（Popover + Command 三处）→ S3a（AlertDialog + Slider）；S3c（RHF + zod + Login）并入 S5，归 Chitu；S3d（Dialog / Sheet / DropdownMenu / DatePicker + `/__ui`）后移；涉及 AlertDialog、Sonner、Popover + Command（项目切换、搜索、经销商选择）、Slider、Tooltip、Skeleton | 1 天 | S2 | 同上；弹层 Esc 关闭、焦点回收 | 截图对比（含弹层打开态）；交互用例 |
+| S3 | Claw | 组件迁移 B，子段顺序 S3-0（补基线）→ S3b（Popover + Command：项目切换、顶栏搜索；经销商选择合并为可搜索下拉按负责人 11/24 确认延后到改界面阶段，见 `docs/plan-s1-s3.md` 负责人确认 1）→ S3a（AlertDialog + Slider）；S3c（RHF + zod + Login）并入 S5，归 Chitu；S3d（Dialog / Sheet / DropdownMenu / DatePicker + `/__ui`）后移；涉及 AlertDialog、Sonner、Popover + Command（项目切换、搜索）、Slider、Tooltip、Skeleton | 1 天 | S2 | 同上；弹层 Esc 关闭、焦点回收 | 截图对比（含弹层打开态）；交互用例 |
 | S4 | Chitu | API 基座：运行时配置、`http.ts`、错误归一、token 存取与刷新、proto 生成与 `callCtrl`、写操作防护、TanStack Query；mock 模式保留为可切换的数据源 | 1 天 | S0；Q1 的 proto | 对测试环境手动跑通 login → me → projects → 一条 ctrl 读；写防护在 `off` 下拦截全部 5 个写接口 | vitest：刷新单例、401 重放、错误映射、base64 编解码往返、防护逻辑 |
 | S5 | Chitu | 登录与会话（含 S3c 表单）：登录页接真接口、`/me` 取用户与角色、路由守卫、过期跳转、退出、`can()`；Worker 改为 `/api/*` 代理并删除演示账号 | 1 天 | S4；Q3 | 两个测试账号可登录，平台账号有经销商选择、经销商账号没有；令牌过期自动续期；多标签页不互相踢出；退出后旧令牌失效 | vitest：会话状态机；Playwright：登录、过期、退出（假响应） |
 | S6a | Claw | 组织数据的数据层：hooks、store 拆分、当前项目、在线状态、`app_code`、项目列表；不改界面 | 0.5 天 | S5 | 经销商账号只见自己的数据；空数据、加载、失败三态在数据层齐全 | vitest：hooks 与数据映射；截图零差异，不动基线 |
-| S6b | Claw | 组织数据的界面：侧边栏项目切换、顶栏搜索、经销商选择、点击上报；首页统计卡与常用项目；改动 3、4 | 0.5 天 | S6a、S3b | 平台账号可切换经销商、经销商账号没有选择器；空数据、加载、失败三态齐全 | 夹具驱动的页面用例；截图基线更新（去掉按钮） |
+| S6b | Claw | 组织数据的界面：侧边栏项目切换、顶栏搜索、经销商选择（S2b 的搜索框 + Select；合并为可搜索下拉不在 S3b，延后到改界面阶段）、点击上报；首页统计卡与常用项目；改动 3、4 | 0.5 天 | S6a、S3b | 平台账号可切换经销商、经销商账号没有选择器；空数据、加载、失败三态齐全 | 夹具驱动的页面用例；截图基线更新（去掉按钮） |
 | S7 | Claw | 首页天气：实时、7 天（f1–f7）、24 小时；城市选择（city-list 与本地省市数据取交集）与缓存；改动 1、2 | 1 天 | S6b | 换城市后刷新页面仍记住；`ret_code` 非 0 时有错误态 | vitest：露点计算、日出日落解析、城市交集；截图 |
 | S8 | Claw | 传感器：207 实时 + 208 统计；按天聚合；65536 无效值处理；改动 7 | 1 天 | S6a | 24 小时 / 7 日 / 30 日三档数据正确；无效值不参与统计；控制屏离线有空态 | vitest：聚合与无效值；页面用例 |
 | S9 | Claw | 温控面板：200 实时、209 统计、201 单房间开关与调温、206 全开全关；改动 8、9、10 | 1 天 | S6a、S3；Q5 | 只对 260911001、240829001 下发，且走 S4 的统一写入口；下发后回读值一致；失败时界面回滚 | vitest：201 请求体组装（不改字段传 -1，end_modes 不改传空列表）；页面用例；测试环境手动验证 |

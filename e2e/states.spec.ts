@@ -6,6 +6,8 @@ import { expect, shot, test } from './fixtures'
 const tick = (page: Page, ms = 500) => page.clock.runFor(ms)
 /** 顶栏项目搜索框 */
 const topSearch = (page: Page) => page.getByPlaceholder('搜索项目名称 / 项目ID')
+/** 顶栏搜索结果（Popover + Command，选项是 role=option） */
+const hitRows = (page: Page) => page.getByRole('listbox', { name: '项目搜索结果' }).getByRole('option')
 
 test.describe('经销商 首页', () => {
   for (const [v, tag] of [['0', '0'], ['2', '2'], ['4+', '4plus']] as const) {
@@ -26,13 +28,13 @@ test.describe('经销商 首页', () => {
     await tick(page, 1500)
     await topSearch(page).fill('西溪')
     await tick(page)
-    await expect(page.locator('.sp-empty')).toBeVisible()
+    await expect(page.getByText('未找到匹配的项目（仅搜索您可见的集成项目内的项目）')).toBeVisible()
     await shot(page, 'dealer-search-empty')
     await topSearch(page).fill('地库')
     await tick(page)
-    await expect(page.locator('.sp-row').first()).toBeVisible()
+    await expect(hitRows(page).first()).toBeVisible()
     await shot(page, 'dealer-search-hit')
-    await page.locator('.sp-row').first().click()
+    await hitRows(page).first().click()
     await tick(page)
     await expect(page.locator('.proj-switch .name')).toContainText('地库')
   })
@@ -153,7 +155,7 @@ test.describe('管理员 集成项目', () => {
     await tick(page, 1500)
     await topSearch(page).fill('西溪')
     await tick(page)
-    await expect(page.locator('.sp-row').first()).toBeVisible()
+    await expect(hitRows(page).first()).toBeVisible()
     await shot(page, 'admin-search-hit')
   })
 })

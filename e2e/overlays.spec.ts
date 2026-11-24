@@ -11,9 +11,45 @@ import { expect, settle, test } from './fixtures'
 /** 交互后推进假时钟，让 mock 数据和防抖跑完 */
 const tick = (page: Page, ms = 500) => page.clock.runFor(ms)
 
+/**
+ * 等 toast 上的有限时长动画（进入动画）按真实时间结束。无限动画不等；动画被取消算结束。
+ * 用 Node 端的真实计时器做 2 秒上限（页面里的 setTimeout 被假时钟接管），超时时报出各动画的状态
+ */
+async function toastAnimationsDone(page: Page) {
+  const done = page.evaluate(() =>
+    Promise.all(
+      [...document.querySelectorAll('.toast')]
+        .flatMap((t) => t.getAnimations())
+        .filter((a) => Number.isFinite(Number(a.effect?.getComputedTiming().endTime)))
+        .map((a) => a.finished.catch(() => undefined)),
+    ),
+  )
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const timeout = new Promise<'timeout'>((resolve) => { timer = setTimeout(() => resolve('timeout'), 2000) })
+  try {
+    if ((await Promise.race([done, timeout])) !== 'timeout') return
+  } finally {
+    clearTimeout(timer)
+  }
+  // 到点即判失败；还没结束的等待不再关心（避免之后页面关闭时报未处理的拒绝）。诊断信息另设 500ms 上限，页面无响应时也不拖住
+  done.catch(() => undefined)
+  let diagTimer: ReturnType<typeof setTimeout> | undefined
+  const state = await Promise.race([
+    page.evaluate(() => [...document.querySelectorAll('.toast')].flatMap((t) => t.getAnimations().map((a) => `${a instanceof CSSAnimation ? a.animationName : 'animation'}:${a.playState}@${Math.round(Number(a.currentTime))}ms`))),
+    new Promise<string[]>((resolve) => { diagTimer = setTimeout(() => resolve(['（读取动画状态超时）']), 500) }),
+  ])
+    .catch((e: unknown) => [`读取失败：${String(e)}`])
+    .finally(() => clearTimeout(diagTimer))
+  throw new Error(`toast 动画 2 秒内没有结束：${state.join(', ') || '（无动画）'}`)
+}
+
 /** 同 fixtures 的 shot()，但只截可视区；settle 为 false 时不推进时钟（toast 会在 2.6 秒后消失） */
 async function shotView(page: Page, name: string, opts: { settle?: boolean } = {}) {
   if (opts.settle !== false) await settle(page)
+  // toast 的进入动画（global.css 的 pop .2s）走真实时间，不受假时钟控制：两次点击之间只过了很短的真实时间时，
+  // 截图那一刻动画还在跑，Playwright 的 animations: 'disabled' 会当场把它快进到结尾，这时元素还在合成层上，
+  // 阴影叠加处和图标有 ±1 的栅格差异（toast-stack 并发跑约 1/5 失败）。所以先按真实时间等进入动画自然结束
+  else await toastAnimationsDone(page)
   await page.evaluate(() => document.fonts.ready)
   await expect(page.locator('h1').first()).toBeVisible()
   // 可视区截图的前提：没有占宽的竖向滚动条、页面停在顶部（不靠无头模式隐藏滚动条默认成立）
@@ -21,6 +57,9 @@ async function shotView(page: Page, name: string, opts: { settle?: boolean } = {
   expect(await page.evaluate(() => window.scrollY)).toBe(0)
   await expect.soft(page).toHaveScreenshot(`${name}.png`)
 }
+
+/** 项目切换菜单（Popover + Command）：滚动容器是弹层本身，当前项目带 data-current */
+const projectMenu = (page: Page) => page.getByRole('dialog').filter({ has: page.getByRole('listbox', { name: '切换当前项目' }) })
 
 const dialog = (page: Page, title: string) => page.locator('.modal').filter({ has: page.getByRole('heading', { name: title }) })
 
@@ -142,10 +181,10 @@ test.describe('项目切换菜单展开', () => {
       await tick(page, 1500)
       await page.getByText('当前项目', { exact: true }).click()
       await tick(page)
-      const menu = page.locator('.proj-menu')
+      const menu = projectMenu(page)
       await expect(menu).toBeVisible()
-      await expect(menu.locator('.opt.cur')).toHaveCount(1)
-      if (role === 'admin') await expect(menu.locator('.dlr').first()).toBeVisible()
+      await expect(menu.locator('[data-current]')).toHaveCount(1)
+      if (role === 'admin') await expect(menu.getByText('上海恒境暖通', { exact: true })).toBeVisible()
       await shotView(page, `${role}-project-menu`)
     })
   }
@@ -157,9 +196,9 @@ test.describe('项目切换菜单展开', () => {
     await tick(page, 1500)
     await page.getByText('当前项目', { exact: true }).click()
     await tick(page)
-    const menu = page.locator('.proj-menu')
+    const menu = projectMenu(page)
     await expect(menu).toBeVisible()
-    const cur = menu.locator('.opt.cur')
+    const cur = menu.locator('[data-current]')
     await expect(cur).toHaveCount(1)
     await expect(cur).toContainText('河西府 2栋')
     await expect(cur).not.toBeInViewport()
@@ -176,7 +215,7 @@ test.describe('顶栏搜索', () => {
     await tick(page, 1500)
     await page.getByPlaceholder('搜索项目名称 / 项目ID').fill('朝阳壹号院')
     await tick(page)
-    await expect(page.locator('.sp-row')).toHaveCount(8)
+    await expect(page.getByRole('listbox', { name: '项目搜索结果' }).getByRole('option')).toHaveCount(8)
     await shotView(page, 'dealer-search-hit-8')
   })
 })
