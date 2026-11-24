@@ -406,6 +406,44 @@ describe('有效期', () => {
   })
 })
 
+describe('读取凭据：beginRead / commitRead（页面回读与 verify 同一条提交路径）', () => {
+  it('还没发出（held）不给凭据；已发出给凭据，账号、token、有效期都对得上才提交', () => {
+    const t = take()
+    expect(L.beginRead(t)).toBeNull()
+    claim(t)
+    markSent(t, gate().p, REC)
+    const ticket = L.beginRead(t)
+    const commit = vi.fn()
+    expect(L.commitRead(ticket, commit)).toBe(true)
+    expect(commit).toHaveBeenCalledTimes(1)
+  })
+  it('读取途中换号 / 换代：丢弃，不提交', () => {
+    const t = take(); claim(t); markSent(t, gate().p, REC)
+    const ticket = L.beginRead(t)
+    acct = { user: 'u2', gen: 2 }
+    const commit = vi.fn()
+    expect(L.commitRead(ticket, commit)).toBe(false)
+    expect(commit).not.toHaveBeenCalled()
+  })
+  it('读取途中锁到期（时钟已过有效期、计时器还没跑）、锁放开后被新的下发占用、读取被中止：都丢弃', () => {
+    vi.useFakeTimers()
+    const t = take(); claim(t); markSent(t, gate().p, REC)
+    const commit = vi.fn()
+    const ticket = L.beginRead(t)
+    vi.setSystemTime(Date.now() + DEFAULT_TTL_MS + 1)
+    expect(lockOf(PA)).not.toBeNull()
+    expect(L.commitRead(ticket, commit)).toBe(false)
+    vi.advanceTimersByTime(DEFAULT_TTL_MS + 1)
+    expect(lockOf(PA)).toBeNull()
+    const t2 = take(); claim(t2); markSent(t2, gate().p, REC)
+    expect(L.commitRead(ticket, commit)).toBe(false)
+    const ac = new AbortController(); ac.abort()
+    expect(L.commitRead(L.beginRead(t2), commit, ac.signal)).toBe(false)
+    expect(L.commitRead(null, commit)).toBe(false)
+    expect(commit).not.toHaveBeenCalled()
+  })
+})
+
 describe('持久化（localStorage）', () => {
   it('markSent 就落盘（还没认领也写）；记录只含锁键、projectId、消息号、设备 id、目标、userId、sentAt，不含 label 与凭据', () => {
     const t = take(PA, '客厅 设定温度')

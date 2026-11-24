@@ -381,3 +381,95 @@ describe('刷新后补核对（恢复的锁）', () => {
     expect(R.lockOf('screen:SR')).toBeNull()
   })
 })
+
+// #31 第四轮：下发后第一次回读也只是候选结果，经写锁 commitRead 提交（与之后的复核同一条路径）。
+// 读取开始时的账号、锁 token、有效期任一项对不上就丢弃：字段保持未结束，锁不放
+describe('下发后第一次回读经写锁提交', () => {
+  const on = { rooms: 2, roomSwitch: 1, roomTemp: 26, perRoom: { roomSwitch: [1, 1], roomTemp: [26, 26] } }
+  const off = { rooms: 2, roomSwitch: 0, roomTemp: 26, perRoom: { roomSwitch: [0, 0], roomTemp: [26, 26] } }
+  const okSend: BatchSender = async (_p, _q, o) => { if (!o.beforeSend()) throw new ApiError('write_blocked', 'x'); return { success: true, msg: '' } }
+  /** 第 1 次读（下发前）关着；第 2 次读（下发后第一次回读）由测试放行；之后的读用 later */
+  function gated(id: string) {
+    let open!: (v: unknown) => void
+    let started = false
+    let later: unknown = off
+    let n = 0
+    const read = vi.fn(async () => {
+      n += 1
+      if (n === 1) return off
+      if (n === 2) { started = true; return new Promise((r) => { open = r }) }
+      return later
+    })
+    const b = createUnifiedBatch({ getProjects: () => [P(id, 'S' + id)], readBack: read as never, send: okSend, log: () => {}, now: () => new Date() })
+    b.prepare([id], { roomSwitch: 1 })
+    const run = b.start()
+    return {
+      read, run,
+      waitRead: async () => { for (let i = 0; i < 50 && !started; i++) await flush(1); expect(started).toBe(true) },
+      resolve: (v: unknown) => open(v),
+      setLater: (v: unknown) => { later = v },
+    }
+  }
+
+  it('首次回读期间 A 换成 B（B 也能看到这个项目）：A 迟到的读数一致也不提交，锁不放；B 自己核对读到不一致仍锁着', async () => {
+    let who = { user: 'A', gen: 1 }
+    L.__resetWriteLockForTests(() => who)
+    L.configureWriteLock({ resolveProject: (id) => (id === 'f1' ? { id: 'f1', controlScreenId: 'Sf1' } : null) })
+    const g = gated('f1')
+    await g.waitRead()
+    who = { user: 'B', gen: 2 }
+    g.resolve(on) // A 的读数：一致
+    await g.run
+    await flush()
+    // 待核对字段没被清空：B 会话里的核对真的去读（第 3 次），读到关着 → 不一致，锁保持
+    expect(g.read).toHaveBeenCalledTimes(3)
+    expect(L.lockOf('screen:Sf1')?.phase).toBe('unknown')
+    // B 自己读到一致才放
+    g.setLater(on)
+    expect(await L.verify('screen:Sf1')).toBe('released')
+  })
+
+  it('首次回读期间锁已过有效期（计时器还没跑）：读数一致也不提交、不按 ok 放锁；锁按到期放开并发强制重读', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      const reread = vi.fn()
+      L.onForceReread(reread)
+      const g = gated('f2')
+      await g.waitRead()
+      vi.setSystemTime(Date.now() + L.DEFAULT_TTL_MS + 1)
+      g.resolve(on)
+      await g.run
+      await flush()
+      expect(L.lockOf('screen:Sf2')).not.toBeNull()
+      expect(reread).not.toHaveBeenCalled()
+      vi.advanceTimersByTime(L.DEFAULT_TTL_MS + 10)
+      expect(L.lockOf('screen:Sf2')).toBeNull()
+      expect(reread).toHaveBeenCalledTimes(1)
+    } finally { vi.useRealTimers() }
+  })
+
+  it('首次回读期间锁被取消（到期放开后同屏被新的下发占用）：迟到的读数不提交，也不去核对 / 放掉新锁', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      L.configureWriteLock({ resolveProject: (id) => (id === 'f3' ? { id: 'f3', controlScreenId: 'Sf3' } : null) })
+      const g = gated('f3')
+      await g.waitRead()
+      vi.advanceTimersByTime(L.DEFAULT_TTL_MS + 10)
+      expect(L.lockOf('screen:Sf3')).toBeNull()
+      // 新的一条下发占住同一块屏，结果未知、待核对
+      const got = L.acquire({ id: 'f3', controlScreenId: 'Sf3' }, '新'); if (!got.ok) throw new Error('busy')
+      L.claim(got.token)
+      L.markSent(got.token, Promise.reject(new Error('x')), recordOf({ systemSwitch: -1, systemMode: -1, roomSwitch: 1, roomTemp: -1 } as never))
+      const check = vi.fn(async () => false)
+      L.requireVerify(got.token, check)
+      L.settle(got.token, 'unknown')
+      await flush()
+      const calls = check.mock.calls.length
+      g.resolve(on)
+      await g.run
+      await flush()
+      expect(check.mock.calls.length).toBe(calls)
+      expect(L.lockOf('screen:Sf3')?.phase).toBe('unknown')
+    } finally { vi.useRealTimers() }
+  })
+})

@@ -11,7 +11,7 @@
 //   处理中」）；beforeSend 链里 claim(token) 放在最后；拿到写 Promise 立刻 markSent。结算口径（Fable 11/24 裁定）：
 //   明确被拒或没发出 → fail；应答 success=true 只算「已下发」，不立刻放锁。
 //   放锁按字段判断，跟总结果无关（Fable 11/25）：每个下发了的字段要么回读一致、要么锁到期，才算这个字段结束；所有字段都结束才放锁。
-//   下发后回读里一致的字段先记为结束；还有没结束的 → unknown，交给写锁核对（本次登记的核对函数，见 fieldVerifier），之后复核读到
+//   下发后回读里一致的字段先记为结束（这次读数只是候选，经写锁 commitRead 提交：读取途中换号、锁换了 / 取消 / 过期就丢弃）；还有没结束的 → unknown，交给写锁核对（本次登记的核对函数，见 fieldVerifier），之后复核读到
 //   一致的字段也记为结束，全部结束即放；未变化 / 无法核对 / 结果未知都不提前放锁。应答结果未知 → unknown。
 //   批次截止时间只影响界面上的标注，不放锁。
 import { callCtrl, writeCtrl, type CtrlReply, type WriteQuery } from '@/api/ctrl'
@@ -21,7 +21,7 @@ import { TEXT } from './constants'
 import { consoleLogger, type UnifiedLogger } from './log'
 import { createUnifiedController, isDone, outcomeOf, type UnifiedController, type UnifiedState } from './machine'
 import { changedFields, describeQuery, fieldResults, type EchoField, type UnifiedContext, type UnifiedDraft, type UnifiedEcho } from './rules'
-import { acquire, claim, lockOf, markOverdue, markSent, OTHER_ACCOUNT_TEXT, requireVerify, settle, verify, type LockToken } from '@/api/writeLock'
+import { acquire, beginRead, claim, commitRead, lockOf, markOverdue, markSent, OTHER_ACCOUNT_TEXT, requireVerify, settle, verify, type LockToken, type ReadTicket } from '@/api/writeLock'
 import { LOCK_BUSY_TEXT, lockTargetOf, recordOf } from './lock'
 
 /** 页面传进来的项目（S6a 的 Project 直接可用） */
@@ -192,6 +192,8 @@ export function createUnifiedBatch(deps: BatchDeps) {
     /** 本次下发的值，和还没结束（没回读一致过）的字段：全部结束才放锁 */
     query?: WriteQuery<203>
     open?: Set<EchoField>
+    /** 下发后第一次回读：读之前取的写锁凭据和读到的快照（只是候选，由 settleByReadback 经 commitRead 提交） */
+    firstRead?: { ticket: ReadTicket | null; snap: UnifiedSnapshot }
     /** 正在进行的核对（锁的 verify 同一时刻只跑一个，正在跑时再调会直接返回） */
     checking?: Promise<unknown>
     /** 截止时冻结的结果 */
@@ -295,7 +297,7 @@ export function createUnifiedBatch(deps: BatchDeps) {
   /** 这次读数里回读一致的字段记为结束（逐字段口径与结果卡片同一套：rules.ts fieldResults；有房间离线的不算一致） */
   const closableFields = (e: Entry, snap: UnifiedSnapshot | null | undefined): EchoField[] =>
     !e.query || !e.open || !snap ? [] : fieldResults(e.query, snap).filter((r) => r.status === 'applied' && e.open!.has(r.field)).map((r) => r.field)
-  const closeFields = (e: Entry, snap: UnifiedSnapshot | null | undefined) => {
+  const closeFields = (e: Entry, snap: UnifiedSnapshot) => {
     for (const f of closableFields(e, snap)) e.open?.delete(f)
   }
 
@@ -306,7 +308,9 @@ export function createUnifiedBatch(deps: BatchDeps) {
    */
   const settleByReadback = (e: Entry, st: UnifiedState<UnifiedSnapshot>) => {
     if (!e.token || !e.sent || e.reply === 'rejected') return
-    if ('after' in st) closeFields(e, st.after)
+    // 第一次回读的候选结果交给写锁提交（与之后的复核同一条路径）：读取途中换号、锁换了 / 取消 / 过期 → 丢弃，字段保持未结束
+    const first = e.firstRead
+    if (first && 'after' in st && st.after === first.snap) commitRead(first.ticket, () => closeFields(e, first.snap))
     if (e.open && e.open.size === 0) {
       settle(e.token, 'ok')
       const key = e.token.key
@@ -347,7 +351,14 @@ export function createUnifiedBatch(deps: BatchDeps) {
         const ctl = createUnifiedController<UnifiedSnapshot>({
           getContext: () => contextOf(find(id), mock),
           // 记下第一次（下发前）读到的快照，供发送前判断房间是否都关着
-          readBack: async (pid, sig) => { const snap = await readBack(pid, sig); if (!entry.before) entry.before = snap; return snap },
+          // 已发出后的那次（下发后回读）：读之前向写锁取凭据（记下读取开始时的账号与锁 token），读数只作为候选
+          readBack: async (pid, sig) => {
+            const ticket = entry.sent && entry.token ? beginRead(entry.token) : undefined
+            const snap = await readBack(pid, sig)
+            if (ticket !== undefined) entry.firstRead = { ticket, snap }
+            else if (!entry.before) entry.before = snap
+            return snap
+          },
           toEcho: (s) => s,
           send: sendWhole(entry),
           log: deps.log ?? consoleLogger,

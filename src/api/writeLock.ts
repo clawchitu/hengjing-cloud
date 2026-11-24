@@ -14,6 +14,8 @@
 //    → 不发读请求、锁保持（not-visible）。不看 ctrl 响应判断能不能读（屏离线和 id 非法都是 503）。读到 503 → offline（屏离线，
 //    可重试，锁保持）。核对晚于原写结算：原写未结算时直接 send-pending；结算后若有核对方式，自动核对一次。
 //    传入已中止的 signal 直接返回；核对有超时（VERIFY_TIMEOUT_MS），超时后 verifying 复位、锁保留。
+//    读到的结果只是候选：经 commitRead 统一提交（校验读取开始时的账号、锁 token、有效期，任一项对不上就丢弃）。页面自己的回读
+//    （统一控制下发后的第一次回读）也先 beginRead 取凭据、读完走 commitRead，和 verify 同一条提交路径。
 // 6. 有效期：从登记（markSent）起算，含写入口等待令牌续期的时间；默认 2 分钟，可配置、最短 30 秒（不宜配到 60 秒以下：
 //    写 12 秒 + 续期 12 秒 + 回读核对都要在有效期内完成）；刷新和核对失败都不续期。到期放锁、通知订阅者，并发出
 //    「强制重读」事件（onForceReread），让页面重读设备状态。截止时间（markOverdue）只改标记，不放锁。
@@ -451,6 +453,34 @@ export function requireVerify(token: LockToken, fn: VerifyFn): void {
   emit()
 }
 
+/**
+ * 读取凭据：读之前取，记下锁 token 与读取开始时的账号。读完只产出候选结果，交给 commitRead 统一提交。
+ * 锁的 verify 与页面自己的回读（如统一控制下发后的第一次回读）走同一条提交路径
+ */
+export interface ReadTicket { readonly token: LockToken; readonly account: Account }
+
+/** 开始一次读取：锁仍由这个 token 持有、且已发出（sent / unknown）才给凭据，否则返回 null（读到什么都不提交） */
+export function beginRead(token: LockToken): ReadTicket | null {
+  const e = entryOf(token)
+  if (!e || (e.phase !== 'sent' && e.phase !== 'unknown')) return null
+  return Object.freeze({ token, account: currentAccount() })
+}
+
+/** 这次读取还有效：锁没换（token 仍持有）、没取消、没过有效期、读取途中账号没变（Fable：读取途中账号变了，这次读取作废） */
+function readValid(ticket: ReadTicket, signal?: AbortSignal): boolean {
+  const e = entryOf(ticket.token)
+  if (!e || signal?.aborted) return false
+  if (e.sentAt !== undefined && Date.now() >= e.sentAt + ttlMs) return false
+  return sameAccount(currentAccount(), ticket.account)
+}
+
+/** 提交一次读取的候选结果：凭据仍有效才调 commit 并返回 true；任何一项对不上就丢弃（不调 commit），返回 false */
+export function commitRead(ticket: ReadTicket | null | undefined, commit: () => void, signal?: AbortSignal): boolean {
+  if (!ticket || !readValid(ticket, signal)) return false
+  try { commit() } catch { /* 提交失败不影响锁 */ }
+  return true
+}
+
 /** 按消息号注册核对器（刷新恢复的锁用它重建核对）。注册时若已有该消息号、结果未知且原写已结算的锁，立刻核对一次 */
 export function registerVerifier(msg: number, fn: (record: StoredLock, signal: AbortSignal) => Promise<boolean>): () => void {
   verifiers.set(msg, fn)
@@ -480,7 +510,7 @@ export async function verify(keyOrTarget: string | LockTarget, signal?: AbortSig
   // 能不能读：当前账号可见范围里有这个项目，且用当前项目对象算出的主锁键与锁的一致
   const p = resolveProject?.(e.projectId) ?? null
   if (!p || lockKeyOf(p) !== e.token.key) return 'not-visible'
-  const cur = currentAccount()
+  const ticket: ReadTicket = { token: e.token, account: currentAccount() }
   const ac = new AbortController()
   const onAbort = () => ac.abort()
   signal?.addEventListener('abort', onAbort, { once: true })
@@ -500,14 +530,14 @@ export async function verify(keyOrTarget: string | LockTarget, signal?: AbortSig
     e.verifying = false
     if (isLive(e)) emit()
   }
-  if (!sameAccount(currentAccount(), cur)) return 'account-changed'
+  if (!sameAccount(currentAccount(), ticket.account)) return 'account-changed'
   if (signal?.aborted) return 'aborted'
   // 超时会先中止内部信号再报错：核对函数若一收到中止就同步返回结果，可能先于超时错误胜出。中止过的一律作废，不提交、不放锁
   if (ac.signal.aborted && !err) return 'failed'
   if (err) return isApiError(err) && err.kind === 'unavailable' ? 'offline' : 'failed'
-  if (!isLive(e)) return 'none'
-  // 到这里这次核对仍然有效：先提交候选结果，再按结论放锁
-  if (typeof got === 'object' && got) { try { got.commit() } catch { /* 提交失败不影响锁 */ } }
+  // 提交与页面回读同一条路径（commitRead）：锁没换、没过有效期、账号没变才提交候选结果，再按结论放锁
+  const candidate = got
+  if (!commitRead(ticket, () => { if (typeof candidate === 'object' && candidate) candidate.commit() })) return 'none'
   if (!(got === true || (typeof got === 'object' && got?.same === true))) return 'mismatch'
   drop(e)
   return 'released'
