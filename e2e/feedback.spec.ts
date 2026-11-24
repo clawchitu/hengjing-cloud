@@ -44,7 +44,7 @@ test.describe('确认弹窗', () => {
     await dlg(page).getByRole('button', { name: '确认下发' }).click()
     await expect(dlg(page)).toHaveCount(0)
     await tick(page, 1000) // 演示接口的延时
-    await expectToast(page, '已下发：全部开启（6 个房间）')
+    await expectToast(page, '已生效：全部开启（6 个房间）')
   })
 
   test('Esc 关闭（按取消处理）；点遮罩不关闭', async ({ page, login }) => {
@@ -167,7 +167,7 @@ test.describe('确认弹窗随离开失效', () => {
     await expect(page.getByRole('alertdialog')).toHaveCount(0)
     await expectToast(page, '页面已变化，操作已取消') // 点了确认却按取消处理：给出提示
     await tick(page, 2000)
-    await expect(page.locator('[data-sonner-toast]', { hasText: '已下发' })).toHaveCount(0)
+    await expect(page.locator('[data-sonner-toast]', { hasText: /已生效|已下发/ })).toHaveCount(0)
   })
 
   test('温控「全部开启」确认打开时浏览器后退：弹窗消失、按取消处理（不下发）', async ({ page, login }) => {
@@ -185,7 +185,7 @@ test.describe('确认弹窗随离开失效', () => {
     await expect(page).toHaveURL(/\/home$/)
     await expect(page.getByRole('alertdialog')).toHaveCount(0)
     await tick(page, 2000)
-    await expect(page.locator('[data-sonner-toast]', { hasText: '已下发' })).toHaveCount(0)
+    await expect(page.locator('[data-sonner-toast]', { hasText: /已生效|已下发/ })).toHaveCount(0)
     await expectToast(page, '页面已变化，操作已取消') // 不静默：提示弹窗为什么没了
     // 页面恢复可操作（模态的 pointer-events / 滚动锁已解除）
     expect(await page.evaluate(() => [getComputedStyle(document.body).pointerEvents, getComputedStyle(document.body).overflow])).toEqual(['auto', 'visible'])

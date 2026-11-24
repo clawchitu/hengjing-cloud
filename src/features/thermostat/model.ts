@@ -137,3 +137,14 @@ export function summarize(rooms: readonly RoomView[]): RoomSummary {
     avgDew: avg(rooms.map((r) => r.dew)),
   }
 }
+
+/**
+ * 页面用的房间读数 → 200 Reply 的形状（只填比对用到的字段）。演示数据核对用；读不到的值填 NaN（比对时按无效读数，无法核对）
+ */
+export function roomsAsReply(list: readonly RoomView[]): Pick<CtrlReply<200>, 'data'> {
+  return {
+    data: list.map((r) => ({
+      id: r.equipmentId, setTemp: r.setTemp ?? Number.NaN, eco: r.eco ?? Number.NaN, switch: r.on ? 1 : 0, isConnected: r.connected,
+    })) as unknown as CtrlReply<200>['data'],
+  }
+}

@@ -3,33 +3,27 @@
 import type { CtrlReply, WriteQuery } from '@/api/ctrl'
 import { registerVerifier, type SentRecord } from '@/api/writeLock'
 import { matchAllRoomsSwitch, matchRoomSet } from '@/api/writeLockVerify'
-import type { RoomView } from './model'
+import { roomsAsReply } from './model'
 import { thermostatSource } from './source'
-
-/** 页面用的房间读数 → 200 Reply 的形状（只填比对用到的字段；读不到的值填不会相等的数） */
-export function roomsAsReply(list: readonly RoomView[]): Pick<CtrlReply<200>, 'data'> {
-  return {
-    data: list.map((r) => ({
-      id: r.equipmentId, setTemp: r.setTemp ?? Number.NaN, eco: r.eco ?? -2, switch: r.on ? 1 : 0, isConnected: r.connected,
-    })) as unknown as CtrlReply<200>['data'],
-  }
-}
 
 /** 201 的核对数据：设备 id 与温度、节能、开关三个可改字段（-1 = 不改，比对时跳过） */
 export const record201 = (q: WriteQuery<201>): SentRecord => ({ msg: 201, deviceId: q.equipmentId, target: { temperature: q.temperature, eco: q.eco, switch: q.switch } })
 /** 206 的核对数据 */
 export const record206 = (on: boolean): SentRecord => ({ msg: 206, deviceId: null, target: { switch: on ? 1 : 0 } })
 
-export const match201 = (q: WriteQuery<201>, list: readonly RoomView[]) => matchRoomSet(record201(q), roomsAsReply(list))
-export const match206 = (on: boolean, list: readonly RoomView[]) => matchAllRoomsSwitch(record206(on), roomsAsReply(list))
+/** 201 / 206 写后核对：用 200 的原始读数逐字段比对（writeLockVerify.ts，四态） */
+export const match201 = (q: WriteQuery<201>, raw: Pick<CtrlReply<200>, 'data'>) => matchRoomSet(record201(q), raw)
+export const match206 = (on: boolean, raw: Pick<CtrlReply<200>, 'data'>) => matchAllRoomsSwitch(record206(on), raw)
+export { roomsAsReply }
 
 /**
- * 注册 201 / 206 的核对器（刷新恢复的写锁用它核对）。应用初始化时在 configureWriteLock 之后调用（src/app/writeLockSetup.ts）。
+ * 注册 201 / 206 的核对器（刷新恢复、写后自动核对都可用）。应用初始化时在 configureWriteLock（统一控制的
+ * setupUnifiedWriteLock 已在 AppProvider 里注入 resolveProject）之后、组织数据就绪时调用（src/app/writeLockSetup.ts）。
  * 返回取消注册
  */
 export function registerThermostatVerifiers(): () => void {
-  const read = (projectId: string, signal: AbortSignal) => thermostatSource().rooms(projectId, signal)
-  const off201 = registerVerifier(201, async (rec, signal) => matchRoomSet(rec, roomsAsReply(await read(rec.projectId, signal))))
-  const off206 = registerVerifier(206, async (rec, signal) => matchAllRoomsSwitch(rec, roomsAsReply(await read(rec.projectId, signal))))
+  const read = async (projectId: string, signal: AbortSignal) => (await thermostatSource().roomsRaw(projectId, signal)).raw
+  const off201 = registerVerifier(201, async (rec, signal) => matchRoomSet(rec, await read(rec.projectId, signal)))
+  const off206 = registerVerifier(206, async (rec, signal) => matchAllRoomsSwitch(rec, await read(rec.projectId, signal)))
   return () => { off201(); off206() }
 }

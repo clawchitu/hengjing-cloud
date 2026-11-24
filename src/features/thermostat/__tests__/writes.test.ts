@@ -25,7 +25,7 @@ function spec(o: Partial<Spec> = {}) {
   const s: Spec = {
     project: P1, target: 'R1', subject: '客厅', okText: '客厅 已下发',
     preflight: async () => { calls.push('preflight'); return { ok: true, payload: 26 } },
-    send: async () => { calls.push('send') },
+    send: async (_p, beforeSend) => { if (!beforeSend()) throw new ApiError('write_blocked', '发送前复核未通过，未下发'); calls.push('send') },
     record: () => REC,
     read: async () => { calls.push('read'); return readValue },
     matches: (p, v) => p === v,
@@ -48,10 +48,10 @@ beforeEach(() => {
 afterEach(() => { vi.useRealTimers() })
 
 describe('正常路径', () => {
-  it('取锁 → 预检 → 认领 → 发送（登记原写与核对数据）→ ok → 回读；结束后写锁释放、提示成功', async () => {
+  it('取锁 → 预检 → 发送（beforeSend 链末认领、登记原写与核对数据）→ success 只算已下发 → 写锁核对一致 → 已生效：放锁、提示成功', async () => {
     const g = gate()
     let atSend: unknown
-    const { s, calls, toasts } = spec({ send: async () => { atSend = L.lockOf(P1); calls.push('send'); await g.p } })
+    const { s, calls, toasts } = spec({ send: async (_p, bs) => { bs(); atSend = L.lockOf(P1); calls.push('send'); await g.p } })
     const run = W.runOp(s)
     await flush()
     expect(atSend).toMatchObject({ phase: 'sent', label: '客厅' }) // 发送时已认领
@@ -63,12 +63,31 @@ describe('正常路径', () => {
     expect(L.lockOf(P1)).toBeNull()
     expect(W.runningOf('P1')).toBeNull()
     expect(toasts).toEqual(['客厅 已下发'])
+    expect(W.getResult('P1', 'R1')).toBeNull() // 已生效且仍在原项目：提示即可，结果条清掉
     expect(localStorage.getItem(L.STORAGE_PREFIX + 'screen:S1')).toBeNull()
+  })
+
+  it('success 但回读未变化：只算已下发，不提示成功、返回 unverified；写锁保持（未变化），结果记四态与逐字段', async () => {
+    const x = spec({ matches: () => ({ verdict: 'unchanged', fields: { temperature: 'unchanged', humidity: 'unverifiable' } }) })
+    expect(await W.runOp(x.s)).toBe('unverified')
+    expect(x.toasts).toEqual([])
+    expect(L.lockOf(P1)).toMatchObject({ phase: 'unknown', outcome: 'ok', lastVerify: 'mismatch' })
+    expect(W.getResult('P1', 'R1')).toMatchObject({ outcome: 'ok', verdict: 'unchanged', fields: { temperature: 'unchanged', humidity: 'unverifiable' } })
+  })
+
+  it('beforeSend 不通过（发送前离开页面）：不发、不认领、放锁', async () => {
+    let here = true
+    const x = spec({ present: () => here, preflight: async () => ({ ok: true, payload: 26 }) })
+    const orig = x.s.send
+    x.s.send = (p, bs) => { here = false; return orig(p, bs) }
+    expect(await W.runOp(x.s)).toBe('fail')
+    expect(x.calls).toEqual([])
+    expect(L.lockOf(P1)).toBeNull()
   })
 
   it('同一块屏已被锁（另一个项目在下发）：busy，不调任何回调', async () => {
     const g = gate()
-    const a = spec({ project: P2, send: async () => { await g.p } })
+    const a = spec({ project: P2, send: async (_p, bs) => { bs(); await g.p } })
     const run = W.runOp(a.s)
     await flush()
     const b = spec()
@@ -113,7 +132,7 @@ describe('预检', () => {
     L.__resetWriteLockForTests(() => acct)
     L.configureWriteLock({ resolveProject: () => P1 })
     const { s, calls } = spec({ preflight: async () => { acct = { user: 'u1', gen: 2 }; return { ok: true, payload: 26 } } })
-    expect(await W.runOp(s)).toBe('aborted')
+    expect(await W.runOp(s)).toBe('fail') // beforeSend 里 claim 不过：写入口不发，按未下发结束
     expect(calls).toEqual([])
     expect(L.lockOf(P1)).toBeNull()
   })
@@ -121,7 +140,7 @@ describe('预检', () => {
 
 describe('发送结果', () => {
   it('确定失败（success=false）：写锁释放；写防护拦截（没发出去）不回读', async () => {
-    const f = spec({ send: async () => { throw new ApiError('ctrl', '控制屏拒绝') } })
+    const f = spec({ send: async (_p, bs) => { bs(); throw new ApiError('ctrl', '控制屏拒绝') } })
     expect(await W.runOp(f.s)).toBe('fail')
     expect(f.calls).toEqual(['preflight', 'read'])
     expect(L.lockOf(P1)).toBeNull()
@@ -134,28 +153,28 @@ describe('发送结果', () => {
   })
 
   it('结果未知（500）：写锁进入 unknown 并自动核对；读数一致 → 解锁，结果记为一致', async () => {
-    const { s, toasts } = spec({ send: async () => { throw new ApiError('server', '内部错误') } })
+    const { s, toasts } = spec({ send: async (_p, bs) => { bs(); throw new ApiError('server', '内部错误') } })
     expect(await W.runOp(s)).toBe('unknown')
     expect(toasts[0]).toBe('客厅 下发结果未知：内部错误')
     await flush()
     expect(L.lockOf(P1)).toBeNull()
-    expect(W.getResult('P1', 'R1')).toMatchObject({ outcome: 'unknown', readback: 'ok', matched: true })
+    expect(W.getResult('P1', 'R1')).toMatchObject({ outcome: 'unknown', readback: 'ok', verdict: 'applied' })
   })
 
   it('结果未知且读数不一致：写锁保持 unknown，结果记为不一致', async () => {
-    const x = spec({ send: async () => { throw new ApiError('timeout', '未收到控制屏应答') } })
+    const x = spec({ send: async (_p, bs) => { bs(); throw new ApiError('timeout', '未收到控制屏应答') } })
     x.setRead(25)
     expect(await W.runOp(x.s)).toBe('unknown')
     await flush()
     expect(L.lockOf(P1)?.phase).toBe('unknown')
-    expect(W.getResult('P1', 'R1')).toMatchObject({ readback: 'ok', matched: false })
+    expect(W.getResult('P1', 'R1')).toMatchObject({ readback: 'ok', verdict: 'unchanged' })
     expect(await W.runOp(spec().s)).toBe('busy')
   })
 
   it('等应答到期：标记超期、结果未知（等原写结束）；原写迟到成功 → 写锁放开', async () => {
     W.LIMITS.writeDeadlineMs = 20
     const g = gate()
-    const { s } = spec({ send: async () => { await g.p } })
+    const { s } = spec({ send: async (_p, bs) => { bs(); await g.p } })
     expect(await W.runOp(s)).toBe('unknown')
     expect(L.lockOf(P1)).toMatchObject({ phase: 'unknown', overdue: true, sendSettled: false })
     expect(W.getResult('P1', 'R1')).toMatchObject({ outcome: 'unknown', readback: 'waiting' })
@@ -164,7 +183,7 @@ describe('发送结果', () => {
   })
 
   it('send 同步抛错：按结果未知交给写锁（已认领）', async () => {
-    const { s } = spec({ send: () => { throw new TypeError('坏了') } })
+    const { s } = spec({ send: (_p, bs) => { bs(); throw new TypeError('坏了') } })
     expect(await W.runOp(s)).toBe('unknown')
     await flush()
     expect(L.lockOf(P1)).toBeNull() // 读数一致，核对后解锁
@@ -172,21 +191,21 @@ describe('发送结果', () => {
 })
 
 describe('展示隔离', () => {
-  it('写的过程中会话变了：不提示、不回读，新会话看不到结果', async () => {
+  it('写的过程中会话变了：不提示，新会话看不到结果（写锁核对不绑定账号，谁能读谁核对，结果只记给原会话）', async () => {
     const g = gate()
-    const { s, calls, toasts } = spec({ send: async () => { await g.p } })
+    const { s, calls, toasts } = spec({ send: async (_p, bs) => { bs(); await g.p } })
     const run = W.runOp(s)
     await flush()
     userKey = 'user:B'
     g.open()
     expect(await run).toBe('ok')
-    expect(calls).toEqual(['preflight']) // 没有回读（send 用的是自定义实现，不计入）
+    expect(calls).toEqual(['preflight', 'read']) // 写锁的自动核对照常读（send 用的是自定义实现，不计入）
     expect(toasts).toEqual([])
     expect(W.getResult('P1', 'R1')).toBeNull()
   })
   it('完成时已切到别的项目：不提示，结果留给原项目', async () => {
     const g = gate()
-    const { s, toasts } = spec({ send: async () => { await g.p } })
+    const { s, toasts } = spec({ send: async (_p, bs) => { bs(); await g.p } })
     const run = W.runOp(s)
     await flush()
     storedProject = 'P2'

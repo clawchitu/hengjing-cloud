@@ -33,26 +33,31 @@ export function useRooms(project: Project | null, enabled = true) {
 }
 
 /**
- * 新读一次 200（下发状态机的确认后预检、写后回读、核对都用它）：先取消该项目在途的 200（写前启动的轮询不算数），
+ * 新读一次 200（下发流程的确认后预检、写后回读、核对都用它）：先取消该项目在途的 200（写前启动的轮询不算数），
  * 再直接发一次新请求（不经查询缓存去重，保证是此刻之后发起的），读到后写回缓存刷新界面。
  * 查询客户端是应用级的，页面卸载后这个函数仍可用
  */
-export function useFreshRooms(project: Project | null) {
+export function useFreshRead(project: Project | null) {
   const qc = useQueryClient()
   const id = project?.id ?? ''
-  return useCallback(async (signal?: AbortSignal): Promise<RoomView[]> => {
+  return useCallback(async (signal?: AbortSignal) => {
     if (!id) throw new Error('没有当前项目')
     // 绑定发起时的会话代次：返回后先校验（会话变了或已中止就丢弃，不写缓存），再写回缓存
     const session = currentSessionKey()
     const src = thermostatSource()
     const key = roomsKey(src.kind, id)
     await qc.cancelQueries({ queryKey: key, exact: true })
-    const rooms = await src.rooms(id, signal)
+    const r = await src.roomsRaw(id, signal)
     if (signal?.aborted) throw new Error('读取已中止，结果已丢弃')
     if (currentSessionKey() !== session) throw new Error('读取期间登录状态已变化，结果已丢弃')
-    qc.setQueryData(key, rooms)
-    return rooms
+    qc.setQueryData(key, r.list)
+    return r
   }, [qc, id])
+}
+/** 新读一次 200，只要页面用的房间列表 */
+export function useFreshRooms(project: Project | null) {
+  const read = useFreshRead(project)
+  return useCallback(async (signal?: AbortSignal): Promise<RoomView[]> => (await read(signal)).list, [read])
 }
 
 export function useRoomStats(project: Project | null, room: RoomView | undefined, range: StatsRange, enabled = true) {
