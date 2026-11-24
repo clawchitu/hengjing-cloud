@@ -8,9 +8,11 @@ import * as G from '../mock/gen'
 const delay = <T,>(v: T, ms = 120): Promise<T> => new Promise((r) => setTimeout(() => r(structuredClone(v)), ms))
 
 export type { Room, FreshAir, Sensor, Conn } from '../mock/data'
-export type { Project, Group, Dealer, User, Role } from '../mock/org'
+// 组织数据的视图模型与按 app_code 派生的能力在数据层（src/data/org），这里转出供现有页面沿用
+export type { Project, Group, Dealer, User, Role, Scope } from '../data/org/types'
 export type { HourPoint, DayPoint, Agg, MetricKey } from '../mock/gen'
-export { PROGRAMS, hasRooms, isStandalone, gatewayOf } from '../mock/org'
+export { hasRooms, isStandalone } from '../data/org/capabilities'
+export { PROGRAMS, gatewayOf } from '../mock/org'
 export { DEW_MODES } from '../mock/gen'
 
 // auth ---------------------------------------------------------------
@@ -25,9 +27,9 @@ export async function login(username: string, password: string): Promise<{ usern
 export const profile = (username: string): O.User => O.users[username] ?? O.users.cosyhome
 
 // org scope ------------------------------------------------------------
-export interface Scope { dealers: O.Dealer[]; groups: O.Group[]; projects: O.Project[] }
-/** GET /api/scope — dealer sees only its own 集成项目; admin sees every dealer's */
-export function scopeOf(user: O.User): Scope {
+interface MockScope { dealers: O.Dealer[]; groups: O.Group[]; projects: O.Project[] }
+/** 演示数据的组织范围：dealer sees only its own 集成项目; admin sees every dealer's（真实接口见 src/data/org） */
+export function scopeOf(user: O.User): MockScope {
   const dealers = user.role === 'admin' ? O.dealers : O.dealers.filter((d) => d.id === user.dealerId)
   const ids = new Set(dealers.map((d) => d.id))
   const groups = O.groups.filter((g) => ids.has(g.dealerId))
