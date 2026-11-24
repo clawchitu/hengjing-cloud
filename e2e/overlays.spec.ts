@@ -14,6 +14,10 @@ const tick = (page: Page, ms = 500) => page.clock.runFor(ms)
 /** 同 fixtures 的 shot()，但只截可视区；settle 为 false 时不推进时钟（toast 会在 2.6 秒后消失） */
 async function shotView(page: Page, name: string, opts: { settle?: boolean } = {}) {
   if (opts.settle !== false) await settle(page)
+  // toast 的进入动画（global.css 的 pop .2s）走真实时间，不受假时钟控制：两次点击之间只过了很短的真实时间时，
+  // 截图那一刻动画还在跑，Playwright 的 animations: 'disabled' 会当场把它快进到结尾，这时元素还在合成层上，
+  // 阴影叠加处和图标有 ±1 的栅格差异（toast-stack 并发跑约 1/5 失败）。所以先按真实时间等进入动画自然结束
+  else await page.evaluate(() => Promise.all([...document.querySelectorAll('.toast')].flatMap((t) => t.getAnimations().map((a) => a.finished))))
   await page.evaluate(() => document.fonts.ready)
   await expect(page.locator('h1').first()).toBeVisible()
   // 可视区截图的前提：没有占宽的竖向滚动条、页面停在顶部（不靠无头模式隐藏滚动条默认成立）
