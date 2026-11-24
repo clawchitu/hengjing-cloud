@@ -81,6 +81,9 @@ test.describe('确认弹窗', () => {
     await login('dealer')
     await page.goto('/control')
     await tick(page, 1500)
+    // 各项默认「不变」：选上系统开关和运行模式才有可下发的内容
+    await page.getByRole('group', { name: '系统开关' }).getByRole('button', { name: '开启' }).click()
+    await page.getByRole('group', { name: '运行模式' }).getByRole('button', { name: '自动模式' }).click()
     await page.getByRole('button', { name: '确认下发' }).click()
     await tick(page)
     const dlg = dialog(page, '确认下发统一控制指令')

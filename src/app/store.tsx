@@ -14,6 +14,11 @@ import type { SessionInfo } from '../api/session'
 import { can, getSessionView, logout, mockSignIn, useSession, useSessionBoot } from '../data/session'
 import { useCurrentProject, useOrgScope, useResetOnAccountChange, type LoadStatus, type SetProjectResult } from '../data/org'
 import { getStoredProjectId } from '../data/org/current'
+import { useQueryClient } from '@tanstack/react-query'
+import { isMockMode } from '../api/config'
+import { mockUnifiedRead } from '../api'
+import { readUnifiedSnapshot } from '../features/unified/batch'
+import { setupUnifiedWriteLock } from '../features/unified/lock'
 
 type Auth = { username: string; role: Role }
 
@@ -121,6 +126,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
   // 真实接口模式：接上会话并恢复登录态；退出或换账号时清掉上一个账号的组织数据缓存
   useSessionBoot()
   useResetOnAccountChange()
+  // 写锁（#28）：应用初始化时先注入 resolveProject（S6a 组织范围的同步查询），再注册 203 核对器。同一个 QueryClient 只接一次
+  const qc = useQueryClient()
+  useState(() => { setupUnifiedWriteLock(qc, isMockMode() ? (id) => mockUnifiedRead(id) : readUnifiedSnapshot); return null })
   const sess = useSession()
   const prevAuthed = useRef(sess.authed)
   useEffect(() => {

@@ -1,15 +1,17 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { setConfig } from '../config'
-import { __resetHttpForTests, onSessionExpired, refreshSession, request } from '../http'
+import { __resetHttpForTests, onSessionExpired, refreshSession, request, requestWrite, WRITE_ACCOUNT_TEXT, WRITE_AUTH_TEXT, WRITE_LOGIN_ABNORMAL_TEXT, WRITE_CANCELLED_TEXT, WRITE_OFFLINE_TEXT, WRITE_RECHECK_TEXT } from '../http'
 import { clearTokens, readTokens, writeTokens } from '../tokens'
 import { fakeBackend, json, text } from './helpers'
 
 const HOUR = 3600_000
+/** 带 sub 的 JWT 形状令牌（写请求要求能解析出 sub） */
+const J = (n: number, sub = 'u1') => `h.${btoa(JSON.stringify({ sub, n }))}.s`
 const login = (access = 'A1', refresh = 'R1', ttl = 2 * HOUR) =>
   writeTokens({ accessToken: access, refreshToken: refresh, expiresAt: Date.now() + ttl })
 
 /** 每次刷新都轮换：R{n} → R{n+1}；旧 refresh 再用就 401 */
-function rotatingRefresh(delayMs = 5) {
+function rotatingRefresh(delayMs = 5, mk: (gen: number) => string = (g) => `A${g}`) {
   let gen = 1
   return async (c: { body: unknown; headers: Record<string, string> }) => {
     await new Promise((r) => setTimeout(r, delayMs))
@@ -17,7 +19,7 @@ function rotatingRefresh(delayMs = 5) {
     if (!c.headers.Authorization?.startsWith('Bearer ')) return json({ code: 16, message: 'no token' }, 401)
     if (b.refresh_token !== `R${gen}`) return json({ code: 16, message: 'invalid refresh_token' }, 401)
     gen++
-    return json({ access_token: `A${gen}`, refresh_token: `R${gen}`, expires_in: 7200 })
+    return json({ access_token: mk(gen), refresh_token: `R${gen}`, expires_in: 7200 })
   }
 }
 
@@ -171,5 +173,171 @@ describe('令牌续期', () => {
     const be = fakeBackend({ '/weather': () => text('no permission', 403) })
     await expect(request('/weather')).rejects.toMatchObject({ kind: 'forbidden' })
     expect(be.counts['/auth/refresh']).toBeUndefined()
+  })
+})
+
+describe('写请求：不重放、发送前同步复核（S12b）', () => {
+  // 写防护：测试环境 + 白名单项目
+  const P = { id: 'e1', code: '240829001' }
+  beforeEach(() => { setConfig({ apiBase: '/api', apiEnv: 'test' }) })
+  const route = '/ctrl/project-room-switch-set'
+
+  it.each([
+    ['401 code 16', () => json({ code: 16, message: 'token expired' }, 401)],
+    ['网关 403 token err', () => text('token err', 403)],
+  ])('%s：不续期重放，写接口只发一次；提示「登录状态已更新，请重新下发」，没有 status（未执行）', async (_n, h) => {
+    login(J(1))
+    const be = fakeBackend({ [route]: h, '/auth/refresh': rotatingRefresh(5, J) })
+    const e = (await requestWrite('ctrl-206', [P], { body: 'x' }).catch((x: unknown) => x)) as { status?: number }
+    expect(e).toMatchObject({ kind: 'unauthenticated', message: WRITE_AUTH_TEXT })
+    expect(e.status).toBeUndefined()
+    await new Promise((r) => setTimeout(r, 30))
+    expect(be.callsTo(route)).toHaveLength(1)
+    // 后台续期一次，让登录状态更新
+    expect(be.callsTo('/auth/refresh')).toHaveLength(1)
+    expect(readTokens()?.accessToken).toBe(J(2))
+  })
+
+  it('读请求原有的续期重放不受影响', async () => {
+    login()
+    const be = fakeBackend({ '/x': (c) => (c.headers.Authorization === 'Bearer A2' ? json({ ok: 1 }) : json({ code: 16 }, 401)), '/auth/refresh': rotatingRefresh() })
+    await expect(request('/x')).resolves.toEqual({ ok: 1 })
+    expect(be.callsTo('/x')).toHaveLength(2)
+  })
+
+  it('令牌快过期：先续期再发（用新令牌），只发一次', async () => {
+    login(J(1), 'R1', 10_000)
+    const be = fakeBackend({ [route]: () => json({ body: '' }), '/auth/refresh': rotatingRefresh(5, J) })
+    await requestWrite('ctrl-206', [P], { body: 'x' })
+    expect(be.callsTo(route)).toHaveLength(1)
+    expect(be.callsTo(route)[0].headers.Authorization).toBe(`Bearer ${J(2)}`)
+  })
+
+  it('beforeSend 返回 false / 抛错：不发，write_blocked', async () => {
+    login(J(1))
+    const be = fakeBackend({ [route]: () => json({ body: '' }) })
+    for (const beforeSend of [() => false, () => { throw new Error('x') }]) {
+      await expect(requestWrite('ctrl-206', [P], { body: 'x' }, { beforeSend })).rejects.toMatchObject({ kind: 'write_blocked', message: WRITE_RECHECK_TEXT })
+    }
+    expect(be.callsTo(route)).toHaveLength(0)
+  })
+
+  it('beforeSend 在令牌续期完成之后才执行：续期期间页面卸载 / 项目离线 → 不发', async () => {
+    for (const what of ['卸载', '离线']) {
+      __resetHttpForTests(); clearTokens()
+      login(J(1), 'R1', 10_000) // 快过期，要先续期
+      let release!: () => void
+      const gate = new Promise<void>((r) => { release = r })
+      const refresh = rotatingRefresh(0, J)
+      const be = fakeBackend({ [route]: () => json({ body: '' }), '/auth/refresh': async (c) => { await gate; return refresh(c) } })
+      const page = { alive: true, online: true }
+      const order: string[] = []
+      const p = requestWrite('ctrl-206', [P], { body: 'x' }, { beforeSend: () => { order.push('check'); return page.alive && page.online } })
+      await vi.waitFor(() => expect(be.callsTo('/auth/refresh')).toHaveLength(1))
+      expect(order).toEqual([]) // 续期还没完，复核还没跑
+      if (what === '卸载') page.alive = false
+      else page.online = false
+      release()
+      await expect(p, what).rejects.toMatchObject({ kind: 'write_blocked' })
+      expect(order).toEqual(['check'])
+      expect(be.callsTo(route), what).toHaveLength(0)
+    }
+  })
+
+  it('等待令牌续期期间被取消（signal 中止）：最先检查信号，写请求的 fetch 0 次，beforeSend 不再调用', async () => {
+    login(J(1), 'R1', 10_000)
+    let release!: () => void
+    const gate = new Promise<void>((r) => { release = r })
+    const refresh = rotatingRefresh(0, J)
+    const be = fakeBackend({ [route]: () => json({ body: '' }), '/auth/refresh': async (c) => { await gate; return refresh(c) } })
+    const ac = new AbortController()
+    const beforeSend = vi.fn(() => true)
+    const p = requestWrite('ctrl-206', [P], { body: 'x' }, { signal: ac.signal, beforeSend })
+    await vi.waitFor(() => expect(be.callsTo('/auth/refresh')).toHaveLength(1))
+    ac.abort()
+    release()
+    await expect(p).rejects.toMatchObject({ kind: 'write_blocked', message: WRITE_CANCELLED_TEXT })
+    expect(beforeSend).not.toHaveBeenCalled()
+    expect(be.callsTo(route)).toHaveLength(0)
+  })
+
+  it('503 code 14（控制屏未连接）：提示「控制屏未连接，未下发」，带 code 14，只发一次', async () => {
+    login(J(1))
+    const be = fakeBackend({ [route]: () => json({ code: 14, message: 'no stream' }, 503) })
+    await expect(requestWrite('ctrl-206', [P], { body: 'x' })).rejects.toMatchObject({ kind: 'unavailable', code: 14, message: WRITE_OFFLINE_TEXT })
+    expect(be.callsTo(route)).toHaveLength(1)
+  })
+
+  it('账号绑定：续期期间别的标签页换了账号（refreshSession 直接返回新账号令牌）→ 不发，写请求 fetch 0 次', async () => {
+    const tok = (sub: string, n: number) => `h.${btoa(JSON.stringify({ sub, n })).replace(/=+$/, '')}.s`
+    writeTokens({ accessToken: tok('u1', 1), refreshToken: 'R1', expiresAt: Date.now() + 10_000 })
+    let release!: () => void
+    const gate = new Promise<void>((r) => { release = r })
+    const be = fakeBackend({ [route]: () => json({ body: '' }), '/auth/refresh': async () => { await gate; return json({ code: 16 }, 401) } })
+    const beforeSend = vi.fn(() => true)
+    const p = requestWrite('ctrl-206', [P], { body: 'x' }, { beforeSend })
+    await vi.waitFor(() => expect(be.callsTo('/auth/refresh')).toHaveLength(1))
+    // 另一个标签页登录了别的账号
+    writeTokens({ accessToken: tok('u2', 1), refreshToken: 'R9', expiresAt: Date.now() + 2 * HOUR })
+    release()
+    await expect(p).rejects.toMatchObject({ kind: 'write_blocked', message: WRITE_ACCOUNT_TEXT })
+    expect(beforeSend).not.toHaveBeenCalled()
+    expect(be.callsTo(route)).toHaveLength(0)
+  })
+
+  it('令牌解析不出 sub（发起时或续期后）：一律不发，提示「登录状态异常，请重新登录后下发」，按未执行（本地拦截、无 status）', async () => {
+    for (const [what, start, next] of [['发起时', 'A1', J(2)], ['续期后', J(1), 'A2']] as const) {
+      __resetHttpForTests(); clearTokens()
+      writeTokens({ accessToken: start, refreshToken: 'R1', expiresAt: Date.now() + 10_000 })
+      const be = fakeBackend({ [route]: () => json({ body: '' }), '/auth/refresh': () => json({ access_token: next, refresh_token: 'R2', expires_in: 7200 }) })
+      const beforeSend = vi.fn(() => true)
+      const e = (await requestWrite('ctrl-206', [P], { body: 'x' }, { beforeSend }).catch((x: unknown) => x)) as { kind?: string; message?: string; status?: number }
+      expect(e, what).toMatchObject({ kind: 'write_blocked', message: WRITE_LOGIN_ABNORMAL_TEXT })
+      expect(e.status).toBeUndefined()
+      expect(beforeSend).not.toHaveBeenCalled()
+      expect(be.callsTo(route), what).toHaveLength(0)
+    }
+  })
+
+  it('Codex 场景：发起时令牌没有 sub，续期期间别的标签页换号、refreshSession 返回新账号令牌 → 不发', async () => {
+    writeTokens({ accessToken: 'A1', refreshToken: 'R1', expiresAt: Date.now() + 10_000 })
+    let release!: () => void
+    const gate = new Promise<void>((r) => { release = r })
+    const be = fakeBackend({ [route]: () => json({ body: '' }), '/auth/refresh': async () => { await gate; return json({ code: 16 }, 401) } })
+    const p = requestWrite('ctrl-206', [P], { body: 'x' })
+    await vi.waitFor(() => expect(be.callsTo('/auth/refresh')).toHaveLength(1))
+    writeTokens({ accessToken: J(1, 'u2'), refreshToken: 'R9', expiresAt: Date.now() + 2 * HOUR })
+    release()
+    await expect(p).rejects.toMatchObject({ kind: 'write_blocked', message: WRITE_LOGIN_ABNORMAL_TEXT })
+    expect(be.callsTo(route)).toHaveLength(0)
+  })
+
+  it.each([
+    ['空串', ''], ['只有空白', '  '], ['数字', 123], ['null', null],
+  ])('sub 为%s：按没有 sub 处理，201/204/206 都拦下，fetch 0 次', async (_n, sub) => {
+    const tok = `h.${btoa(JSON.stringify({ sub }))}.s`
+    writeTokens({ accessToken: tok, refreshToken: 'R1', expiresAt: Date.now() + 2 * HOUR })
+    const routes = ['/ctrl/room-temperature-set', '/ctrl/running-ctrl-set', route]
+    const be = fakeBackend(Object.fromEntries(routes.map((r) => [r, () => json({ body: '' })])))
+    for (const op of ['ctrl-201', 'ctrl-204', 'ctrl-206'] as const) {
+      await expect(requestWrite(op, [P], { body: 'x' }), op).rejects.toMatchObject({ kind: 'write_blocked', message: WRITE_LOGIN_ABNORMAL_TEXT })
+    }
+    for (const r of routes) expect(be.callsTo(r), r).toHaveLength(0)
+  })
+
+  it('等待续期期间存储里的令牌被换成没有 sub 的：不发，提示「登录状态异常，请重新登录后下发」', async () => {
+    writeTokens({ accessToken: J(1), refreshToken: 'R1', expiresAt: Date.now() + 10_000 })
+    let release!: () => void
+    const gate = new Promise<void>((r) => { release = r })
+    const be = fakeBackend({ [route]: () => json({ body: '' }), '/auth/refresh': async () => { await gate; return json({ access_token: J(2), refresh_token: 'R2', expires_in: 7200 }) } })
+    const p = requestWrite('ctrl-206', [P], { body: 'x' })
+    await vi.waitFor(() => expect(be.callsTo('/auth/refresh')).toHaveLength(1))
+    // 续期期间存储被换成没有 sub 的令牌（refreshSession 发现存储已变，直接返回它）
+    writeTokens({ accessToken: `h.${btoa(JSON.stringify({ sub: '' }))}.s`, refreshToken: 'R3', expiresAt: Date.now() + 2 * HOUR })
+    release()
+    const e = (await p.catch((x: unknown) => x)) as { kind?: string; message?: string; status?: number }
+    expect(e).toMatchObject({ kind: 'write_blocked', message: WRITE_LOGIN_ABNORMAL_TEXT })
+    expect(e.status).toBeUndefined()
+    expect(be.callsTo(route)).toHaveLength(0)
   })
 })

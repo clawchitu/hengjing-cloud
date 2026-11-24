@@ -1,0 +1,435 @@
+// 统一控制页面（S12b）：对同一集成项目里选中的多个项目，逐个走 S12a 的单项目状态机（ctrl 203）。
+//
+// - prepare(ids, draft)：为每个项目建一个控制器并 request(draft)（逐个校验：离线、app_code、温度范围、无改动…）。
+//   任一项目校验不过就整体不下发，全部 cancel，返回错误；全部通过则停在 confirming，等页面的二次确认。
+// - start()：二次确认通过后按顺序逐个 confirm()（下发前读 → 203 → 下发后读），一个结束再下一个；不重试。
+// - cancel()：确认弹窗取消或失效 → 全部 cancel。
+// - abort()：页面卸载 → 还没发出的全部终止（S12a abort 语义：已发出的照常走完回读），不再开始后面的项目。
+// - 写入口：控制器给出的 {id, code} 先在最新项目列表里找回整个 Project，id 与 code 都对得上才把 Project 交给写入口；
+//   对不上（项目被移除或 code 变了）按本地拦截处理（write_blocked，肯定没发出）。
+// - 写锁（src/api/writeLock.ts，接入见 lock.ts）：每个项目发送前 acquire（同一块控制屏 / DTU / 项目被占 → 不发，提示「上一条下发还在
+//   处理中」）；beforeSend 链里 claim(token) 放在最后；拿到写 Promise 立刻 markSent。结算口径（Fable 11/24 裁定）：
+//   明确被拒或没发出 → fail；应答 success=true 只算「已下发」，不立刻放锁，等状态机下发后回读：逐字段一致（已生效）→ ok 放锁，
+//   未变化 / 无法核对 / 结果未知 → unknown，交给写锁核对，核对一致或有效期到期才放；应答结果未知 → unknown。
+//   批次截止时间只影响界面上的标注，不放锁。
+import { callCtrl, writeCtrl, type CtrlReply, type WriteQuery } from '@/api/ctrl'
+import { ApiError } from '@/api/errors'
+import type { WriteProject } from '@/api/guard'
+import { TEXT } from './constants'
+import { consoleLogger, type UnifiedLogger } from './log'
+import { createUnifiedController, isDone, outcomeOf, type UnifiedController, type UnifiedState } from './machine'
+import { describeQuery, type UnifiedContext, type UnifiedDraft, type UnifiedEcho } from './rules'
+import { acquire, claim, lockOf, markOverdue, markSent, OTHER_ACCOUNT_TEXT, settle, verify, type LockToken } from '@/api/writeLock'
+import { LOCK_BUSY_TEXT, lockTargetOf, recordOf } from './lock'
+
+/** 页面传进来的项目（S6a 的 Project 直接可用） */
+export interface BatchProject {
+  id: string
+  code: string
+  name: string
+  /** app_code */
+  programCode: number
+  online: boolean
+  /** 写锁键：控制屏号、DTU 号（S6a 的 Project 带着） */
+  controlScreenId?: string
+  dtuId?: string
+}
+
+/** 回读快照：200 房间温控数据整理成的统一控制相关值（toEcho 直接用它） */
+export interface UnifiedSnapshot extends UnifiedEcho {
+  /** 读到的房间数 */
+  rooms: number
+}
+
+/** 演示数据的程序编码（11 三恒标准版、21 办公楼宇版、31 别墅五恒版）都是有房间温控的通用版，按 app_code 1 处理 */
+const DEMO_GENERAL_CODES = new Set([11, 21, 31])
+export function unifiedAppCode(programCode: number, mock: boolean): number {
+  return mock && DEMO_GENERAL_CODES.has(programCode) ? 1 : programCode
+}
+
+export function contextOf(p: BatchProject | undefined, mock = false): UnifiedContext | null {
+  if (!p) return null
+  return { projectId: p.id, projectCode: p.code, projectName: p.name, appCode: unifiedAppCode(p.programCode, mock), online: p.online }
+}
+
+const INVALID = 65536
+const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) && v !== INVALID && v !== -1 ? v : null)
+const same = (xs: Array<number | null>): number | null => (xs.length && xs.every((x) => x !== null && x === xs[0]) ? xs[0] : null)
+
+/**
+ * 200 的房间列表 → 快照。汇总值：全部房间读到且一致才给值，否则为 null；perRoom 留逐房间读数，核对按房间逐个比。
+ * switch / set_temp 是普通 proto3 标量：0 值服务端不编码，解码出来就是 0（关），按真实读数核对。
+ * 没有房间条目（含 200 回包为空 {}）→ 无法核对。is_connected=false 的房间读数不可信：不参与核对，记 offline（结果未知）。
+ * 系统开关 / 运行模式没有读接口，不给这两个键（核对时记「未核对」）
+ */
+export function summarizeRooms(rooms: ReadonlyArray<{ switch?: number; setTemp?: number; isConnected?: boolean }>): UnifiedSnapshot {
+  const online = rooms.filter((r) => r.isConnected !== false)
+  const sws = online.map((r) => num(r.switch))
+  // 逐房间温度用原始读数核对（按 0.01 容差）；汇总值四舍五入到两位，只用于显示和整体比较
+  const ts = online.map((r) => num(r.setTemp))
+  const shown = ts.map((v) => (v === null ? null : Math.round(v * 100) / 100))
+  const snap: UnifiedSnapshot = { rooms: rooms.length, roomSwitch: same(sws), roomTemp: same(shown), perRoom: { roomSwitch: sws, roomTemp: ts } }
+  if (online.length < rooms.length) snap.offline = rooms.length - online.length
+  return snap
+}
+
+/** 真实回读：ctrl 200（只读） */
+export async function readUnifiedSnapshot(projectId: string, signal: AbortSignal): Promise<UnifiedSnapshot> {
+  const r = await callCtrl(200, projectId, {}, { signal })
+  return summarizeRooms(r.data ?? [])
+}
+
+/** 写入口：S4 的 writeCtrl(203)，传整个 Project（写防护按 code 比对白名单，请求体用 id） */
+/**
+ * beforeSend：写入口在令牌就绪后、真正 fetch 前同步调用，返回 false 就不发（见 http.ts requestWrite）。
+ * 自己实现的下发函数（演示数据、测试）也必须在「发出」前调用它
+ */
+export type BatchSender = (project: BatchProject, query: WriteQuery<203>, opts: { beforeSend: () => boolean; signal: AbortSignal }) => Promise<CtrlReply<203>>
+// 批次的取消信号不交给 writeCtrl 去中止 fetch：已经发出的写请求要照常走完、拿到应答（S12a abort 语义）。
+// 取消在发出前由 beforeSend 最先检查（recheck 第一行），效果等同 http 层的信号检查
+export const defaultBatchSender: BatchSender = (project, query, opts) => writeCtrl(203, project, query, { beforeSend: opts.beforeSend })
+
+/** success 已生效、unapplied 未变化、unverifiable 无法核对、unknown 结果未知 */
+export type RowStatus = 'waiting' | 'sending' | 'success' | 'unapplied' | 'unverifiable' | 'failure' | 'unknown' | 'not-sent'
+export interface BatchRow {
+  id: string
+  code: string
+  name: string
+  status: RowStatus
+  /** 结束时刻（YYYY-MM-DD HH:MM:SS） */
+  at?: string
+  /** 批次层面的说明（截止时间到了等）。有它时 status 以批次判定为准 */
+  note?: string
+  /** 批次层面判定的失败且确定没执行（如登录状态异常） */
+  notExecuted?: boolean
+  /** 控制屏已应答 success=true（进度里据此显示「已下发，正在核对…」） */
+  replyOk?: boolean
+  state: UnifiedState<UnifiedSnapshot>
+}
+export type BatchPhase = 'idle' | 'confirming' | 'running' | 'done'
+export interface BatchState {
+  phase: BatchPhase
+  rows: BatchRow[]
+  /** prepare 不通过时的错误（已带项目名，去重） */
+  errors: string[]
+  /** 确认弹窗里列出的将下发的值 */
+  items: Array<{ label: string; value: string }>
+}
+
+export interface BatchDeps {
+  getProjects: () => readonly BatchProject[]
+  readBack?: (projectId: string, signal: AbortSignal) => Promise<UnifiedSnapshot>
+  send?: BatchSender
+  log?: UnifiedLogger
+  mock?: boolean
+  now?: () => Date
+  /** 批次截止（毫秒，默认 35 秒）：见 BATCH_DEADLINE_MS */
+  deadlineMs?: number
+  /**
+   * 确认后、整批开始前强制重新拉一次项目列表（每批一次）；beforeSend 和发送前复核都用这份最新结果。
+   * 拉取失败整批不下发。不传则用 getProjects()（只用于测试）
+   */
+  refreshProjects?: (signal: AbortSignal) => Promise<readonly BatchProject[]>
+  /** 当前登录账号（user id，没有就用令牌 sub；演示模式为演示账号名）。确认时记下，beforeSend 核对 */
+  getAccount?: () => string | null
+}
+
+export const REFRESH_FAILED_TEXT = '确认后刷新项目在线状态失败，整批未下发'
+export const ACCOUNT_CHANGED_TEXT = '登录账号已变化，未下发'
+/** 确认时取不到账号（令牌解析不出 sub）：整批不下发，记失败（未执行） */
+export const LOGIN_ABNORMAL_TEXT = '登录状态异常，请重新登录后下发'
+
+/**
+ * 批次截止：从开始下发起 35 秒（方案 S12 验收「35 秒内给出最终结果」）。到截止时：
+ * - 还没发出的项目（含正在下发前读取、正在等令牌续期的）→ 未下发（超时），之后 beforeSend 一律拒绝，绝不再发写请求；
+ * - 已经发出、还没回应的 → 立即标「已下发，结果未知」，不再等它
+ * 截止只影响界面上的标注：写锁不在这里放，仍按原写结算、回读核对或锁的有效期（见 lock.ts）
+ */
+export const BATCH_DEADLINE_MS = 35_000
+export const DEADLINE_NOT_SENT = '超过 35 秒截止时间，未下发（超时）'
+export const DEADLINE_UNKNOWN = '已下发，结果未知：超过 35 秒截止时间仍未收到应答，请刷新查看；未自动重试'
+export const DEADLINE_REPLIED_OK = '已下发，结果未知：下发后回读在 35 秒截止前未完成，请稍后刷新确认；未自动重试'
+export const DEADLINE_REPLIED_FAIL = '控制屏明确拒绝（未自动重试）；下发后回读在 35 秒截止前未完成'
+/** 下发前读到房间全部关着，这次又要设温度（且没同时开房间）：不发（后端答复⑦） */
+export const ROOMS_OFF_TEXT = '下发前读到房间都关着，不能设定温度，未下发'
+
+export function rowStatus(s: UnifiedState<unknown>, started: boolean): RowStatus {
+  switch (s.status) {
+    case 'confirming': return 'waiting'
+    case 'sending': return 'sending'
+    case 'success': return 'success'
+    case 'unapplied': return 'unapplied'
+    case 'unverifiable': return 'unverifiable'
+    case 'failure': return 'failure'
+    case 'unknown': return 'unknown'
+    case 'idle': return started ? 'not-sent' : 'waiting'
+  }
+}
+
+const pad = (n: number) => String(n).padStart(2, '0')
+/** 本地时间 YYYY-MM-DD HH:MM:SS */
+const stamp = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${d.toTimeString().slice(0, 8)}`
+
+export function createUnifiedBatch(deps: BatchDeps) {
+  const readBack = deps.readBack ?? readUnifiedSnapshot
+  const send = deps.send ?? defaultBatchSender
+  const now = deps.now ?? (() => new Date())
+  const mock = deps.mock ?? false
+  type Entry = {
+    p: BatchProject; ctl: UnifiedController<UnifiedSnapshot>; started: boolean; at?: string; unsub: () => void
+    /** beforeSend 放行过（写请求确实发出了） */
+    sent: boolean
+    /** 写请求的应答（截止时据此区分「等应答」和「等回读」） */
+    reply?: 'ok' | 'rejected' | 'error'
+    /** 下发前读到的快照 */
+    before?: UnifiedSnapshot
+    /** 所属批次序号：旧批次里没结束的写请求不能借新批次的截止时间放行 */
+    batch: number
+    /** 写锁令牌（acquire 成功后才有） */
+    token?: LockToken
+    /** 截止时冻结的结果 */
+    final?: { status: 'not-sent' | 'unknown' | 'failure'; note: string; notExecuted?: boolean }
+  }
+  let entries: Entry[] = []
+  let state: BatchState = { phase: 'idle', rows: [], errors: [], items: [] }
+  let stopped = false
+  /** 截止时间（毫秒时间戳）；到点后置 expired */
+  let deadlineAt = Infinity
+  let expired = false
+  /** 批次序号：每次 prepare 加一 */
+  let batchSeq = 0
+  /** 本批确认后拉到的最新项目列表 */
+  let fresh: readonly BatchProject[] | null = null
+  /** 本批确认时的账号 */
+  let account: string | null = null
+  /** 本批的取消信号：abort()（页面卸载）时中止 */
+  let ac = new AbortController()
+  let running: Promise<BatchState> | null = null
+  const subs = new Set<() => void>()
+
+  const emit = (patch: Partial<BatchState>) => {
+    const rows = entries.map((e): BatchRow => ({
+      id: e.p.id, code: e.p.code, name: e.p.name, at: e.at, state: e.ctl.getState(),
+      status: e.final?.status ?? rowStatus(e.ctl.getState(), e.started), note: e.final?.note, notExecuted: e.final?.notExecuted, replyOk: e.reply === 'ok',
+    }))
+    state = { ...state, rows, ...patch }
+    for (const fn of subs) fn()
+  }
+  const find = (id: string) => (fresh ?? deps.getProjects()).find((p) => p.id === id)
+
+  /**
+   * 发送前复核（同步）：批次没被终止（页面卸载）、没过截止时间、项目仍在列表里、code 没变、仍在线。
+   * 只做检查，不改状态（「已发出」在 claim 认领成功后才记）
+   */
+  const recheck = (e: Entry, wp: WriteProject) => {
+    // 最先看取消信号
+    if (ac.signal.aborted) return false
+    // 这一项已有定论（截止时冻结）、或已不属于当前批次：一律不发
+    if (e.final || e.batch !== batchSeq || !entries.includes(e)) return false
+    if (stopped || expired || now().getTime() >= deadlineAt) return false
+    // 账号绑定：确认时的账号与当前存储里的账号一致才发
+    if (deps.getAccount && (account === null || deps.getAccount() !== account)) return false
+    const cur = find(wp.id)
+    if (!cur || cur.code !== wp.code || cur.online !== true) return false
+    return true
+  }
+  /** 控制器给的 {id, code} → 最新列表里的整个 Project；对不上就本地拦截（没发出） */
+  const sendWhole = (e: Entry) => (wp: WriteProject, q: WriteQuery<203>) => {
+    const p = find(wp.id)
+    if (!p || p.code !== wp.code) return Promise.reject(new ApiError('write_blocked', TEXT.projectChanged))
+    // 房间都关着又要设温度（没同时开房间）：不发
+    if (q.roomTemp !== -1 && q.roomSwitch !== 1 && e.before && e.before.rooms > 0 && e.before.roomSwitch === 0) {
+      return Promise.reject(new ApiError('write_blocked', ROOMS_OFF_TEXT))
+    }
+    // 写锁：同一块屏（或 DTU、项目）上一条还没有结论 → 不发
+    const got = acquire(lockTargetOf(p), p.name)
+    if (!got.ok) return Promise.reject(new ApiError('write_blocked', got.busy.owner === 'other-account' ? OTHER_ACCOUNT_TEXT : LOCK_BUSY_TEXT))
+    const token = got.token
+    e.token = token
+    // beforeSend 链：批次复核在前，claim(token) 必须放在最后（认领成功即视为已发出）
+    const beforeSend = () => {
+      const ok = recheck(e, wp) && claim(token)
+      if (ok) e.sent = true
+      return ok
+    }
+    let out: Promise<CtrlReply<203>>
+    try { out = send(p, q, { beforeSend, signal: ac.signal }) } catch (x) { settle(token, 'fail'); return Promise.reject(x) }
+    markSent(token, out, recordOf(q))
+    out.then((r) => {
+      const ok = r?.success === true
+      if (e.sent) e.reply = ok ? 'ok' : 'rejected'
+      // success=true 只算「已下发」：已认领的不在这里放锁，等下发后回读的结论（见 settleByReadback）。
+      // 截止后才到的成功应答（这一项已冻结、页面可能已 reset 取消订阅）：按结果未知结算，交给锁核对或到期
+      if (!ok || !e.sent) settle(token, ok ? 'ok' : 'fail')
+      else if (e.final) settle(token, 'unknown')
+    }, (err) => {
+      const o = outcomeOf(err)
+      if (e.sent) e.reply = o === 'unknown' ? 'error' : 'rejected'
+      // 没认领的（beforeSend 没过）settle 直接放锁；认领过的：没发出 / 明确被拒 → fail，其余结果未知 → unknown
+      settle(token, o === 'unknown' ? 'unknown' : 'fail')
+    })
+    return out
+  }
+
+  /**
+   * 状态机结束后按回读结论结算写锁：已生效 → ok（放锁），并让锁再核对一次（应答未知、锁已是 unknown 的，核对一致即放开）；
+   * 应答 success=true 但未变化 / 无法核对 / 回读失败 → unknown（锁等核对一致或到期）。被拒、没发出的已在写 Promise 上结算过
+   */
+  const settleByReadback = (e: Entry, st: UnifiedState<UnifiedSnapshot>) => {
+    if (!e.token || !e.sent) return
+    if (st.status === 'success') { settle(e.token, 'ok'); void verify(e.token.key); return }
+    if (e.reply === 'ok' && (st.status === 'unapplied' || st.status === 'unverifiable' || st.status === 'unknown')) settle(e.token, 'unknown')
+  }
+
+  function clear() {
+    for (const e of entries) { e.unsub(); e.ctl.abort() }
+    entries = []
+  }
+
+  return {
+    getState: () => state,
+    subscribe(fn: () => void) { subs.add(fn); return () => { subs.delete(fn) } },
+
+    prepare(ids: readonly string[], draft: UnifiedDraft): BatchState {
+      if (state.phase === 'running' || state.phase === 'confirming') return state
+      clear()
+      stopped = false
+      fresh = null
+      ac = new AbortController()
+      batchSeq++
+      const uniq = [...new Set(ids)]
+      if (!uniq.length) { emit({ phase: 'idle', errors: [TEXT.noProject], items: [] }); return state }
+      const errs: Array<{ name: string; msg: string }> = []
+      for (const id of uniq) {
+        const p = find(id)
+        if (!p) { errs.push({ name: id, msg: TEXT.noProject }); continue }
+        // 同一块屏上一条下发还没有结论：整体不下发
+        const held = lockOf(lockTargetOf(p))
+        if (held) { errs.push({ name: p.name, msg: held.owner === 'other-account' ? OTHER_ACCOUNT_TEXT : LOCK_BUSY_TEXT }); continue }
+        const entry = { p, started: false, sent: false, batch: batchSeq, unsub: () => {} } as Entry
+        const ctl = createUnifiedController<UnifiedSnapshot>({
+          getContext: () => contextOf(find(id), mock),
+          // 记下第一次（下发前）读到的快照，供发送前判断房间是否都关着
+          readBack: async (pid, sig) => { const snap = await readBack(pid, sig); if (!entry.before) entry.before = snap; return snap },
+          toEcho: (s) => s,
+          send: sendWhole(entry),
+          log: deps.log ?? consoleLogger,
+        })
+        entry.ctl = ctl
+        const s = ctl.request(draft)
+        if (s.status === 'idle') for (const m of s.errors) errs.push({ name: p.name, msg: m })
+        entry.unsub = ctl.subscribe(() => {
+          const st = ctl.getState()
+          if (entry.started && !entry.at && (isDone(st) || st.status === 'idle')) entry.at = stamp(now())
+          if (isDone(st)) settleByReadback(entry, st)
+          if (state.phase === 'running') emit({})
+        })
+        entries.push(entry)
+      }
+      if (errs.length) {
+        for (const e of entries) e.ctl.cancel()
+        clear()
+        // 全部项目同一条错误（如「没有要下发的设置」）只显示一次
+        const msgs = new Set(errs.map((e) => e.msg))
+        const errors = msgs.size === 1 && errs.length === uniq.length ? [...msgs] : [...new Set(errs.map((e) => `${e.name}：${e.msg}`))]
+        emit({ phase: 'idle', errors, items: [] })
+        return state
+      }
+      const first = entries[0].ctl.getState()
+      emit({ phase: 'confirming', errors: [], items: first.status === 'confirming' ? describeQuery(first.query) : [] })
+      return state
+    },
+
+    cancel() {
+      if (state.phase !== 'confirming') return
+      for (const e of entries) e.ctl.cancel()
+      clear()
+      emit({ phase: 'idle', errors: [], items: [] })
+    },
+
+    /** 逐个下发；重复调用返回同一个 Promise。不重试 */
+    start(): Promise<BatchState> {
+      if (running) return running
+      if (state.phase !== 'confirming') return Promise.resolve(state)
+      deadlineAt = now().getTime() + (deps.deadlineMs ?? BATCH_DEADLINE_MS)
+      expired = false
+      let onDeadline!: () => void
+      const deadline = new Promise<'deadline'>((r) => { onDeadline = () => r('deadline') })
+      const timer = setTimeout(() => {
+        // 截止：先置 expired（之后 beforeSend 一律拒绝），再冻结每个项目的结果
+        expired = true
+        for (const e of entries) {
+          const cur = e.ctl.getState()
+          if (isDone(cur)) continue
+          if (cur.status === 'idle' && e.started) continue
+          // 已发出：被拒的按应答；success=true 但回读没做完、或没应答的 → 结果未知；没发出：未下发（超时）
+          e.final = !e.sent ? { status: 'not-sent', note: DEADLINE_NOT_SENT }
+            : e.reply === 'ok' ? { status: 'unknown', note: DEADLINE_REPLIED_OK }
+            : e.reply === 'rejected' ? { status: 'failure', note: DEADLINE_REPLIED_FAIL }
+            : { status: 'unknown', note: DEADLINE_UNKNOWN }
+          e.started = true
+          e.at ??= stamp(now())
+          e.ctl.abort()
+          // 写锁只改标记（已过截止），不放锁；success=true 还没回读完的按结果未知结算（回读之后一致再由 settleByReadback 核对放开）
+          if (e.token) { markOverdue(e.token); if (e.reply === 'ok') settle(e.token, 'unknown') }
+        }
+        onDeadline()
+      }, Math.max(0, deadlineAt - now().getTime()))
+      emit({ phase: 'running' })
+      account = deps.getAccount ? deps.getAccount() : null
+      const run = async () => {
+        // 确认时取不到账号：整批不下发（不刷新、不回读），记失败（未执行）
+        if (deps.getAccount && account === null) {
+          for (const e of entries) { e.final = { status: 'failure', note: LOGIN_ABNORMAL_TEXT, notExecuted: true }; e.started = true; e.at ??= stamp(now()); e.ctl.abort() }
+          clearTimeout(timer)
+          emit({ phase: 'done' })
+          return state
+        }
+        // 确认后、整批开始前强制刷新一次在线状态（每批一次）
+        if (deps.refreshProjects) {
+          try {
+            const list = await Promise.race([deps.refreshProjects(ac.signal), deadline.then(() => { throw new Error('deadline') })])
+            fresh = list
+          } catch {
+            if (!expired) for (const e of entries) { e.final = { status: 'not-sent', note: stopped ? TEXT.aborted : REFRESH_FAILED_TEXT }; e.started = true; e.at ??= stamp(now()); e.ctl.abort() }
+            clearTimeout(timer)
+            emit({ phase: 'done' })
+            return state
+          }
+        }
+        for (const e of entries) {
+          if (stopped || expired) break
+          e.started = true
+          emit({})
+          // 截止时不再等在途的项目
+          if (await Promise.race([e.ctl.confirm().then(() => 'done' as const), deadline]) === 'deadline') break
+          if (!e.at) e.at = stamp(now())
+          emit({})
+        }
+        clearTimeout(timer)
+        // 没轮到的（页面卸载后）也标成已开始，显示为「未下发」
+        for (const e of entries) if (!e.started) { e.started = true; e.ctl.abort(); e.at ??= stamp(now()) }
+        emit({ phase: 'done' })
+        return state
+      }
+      running = run().finally(() => { running = null })
+      return running
+    },
+
+    /** 页面卸载：还没发出的终止，后面的不再开始 */
+    abort() {
+      stopped = true
+      ac.abort()
+      for (const e of entries) e.ctl.abort()
+    },
+
+    /** 结束后清空，回到可再次下发 */
+    reset() {
+      if (state.phase === 'running') return
+      clear()
+      emit({ phase: 'idle', errors: [], items: [], rows: [] })
+    },
+  }
+}
+
+export type UnifiedBatch = ReturnType<typeof createUnifiedBatch>

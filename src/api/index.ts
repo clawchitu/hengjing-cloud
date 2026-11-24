@@ -127,11 +127,33 @@ export const getConnections = (projectId: string): Promise<M.Conn[]> => delay(__
 // 网关 IP / 延迟 / 运行时长接口无此字段（方案 1.2），演示版的 getGateway 已去掉；控制屏 / DTU 编号取自项目（src/data/connections.ts linksOf）
 
 // unified control ----------------------------------------------------------------
-export const getLastRun = (): Promise<typeof M.lastRun | null> => delay(__HJC_MOCK__ ? M.lastRun : null)
-/** POST /api/control/unified */
-/** 演示用的假下发。交付包里直接拒绝，不能出现「已下发」的假成功（真实下发走 src/api/ctrl.ts） */
-export const sendUnified = (payload: unknown): Promise<{ ok: boolean; payload: unknown; id: string }> =>
-  __HJC_MOCK__ ? delay({ ok: true, payload, id: 'CMD-20250618-0316' }, 700) : Promise.reject(new Error('统一控制尚未接入真实接口，未下发'))
+/** 最近一次执行结果（演示数据）。改动文档第 6 条：只有项目、项目 ID、状态、操作时间 */
+export const getLastRun = (): Promise<typeof M.lastRun | null> => delay(__HJC_MOCK__ && isMockMode() ? M.lastRun : null)
+
+// 演示数据模式下统一控制的回读与下发：只改内存里的演示状态，不发任何请求。交付包里直接拒绝（真实下发走 src/api/ctrl.ts）
+const mockUnified = new Map<string, { roomSwitch: number; roomTemp: number }>()
+const mockUnifiedOf = (id: string) => {
+  let s = mockUnified.get(id)
+  if (!s) mockUnified.set(id, (s = { roomSwitch: 1, roomTemp: 26 }))
+  return s
+}
+/** 演示：回读（对应 ctrl 200 整理后的快照）。新风单机版（12）没有房间 */
+export const mockUnifiedRead = (projectId: string): Promise<{ rooms: number; roomSwitch: number | null; roomTemp: number | null }> => {
+  if (!__HJC_MOCK__) return Promise.reject(new Error('回读不可用'))
+  const p = O.projects.find((x) => x.id === projectId)
+  if (!p || p.programCode === 12) return delay({ rooms: 0, roomSwitch: null, roomTemp: null }, 200)
+  const s = mockUnifiedOf(projectId)
+  return delay({ rooms: p.devices, roomSwitch: s.roomSwitch, roomTemp: s.roomTemp }, 200)
+}
+/** 演示：下发（对应 ctrl 203）。-1 为不变 */
+export const mockUnifiedSend = (project: { id: string }, q: { roomSwitch: number; roomTemp: number }): Promise<{ success: boolean; msg: string }> => {
+  if (!__HJC_MOCK__) return Promise.reject(new Error('统一控制尚未接入真实接口，未下发'))
+  const s = mockUnifiedOf(project.id)
+  if (q.roomSwitch !== -1) s.roomSwitch = q.roomSwitch
+  if (q.roomTemp !== -1) s.roomTemp = q.roomTemp
+  return delay({ success: true, msg: '' }, 500)
+}
+export const __resetMockUnifiedForTests = () => { mockUnified.clear() }
 
 // home -----------------------------------------------------------------------
 type Weather = typeof M.weather

@@ -108,13 +108,12 @@ export const connections: Conn[] = [
 
 // ---------------------------------------------------------------- 统一控制 last run
 export const lastRun = {
-  id: 'CMD-20250618-0315', at: '15:30:06', by: '张建国', summary: '开启 / 制冷 / 全部房间开启 / 26.0°C',
   rows: [
-    { name: '朝阳壹号院 A栋', id: 'PRJ-10241', ok: 24, total: 24, status: '成功', note: '—' },
-    { name: '朝阳壹号院 B栋', id: 'PRJ-10242', ok: 22, total: 22, status: '成功', note: '—' },
-    { name: '朝阳壹号院 C栋', id: 'PRJ-10243', ok: 17, total: 25, status: '执行中', note: '等待温控面板应答' },
-    { name: '朝阳壹号院 会所', id: 'PRJ-10245', ok: 20, total: 25, status: '部分失败', note: '5 台设备通讯超时' },
-    { name: '朝阳壹号院 E栋', id: 'PRJ-10246', ok: 23, total: 23, status: '成功', note: '—' },
+    { name: '朝阳壹号院 A栋', code: 'PRJ-10241', status: 'success' as const, at: '2025-06-18 15:30:06' },
+    { name: '朝阳壹号院 B栋', code: 'PRJ-10242', status: 'success' as const, at: '2025-06-18 15:30:09' },
+    { name: '朝阳壹号院 C栋', code: 'PRJ-10243', status: 'unknown' as const, at: '2025-06-18 15:30:21' },
+    { name: '朝阳壹号院 会所', code: 'PRJ-10245', status: 'failure' as const, at: '2025-06-18 15:30:24' },
+    { name: '朝阳壹号院 E栋', code: 'PRJ-10246', status: 'success' as const, at: '2025-06-18 15:30:27' },
   ],
 }
 

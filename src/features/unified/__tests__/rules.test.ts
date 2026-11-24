@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { UnifiedCtrlSetQuery_OperatingMode as Mode } from '@/api/gen/ctrl200_pb.js'
 import { DEFAULT_TEMP_RANGE, MODE_OPTIONS, TEMP_MAX, TEMP_MIN, TEMP_STEP, TEXT } from '../constants'
-import { changedFields, checkTemp, clampTemp, describeQuery, echoMismatches, resolveTempRange, tempAvailability, validateUnified, type UnifiedContext } from '../rules'
+import { changedFields, checkTemp, clampTemp, describeQuery, echoMismatches, echoVerdict, resolveTempRange, tempAvailability, validateUnified, type UnifiedContext } from '../rules'
 
 const ctx = (p: Partial<UnifiedContext> = {}): UnifiedContext => ({ projectId: 'p-0000000000000001', projectCode: '240829001', projectName: '测试项目0829', appCode: 1, online: true, ...p })
 
@@ -121,6 +121,29 @@ describe('echoMismatches（逐字段核对）', () => {
       { field: 'systemMode', kind: 'missing', message: TEXT.echoMissing(TEXT.systemMode) },
       { field: 'roomTemp', kind: 'differ', message: TEXT.echoDiffer(TEXT.roomTemp, '24.5°C', '22°C') },
     ])
+  })
+  it('不给键 = 回读接口读不到（未核对 unreadable）；给 null = 设备没回报（missing）', () => {
+    expect(echoMismatches({ systemSwitch: 1, systemMode: 0, roomSwitch: 1, roomTemp: -1 }, { roomSwitch: null })).toEqual([
+      { field: 'systemSwitch', kind: 'unreadable', message: TEXT.echoUnreadable(TEXT.systemSwitch) },
+      { field: 'roomSwitch', kind: 'missing', message: TEXT.echoMissing(TEXT.roomSwitch) },
+    ])
+  })
+  it('逐房间核对：有读到不一致 → differ（标出几个房间）；读到的都一致但有房间没回报 → missing；全部一致 → 空', () => {
+    const q2 = { systemSwitch: -1, systemMode: 0, roomSwitch: 1, roomTemp: -1 }
+    expect(echoMismatches(q2, { roomSwitch: null, perRoom: { roomSwitch: [1, 0, null] } })).toEqual([
+      { field: 'roomSwitch', kind: 'differ', message: TEXT.echoDiffer(TEXT.roomSwitch, TEXT.on, TEXT.off) + TEXT.echoPart(3, 1) },
+    ])
+    expect(echoMismatches(q2, { roomSwitch: null, perRoom: { roomSwitch: [1, null] } })).toEqual([{ field: 'roomSwitch', kind: 'missing', message: TEXT.echoMissing(TEXT.roomSwitch) }])
+    expect(echoMismatches(q2, { roomSwitch: null, perRoom: { roomSwitch: [] } })).toEqual([{ field: 'roomSwitch', kind: 'missing', message: TEXT.echoMissing(TEXT.roomSwitch) }])
+    expect(echoMismatches(q2, { roomSwitch: 1, perRoom: { roomSwitch: [1, 1] } })).toEqual([])
+  })
+  it('echoVerdict：有 differ → unchanged；只有 missing / unreadable → unverifiable；空 → applied', () => {
+    expect(echoVerdict([])).toBe('applied')
+    expect(echoVerdict([{ field: 'roomSwitch', kind: 'missing', message: '' }, { field: 'roomTemp', kind: 'differ', message: '' }])).toBe('unchanged')
+    expect(echoVerdict([{ field: 'systemSwitch', kind: 'unreadable', message: '' }])).toBe('unverifiable')
+    // 有离线房间、没有不一致 → 结果未知
+    expect(echoVerdict([], { roomSwitch: 1, offline: 1 })).toBe('unknown')
+    expect(echoVerdict([{ field: 'roomSwitch', kind: 'differ', message: '' }], { offline: 1 })).toBe('unchanged')
   })
   it('回读为空：所有下发字段都算没读到', () => {
     expect(echoMismatches(q, null).map((m) => [m.field, m.kind])).toEqual([['systemSwitch', 'missing'], ['systemMode', 'missing'], ['roomTemp', 'missing']])

@@ -5,22 +5,22 @@ import type { ApiErrorKind } from '@/api/errors'
 import { ECHO_FIELDS, type EchoField, type IssueCode } from './rules'
 
 export type UnifiedLogEvent =
-  | 'confirm' | 'cancel' | 'blocked' | 'aborted' | 'read-before' | 'send' | 'read-after' | 'success' | 'failure' | 'unknown'
+  | 'confirm' | 'cancel' | 'blocked' | 'aborted' | 'read-before' | 'send' | 'read-after' | 'success' | 'unapplied' | 'unverifiable' | 'failure' | 'unknown'
 
 /** 流程里的固定代码 */
 export type FlowCode =
   | 'OK' | 'VERIFIED' | 'NOT_VERIFIED' | 'ECHO_MISMATCH' | 'READ_FAILED' | 'PROJECT_CHANGED' | 'ABORTED'
-  | 'NOT_SENT' | 'REJECTED' | 'UNKNOWN'
+  | 'NOT_SENT' | 'REJECTED' | 'UNKNOWN' | 'REPLY_OK'
 export type LogCode = FlowCode | IssueCode
 
 const LOG_CODES = new Set<string>([
-  'OK', 'VERIFIED', 'NOT_VERIFIED', 'ECHO_MISMATCH', 'READ_FAILED', 'PROJECT_CHANGED', 'ABORTED', 'NOT_SENT', 'REJECTED', 'UNKNOWN',
+  'OK', 'VERIFIED', 'NOT_VERIFIED', 'ECHO_MISMATCH', 'READ_FAILED', 'PROJECT_CHANGED', 'ABORTED', 'NOT_SENT', 'REJECTED', 'UNKNOWN', 'REPLY_OK',
   'NO_PROJECT', 'OFFLINE', 'BAD_SWITCH', 'BAD_MODE', 'TEMP_DISABLED', 'TEMP_INVALID', 'TEMP_WHILE_ROOM_OFF', 'NO_CHANGES',
 ] satisfies LogCode[])
 const ERROR_KINDS = new Set<string>([
   'unauthenticated', 'forbidden', 'unavailable', 'timeout', 'network', 'bad_request', 'server', 'ctrl', 'write_blocked', 'aborted',
 ] satisfies ApiErrorKind[])
-const EVENTS = new Set<string>(['confirm', 'cancel', 'blocked', 'aborted', 'read-before', 'send', 'read-after', 'success', 'failure', 'unknown'] satisfies UnifiedLogEvent[])
+const EVENTS = new Set<string>(['confirm', 'cancel', 'blocked', 'aborted', 'read-before', 'send', 'read-after', 'success', 'unapplied', 'unverifiable', 'failure', 'unknown'] satisfies UnifiedLogEvent[])
 const FIELDS = new Set<string>(ECHO_FIELDS)
 /** 项目编号：只允许数字（如 240829001），其他一律不记 */
 const PROJECT_CODE = /^\d{1,20}$/

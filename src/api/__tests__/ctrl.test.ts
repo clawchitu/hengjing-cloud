@@ -34,6 +34,12 @@ const ROOM = {
 }
 
 describe('ctrl 编解码', () => {
+  it('200 的 switch / set_temp 是普通 proto3 标量：值为 0 时不上线，解码为 0（关），是真实读数', () => {
+    const r = decodeReply(pb.RoomTemperatureDataGetReplySchema, encodeMessage(pb.RoomTemperatureDataGetReplySchema, { data: [{ id: 1, name: '房间11', temperature: 22 }] })) as { data: Array<Record<string, unknown>> }
+    expect(r.data[0].switch).toBe(0)
+    expect(r.data[0].setTemp).toBe(0)
+  })
+
   it('11 条消息都有路由和 Query/Reply；写消息正好是 201/203/204/206', () => {
     expect(Object.keys(CTRL)).toEqual(['200', '201', '202', '203', '204', '205', '206', '207', '208', '209', '210'])
     expect(Object.entries(CTRL).filter(([, d]) => 'write' in d).map(([k]) => k)).toEqual(['201', '203', '204', '206'])
@@ -97,7 +103,7 @@ describe('ctrl 编解码', () => {
 describe('callCtrl', () => {
   beforeEach(() => {
     __resetHttpForTests(); clearTokens()
-    writeTokens({ accessToken: 'A1', refreshToken: 'R1', expiresAt: Date.now() + 3600_000 })
+    writeTokens({ accessToken: `h.${btoa(JSON.stringify({ sub: 'u1' }))}.s`, refreshToken: 'R1', expiresAt: Date.now() + 3600_000 })
     setCurrentUserId('u1')
   })
   afterEach(() => { vi.unstubAllGlobals(); setConfig(null) })
@@ -174,7 +180,7 @@ describe('callCtrl', () => {
 describe('写防护按项目 code：201/203/204/206 与批量统一控制', () => {
   beforeEach(() => {
     __resetHttpForTests(); clearTokens()
-    writeTokens({ accessToken: 'A1', refreshToken: 'R1', expiresAt: Date.now() + 3600_000 })
+    writeTokens({ accessToken: `h.${btoa(JSON.stringify({ sub: 'u1' }))}.s`, refreshToken: 'R1', expiresAt: Date.now() + 3600_000 })
     setCurrentUserId('u1')
   })
   afterEach(() => { vi.unstubAllGlobals(); setConfig(null) })
@@ -358,7 +364,7 @@ describe('写消息不依赖 proto 默认值', () => {
 })
 
 describe('写接口只有一个入口', () => {
-  beforeEach(() => { writeTokens({ accessToken: 'A1', refreshToken: 'R1', expiresAt: Date.now() + 3600_000 }) })
+  beforeEach(() => { writeTokens({ accessToken: `h.${btoa(JSON.stringify({ sub: 'u1' }))}.s`, refreshToken: 'R1', expiresAt: Date.now() + 3600_000 }) })
   afterEach(() => { vi.unstubAllGlobals(); setConfig(null) })
 
   it('request() 直接请求写接口路径一律拒绝（测试环境也一样），不发请求', async () => {
