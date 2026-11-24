@@ -7,5 +7,7 @@
 //                 相对路径时按此项判断，不写一律当生产环境处理。
 // dataSource      'mock'（演示数据）| 'real'（真实接口）。
 // writeMode       'test-only'（默认：只在测试环境允许下发）| 'off'（全部拦截）| 'on'（生产环境也允许，须负责人确认）。
-// writeProjectIds 非空时只允许对名单里的项目下发。
+// writeProjectCodes 下发白名单，填项目 code（如 '240829001'，不是后端实体 id）。
+//                 不写默认 ['260911001', '240829001']；写 [] 即拒绝所有下发。
+//                 构建时也可用 VITE_WRITE_PROJECT_CODES（逗号分隔）。
 window.__HJC_CONFIG__ = {}

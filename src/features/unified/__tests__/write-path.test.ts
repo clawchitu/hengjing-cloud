@@ -12,7 +12,8 @@ import { createUnifiedController, defaultSender } from '../machine'
 import { bindUnifiedControl } from '../hooks'
 import type { UnifiedContext } from '../rules'
 
-const CTX: UnifiedContext = { projectId: 'p-test-0829-000001', projectCode: '240829001', appCode: 1, online: true }
+// S6a 之后 projectId 是后端实体 id、projectCode 是 240829001 这种 code：白名单按 code，请求体用 id
+const CTX: UnifiedContext = { projectId: '66cfd7959fb60d63c917fd0a', projectCode: '240829001', appCode: 1, online: true }
 const ok = () => json({ body: encodeMessage(pb.UnifiedCtrlSetReplySchema, { success: true }) })
 
 beforeEach(() => {
@@ -36,8 +37,8 @@ describe('默认下发经统一写入口', () => {
     expect(decodeReply(pb.UnifiedCtrlSetQuerySchema, body.body)).toEqual({ systemSwitch: -1, systemMode: 0, roomSwitch: -1, roomTemp: 25.5 })
   })
 
-  it('写防护拦截（writeMode=off / 不在名单）→ not-sent，没有任何请求', async () => {
-    for (const cfg of [{ writeMode: 'off' as const }, { writeProjectIds: ['someone-else'] }]) {
+  it('写防护拦截（writeMode=off / code 不在名单 / 名单为空 / 名单里写的是 id）→ not-sent，没有任何请求', async () => {
+    for (const cfg of [{ writeMode: 'off' as const }, { writeProjectCodes: ['260911001'] }, { writeProjectCodes: [] }, { writeProjectCodes: [CTX.projectId] }]) {
       setConfig({ apiBase: '/api', apiEnv: 'test', ...cfg })
       const be = fakeBackend({ '/ctrl/unified-ctrl-set': ok })
       const ctl = createUnifiedController({ getContext: () => CTX, readBack: async () => ({}), toEcho: () => ({ roomTemp: 25.5, roomSwitch: 1 }), log: () => {} })
@@ -48,7 +49,7 @@ describe('默认下发经统一写入口', () => {
   })
 
   it('写防护拦截时日志只有代码，没有文案和完整项目 id', async () => {
-    setConfig({ apiBase: '/api', apiEnv: 'test', writeProjectIds: ['someone-else'] })
+    setConfig({ apiBase: '/api', apiEnv: 'test', writeProjectCodes: ['260911001'] })
     fakeBackend({})
     const logs: unknown[] = []
     const ctl = createUnifiedController({ getContext: () => CTX, readBack: async () => ({}), toEcho: () => ({}), log: (e) => logs.push(e) })
@@ -61,10 +62,19 @@ describe('默认下发经统一写入口', () => {
     expect(text).not.toContain(CTX.projectId)
   })
 
+  it('项目 code 缺失或为空（上下文数据不全）→ not-sent，没有任何请求', async () => {
+    setConfig({ apiBase: '/api', apiEnv: 'test' })
+    for (const projectCode of ['', undefined as unknown as string]) {
+      const be = fakeBackend({ '/ctrl/unified-ctrl-set': ok })
+      await expect(defaultSender({ id: CTX.projectId, code: projectCode }, { systemSwitch: 1, systemMode: 0, roomSwitch: -1, roomTemp: -1 })).rejects.toMatchObject({ kind: 'write_blocked' })
+      expect(be.calls).toHaveLength(0)
+    }
+  })
+
   it('生产环境默认拦截', async () => {
     setConfig({ apiBase: '/api', apiEnv: 'prod' })
     const be = fakeBackend({ '/ctrl/unified-ctrl-set': ok })
-    await expect(defaultSender(CTX.projectId, { systemSwitch: 1, systemMode: 0, roomSwitch: -1, roomTemp: -1 })).rejects.toMatchObject({ kind: 'write_blocked' })
+    await expect(defaultSender({ id: CTX.projectId, code: CTX.projectCode }, { systemSwitch: 1, systemMode: 0, roomSwitch: -1, roomTemp: -1 })).rejects.toMatchObject({ kind: 'write_blocked' })
     expect(be.calls).toHaveLength(0)
   })
 

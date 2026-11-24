@@ -5,7 +5,7 @@ import { can, isDealer } from '../auth'
 describe('运行时配置', () => {
   it('默认：/api、演示数据、按生产处理、超时 10/12 秒', () => {
     expect(resolveConfig([])).toEqual({
-      apiBase: '/api', apiEnv: 'prod', dataSource: 'mock', writeMode: 'test-only', writeProjectIds: [],
+      apiBase: '/api', apiEnv: 'prod', dataSource: 'mock', writeMode: 'test-only', writeProjectCodes: ['260911001', '240829001'],
       requestTimeoutMs: 10_000, ctrlTimeoutMs: 12_000,
     })
   })
@@ -24,6 +24,18 @@ describe('运行时配置', () => {
   it('相对路径时可显式声明 apiEnv（Worker 代理到测试环境）', () => {
     expect(resolveConfig([{ apiBase: '/api', apiEnv: 'test' }]).apiEnv).toBe('test')
     expect(resolveConfig([{ apiBase: '/api', apiEnv: 'staging' }]).apiEnv).toBe('prod')
+  })
+  it('下发白名单 writeProjectCodes：默认两个测试项目 code；可覆盖；空名单保持为空；非法值按空名单', () => {
+    expect(resolveConfig([]).writeProjectCodes).toEqual(['260911001', '240829001'])
+    expect(resolveConfig([{ writeProjectCodes: ['240829001'] }]).writeProjectCodes).toEqual(['240829001'])
+    expect(resolveConfig([{ writeProjectCodes: [] }]).writeProjectCodes).toEqual([])
+    // 环境变量形式：逗号分隔，空串即空名单
+    expect(resolveConfig([{ writeProjectCodes: ' 240829001 , ,260911001' }]).writeProjectCodes).toEqual(['240829001', '260911001'])
+    expect(resolveConfig([{ writeProjectCodes: '' }]).writeProjectCodes).toEqual([])
+    // 非字符串元素丢弃（不转成字符串），其他类型按空名单
+    expect(resolveConfig([{ writeProjectCodes: [240829001, '', '260911001', null] }]).writeProjectCodes).toEqual(['260911001'])
+    expect(resolveConfig([{ writeProjectCodes: 240829001 }]).writeProjectCodes).toEqual([])
+    expect(resolveConfig([{ writeProjectCodes: { a: '240829001' } }]).writeProjectCodes).toEqual([])
   })
   it('域名判断', () => {
     expect(envOfUrl('https://test.cosyhome.com.cn:9443/v1')).toBe('test')

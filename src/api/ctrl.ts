@@ -15,7 +15,7 @@ import { base64Decode, base64Encode, BinaryReader, WireType } from '@bufbuild/pr
 import { getCurrentUserId } from './auth'
 import { getConfig } from './config'
 import { ApiError } from './errors'
-import { type WriteOp } from './guard'
+import { type WriteOp, type WriteProject } from './guard'
 import { request, requestWrite } from './http'
 import * as pb from './gen/ctrl200_pb.js'
 
@@ -232,22 +232,21 @@ export async function callCtrl<T extends ReadCtrlType>(type: T, projectId: strin
  * 写 ctrl 消息（201/203/204/206）。Query 必须完整（用 build* 组装），经 requestWrite() 过写防护；
  * 不重试，超时提示「结果未知」，由页面回读确认。
  */
-export async function writeCtrl<T extends WriteCtrlType>(type: T, projectId: string, query: WriteQuery<T>, opts: CtrlOptions = {}): Promise<CtrlReply<T>> {
+export async function writeCtrl<T extends WriteCtrlType>(type: T, project: WriteProject, query: WriteQuery<T>, opts: CtrlOptions = {}): Promise<CtrlReply<T>> {
   if (!isWriteCtrl(type)) throw new ApiError('bad_request', `不是写消息：${type}`)
   const def: CtrlDef = CTRL[type]
   validateWriteQuery(def.query, query)
-  const res = await requestWrite<{ body?: string }>(def.write!, [projectId],
-    { project_id: projectId, user_id: opts.userId ?? getCurrentUserId(), body: encodeMessage(def.query, query) },
+  const res = await requestWrite<{ body?: string }>(def.write!, [project],
+    ([p]) => ({ project_id: p.id, user_id: opts.userId ?? getCurrentUserId(), body: encodeMessage(def.query, query) }),
     { timeoutMs: getConfig().ctrlTimeoutMs, signal: opts.signal })
   return decodeReply(def.reply, res.body) as CtrlReply<T>
 }
 
 /** 批量统一控制：POST /ctrl/unified-ctrls-send（操作人由后端取登录用户，不传 user_id） */
-export async function sendUnifiedCtrls(projectIds: string[], query: WriteQuery<203>) {
-  const ids = [...new Set(projectIds)]
+export async function sendUnifiedCtrls(projects: readonly WriteProject[], query: WriteQuery<203>) {
   validateWriteQuery(pb.UnifiedCtrlSetQuerySchema, query)
-  return requestWrite<{ batch_id?: string; total?: number }>('unified-ctrls-send', ids,
-    { project_ids: ids, body: encodeMessage(pb.UnifiedCtrlSetQuerySchema, query) },
+  return requestWrite<{ batch_id?: string; total?: number }>('unified-ctrls-send', projects,
+    (allowed) => ({ project_ids: allowed.map((p) => p.id), body: encodeMessage(pb.UnifiedCtrlSetQuerySchema, query) }),
     { timeoutMs: getConfig().ctrlTimeoutMs })
 }
 

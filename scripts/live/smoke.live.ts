@@ -13,7 +13,7 @@ import { readAccount } from './keychain'
 setConfig({ apiBase: TEST_API_ORIGIN, dataSource: 'real' })
 if (getConfig().apiEnv !== 'test') throw new Error('联调脚本只允许连测试环境')
 
-interface CtrlProject { id: string; name?: string; online?: boolean }
+interface CtrlProject { id: string; code?: string; name?: string; online?: boolean }
 
 describe('测试环境只读联调', () => {
   it('平台账号：login → me → ctrl/projects → ctrl 205 读 → refresh', async () => {
@@ -36,8 +36,10 @@ describe('测试环境只读联调', () => {
     const sensors = await callCtrl(207, online[0].id)
     console.log(`207 空气传感器：${sensors.data.length} 个`)
 
-    // 写防护：测试环境放行判断（不真正下发），生产配置拦截
-    expect(checkWrite('ctrl-206', [online[0].id]).ok).toBe(true)
+    // 写防护：只做放行判断（不真正下发）。白名单按 code 比对：在名单内才放行，名单外拒绝
+    const target = { id: online[0].id, code: online[0].code ?? '' }
+    expect(checkWrite('ctrl-206', [target]).ok).toBe(getConfig().writeProjectCodes.includes(target.code))
+    expect(checkWrite('ctrl-206', [{ id: target.id, code: '' }]).ok).toBe(false)
 
     // 只断言布尔值，失败时日志里不会出现令牌原文
     const before = readTokens()!

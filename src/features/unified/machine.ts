@@ -14,6 +14,7 @@
 // - abort()：页面卸载或切换项目时调用。发送前的流程立即终止；已经发出的下发无法撤回，照常走完回读。
 import { writeCtrl, type CtrlReply, type WriteQuery } from '@/api/ctrl'
 import { ApiError, isApiError, type ApiErrorKind } from '@/api/errors'
+import type { WriteProject } from '@/api/guard'
 import { TEXT } from './constants'
 import { consoleLogger, makeEntry, type EntryInput, type UnifiedLogEvent, type UnifiedLogger } from './log'
 import { changedFields, describeQuery, echoMismatches, validateUnified, type EchoMismatch, type Issue, type UnifiedContext, type UnifiedDraft, type UnifiedEcho } from './rules'
@@ -89,8 +90,8 @@ export function transition<S>(s: UnifiedState<S>, e: UnifiedEvent<S>): UnifiedSt
 }
 
 /** 下发函数：默认走 S4 统一写入口 writeCtrl(203)（内部 requestWrite() 过写防护、不重试）。不传取消信号：发出后不中止 */
-export type UnifiedSender = (projectId: string, query: WriteQuery<203>) => Promise<CtrlReply<203>>
-export const defaultSender: UnifiedSender = (projectId, query) => writeCtrl(203, projectId, query)
+export type UnifiedSender = (project: WriteProject, query: WriteQuery<203>) => Promise<CtrlReply<203>>
+export const defaultSender: UnifiedSender = (project, query) => writeCtrl(203, project, query)
 
 export interface UnifiedDeps<S> {
   /** 取当前项目信息（S6a 合并前由页面注入）；确认时和发送前都会再取一次复核 */
@@ -209,7 +210,7 @@ export function createUnifiedController<S>(deps: UnifiedDeps<S>): UnifiedControl
     // 3. 下发一次，不重试。sentGen 在调用 send 的同一刻记下：从这里起 abort() 视为已发出
     let pending: Promise<unknown>
     sentGen = myGen
-    try { pending = send(target.projectId, query) } catch (e) { pending = Promise.reject(e) }
+    try { pending = send({ id: target.projectId, code: target.projectCode }, query) } catch (e) { pending = Promise.reject(e) }
 
     write('read-before', target, { codes: ['OK'] })
     dispatch({ type: 'STEP', step: 'send', before })

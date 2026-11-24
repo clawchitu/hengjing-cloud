@@ -15,7 +15,7 @@
 // request() 遇到写接口路径直接拒绝。
 import { getConfig } from './config'
 import { ApiError, errorFromResponse, errorFromThrown } from './errors'
-import { assertWriteAllowed, isNonCanonicalPath, isWritePath, WRITE_ROUTES, type WriteOp } from './guard'
+import { assertWriteAllowed, isNonCanonicalPath, isWritePath, WRITE_ROUTES, type WriteOp, type WriteProject } from './guard'
 import { clearTokens, jwtSub, readTokens, tokensFromResponse, writeTokens, type Tokens } from './tokens'
 
 export interface RequestOptions {
@@ -190,11 +190,13 @@ export async function request<T>(path: string, opts: RequestOptions = {}): Promi
 }
 
 /**
- * 唯一的写入口：路径由写操作决定，发送前过写操作防护；不自动重试；
+ * 唯一的写入口：路径由写操作决定，发送前过写操作防护（按项目 code 比对白名单）；不自动重试；
  * 超时或断网时结果未知（请求可能已经到达控制屏），提示页面回读确认，不重发。
+ * 请求体由 buildBody 用防护通过后的项目快照生成（只用其中的 id），保证发出去的就是校验过的项目。
  */
-export async function requestWrite<T>(op: WriteOp, projectIds: readonly string[], body: unknown, opts: Omit<RequestOptions, 'body' | 'method' | 'auth'> = {}): Promise<T> {
-  assertWriteAllowed(op, projectIds)
+export async function requestWrite<T>(op: WriteOp, projects: readonly WriteProject[], buildBody: (allowed: readonly WriteProject[]) => unknown, opts: Omit<RequestOptions, 'body' | 'method' | 'auth'> = {}): Promise<T> {
+  const allowed = Object.freeze(assertWriteAllowed(op, projects))
+  const body = buildBody(allowed)
   try {
     return await authed<T>(WRITE_ROUTES[op], { ...opts, method: 'POST', body })
   } catch (e) {
