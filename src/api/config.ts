@@ -32,11 +32,11 @@ declare global {
 // vite.config.ts 注入：开发服务器 /api 代理的目标地址（构建产物里为空串）
 declare const __HJC_DEV_PROXY_TARGET__: string | undefined
 
-const isAbsolute = (u: string) => /^https?:\/\//i.test(u)
+const isAbsolute = (u: string) => /^(https?:)?\/\//i.test(u)
 
 /** 按域名判断完整地址属于哪个环境；不认识的域名一律当生产 */
 export function envOfUrl(url: string): ApiEnv {
-  try { return TEST_HOSTS.has(new URL(url).hostname) ? 'test' : 'prod' } catch { return 'prod' }
+  try { return TEST_HOSTS.has(new URL(url.startsWith('//') ? 'https:' + url : url).hostname) ? 'test' : 'prod' } catch { return 'prod' }
 }
 
 type Input = Partial<Omit<RuntimeConfig, 'apiEnv'>> & { apiEnv?: string }
@@ -48,7 +48,8 @@ export function resolveConfig(layers: Input[], devProxyTarget = ''): RuntimeConf
   let apiEnv: ApiEnv
   if (isAbsolute(apiBase)) apiEnv = envOfUrl(apiBase)
   else if (m.apiEnv === 'test' || m.apiEnv === 'prod') apiEnv = m.apiEnv
-  else if (devProxyTarget) apiEnv = envOfUrl(devProxyTarget)
+  // 开发代理只转发 /api，其他相对路径不知道指向哪里
+  else if (devProxyTarget && apiBase === '/api') apiEnv = envOfUrl(devProxyTarget)
   else apiEnv = 'prod'
   const writeMode: WriteMode = m.writeMode === 'off' || m.writeMode === 'on' ? m.writeMode : 'test-only'
   return {

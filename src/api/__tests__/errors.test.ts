@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { ApiError, errorFromResponse, errorFromThrown, isRetryable } from '../errors'
+import { ApiError, errorFromResponse, errorFromThrown, isRetryable, redact } from '../errors'
+import { clearTokens, writeTokens } from '../tokens'
 
 const J = 'application/json'
 describe('错误归一（依据实测记录-1124）', () => {
@@ -40,5 +41,22 @@ describe('错误归一（依据实测记录-1124）', () => {
       expect(isRetryable(new ApiError(k, ''))).toBe(false)
     }
     expect(isRetryable(new Error('x'))).toBe(false)
+  })
+})
+
+describe('令牌脱敏', () => {
+  const jwt = 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ1MSJ9.c2lnbmF0dXJlLXZhbHVl'
+  it('JWT、Bearer 值、*_token 字段值都替换成 ***', () => {
+    expect(redact(`bad ${jwt} end`)).toBe('bad *** end')
+    expect(redact('Authorization: Bearer abcdefgh123')).toBe('Authorization: Bearer ***')
+    expect(redact('{"refresh_token":"r-123456789","x":1}')).toBe('{"refresh_token":"***","x":1}')
+    expect(redact('refreshToken=zzzzzzzzzz')).toBe('refreshToken=***')
+  })
+  it('当前存储的令牌原文在任何 ApiError 信息里都被替换', () => {
+    writeTokens({ accessToken: 'opaque-access-0001', refreshToken: 'opaque-refresh-0002', expiresAt: Date.now() + 1000 })
+    const e = new ApiError('server', '刷新失败 opaque-refresh-0002 / opaque-access-0001')
+    expect(e.message).toBe('刷新失败 *** / ***')
+    expect(errorFromResponse(500, J, `{"code":13,"message":"bad opaque-refresh-0002"}`).message).toBe('bad ***')
+    clearTokens()
   })
 })

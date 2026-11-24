@@ -1,7 +1,6 @@
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it } from 'vitest'
 import { resolveConfig } from '../config'
-import { assertWriteAllowed, checkWrite, guardedWrite, WRITE_OPS } from '../guard'
-import { setConfig } from '../config'
+import { assertWriteAllowed, checkWrite, isWritePath, WRITE_OPS } from '../guard'
 
 const TEST = resolveConfig([{ apiBase: 'https://test.cosyhome.com.cn:9443/v1' }])
 const PROD = resolveConfig([{ apiBase: 'https://api.cosyhome.com.cn/v1' }])
@@ -46,14 +45,16 @@ describe('写操作防护', () => {
     expect(checkWrite('ctrl-999' as never, ['p1'], TEST).ok).toBe(false)
   })
 
-  it('assertWriteAllowed 抛 write_blocked；guardedWrite 被拦时不执行', async () => {
+  it('assertWriteAllowed 抛 write_blocked', () => {
     expect(() => assertWriteAllowed('ctrl-204', ['p1'], PROD)).toThrow(expect.objectContaining({ kind: 'write_blocked' }))
-    setConfig({ apiBase: 'https://api.cosyhome.com.cn/v1' })
-    const run = vi.fn(async () => 1)
-    await expect(guardedWrite('ctrl-204', ['p1'], run)).rejects.toMatchObject({ kind: 'write_blocked' })
-    expect(run).not.toHaveBeenCalled()
-    setConfig({ apiBase: 'https://test.cosyhome.com.cn:9443/v1' })
-    await expect(guardedWrite('ctrl-204', ['p1'], run)).resolves.toBe(1)
-    setConfig(null)
+    expect(() => assertWriteAllowed('ctrl-204', ['p1'], TEST)).not.toThrow()
+  })
+
+  it('写接口路径识别', () => {
+    expect(isWritePath('/ctrl/room-temperature-set')).toBe(true)
+    expect(isWritePath('/v1/ctrl/unified-ctrls-send')).toBe(true)
+    expect(isWritePath('/ctrl/room-temperature-data-get')).toBe(false)
+    expect(isWritePath('/ctrl/unified-ctrls-records')).toBe(false)
+    expect(isWritePath('/ctrl/projects')).toBe(false)
   })
 })

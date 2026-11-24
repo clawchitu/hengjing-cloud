@@ -2,10 +2,11 @@ import { create, toBinary } from '@bufbuild/protobuf'
 import { base64Encode, BinaryReader, BinaryWriter, WireType } from '@bufbuild/protobuf/wire'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { setCurrentUserId } from '../auth'
-import { CTRL, callCtrl, decodeReply, encodeMessage, sendUnifiedCtrls } from '../ctrl'
+import { CTRL, buildProjectRoomSwitchSet, buildRoomTemperatureSet, buildRunningCtrlSet, buildUnifiedCtrlSet, callCtrl, decodeReply, encodeMessage, sendUnifiedCtrls, validateWriteQuery, writeCtrl } from '../ctrl'
 import { setConfig } from '../config'
 import * as pb from '../gen/ctrl200_pb.js'
-import { __resetHttpForTests } from '../http'
+import { __resetHttpForTests, request, requestWrite } from '../http'
+import { ctrlQuery } from '../query'
 import { clearTokens, writeTokens } from '../tokens'
 import { withUnchanged } from '../values'
 import { fakeBackend, json } from './helpers'
@@ -116,27 +117,99 @@ describe('callCtrl', () => {
   it('写消息在生产环境被拦截，不发请求', async () => {
     setConfig({ apiBase: 'https://api.cosyhome.com.cn/v1' })
     const be = fakeBackend({})
-    await expect(callCtrl(206, 'p1', { switch: 1 })).rejects.toMatchObject({ kind: 'write_blocked' })
-    await expect(sendUnifiedCtrls(['p1'], { roomTemp: 26 })).rejects.toMatchObject({ kind: 'write_blocked' })
+    await expect(writeCtrl(206, 'p1', buildProjectRoomSwitchSet(true))).rejects.toMatchObject({ kind: 'write_blocked' })
+    await expect(sendUnifiedCtrls(['p1'], buildUnifiedCtrlSet({ roomTemp: 26 }))).rejects.toMatchObject({ kind: 'write_blocked' })
     expect(be.calls).toHaveLength(0)
   })
 
-  it('写消息在测试环境放行；超时提示结果未知', async () => {
+  it('写消息在测试环境放行；超时提示结果未知，只发一次', async () => {
     setConfig({ apiBase: '/api', apiEnv: 'test', ctrlTimeoutMs: 20 })
-    vi.stubGlobal('fetch', (_u: string, init: RequestInit) => new Promise((_r, rej) => {
+    const fetchMock = vi.fn((_u: string, init: RequestInit) => new Promise((_r, rej) => {
       init.signal!.addEventListener('abort', () => rej(new DOMException('a', 'AbortError')))
     }))
-    await expect(callCtrl(201, 'p1', { equipmentId: 1, temperature: 26 })).rejects.toMatchObject({ kind: 'timeout', message: '未收到控制屏应答，下发结果未知' })
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(writeCtrl(201, 'p1', buildRoomTemperatureSet(1, { temperature: 26 }))).rejects.toMatchObject({ kind: 'timeout', message: '未收到控制屏应答，下发结果未知' })
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('写消息成功：201 只改温度时，其余字段编码后为 -1、末端为空', async () => {
+    setConfig({ apiBase: '/api', apiEnv: 'test' })
+    const be = fakeBackend({ '/ctrl/room-temperature-set': () => json({ body: encodeMessage(pb.RoomTemperatureSetReplySchema, { success: true }) }) })
+    await expect(writeCtrl(201, 'p1', buildRoomTemperatureSet(406658286, { temperature: 26 }))).resolves.toMatchObject({ success: true })
+    const sent = decodeReply(pb.RoomTemperatureSetQuerySchema, (be.calls[0].body as { body: string }).body)
+    expect(sent).toEqual({ equipmentId: 406658286, temperature: 26, humidity: -1, windSpeed: -1, eco: -1, switch: -1, endModes: [] })
   })
 
   it('批量统一控制：去重、不传 user_id、body 为 203 Query', async () => {
     setConfig({ apiBase: '/api', apiEnv: 'test' })
     const be = fakeBackend({ '/ctrl/unified-ctrls-send': () => json({ batch_id: 'b1', total: 2 }) })
-    const q = { systemSwitch: -1, systemMode: 0, roomSwitch: -1, roomTemp: 26 }
+    const q = buildUnifiedCtrlSet({ roomTemp: 26 })
+    expect(q).toEqual({ systemSwitch: -1, systemMode: 0, roomSwitch: -1, roomTemp: 26 })
     await expect(sendUnifiedCtrls(['p1', 'p2', 'p1'], q)).resolves.toEqual({ batch_id: 'b1', total: 2 })
     const body = be.calls[0].body as { project_ids: string[]; body: string; user_id?: string }
     expect(body.project_ids).toEqual(['p1', 'p2'])
     expect(body.user_id).toBeUndefined()
     expect(decodeReply(pb.UnifiedCtrlSetQuerySchema, body.body)).toEqual(q)
+  })
+})
+
+describe('写消息不依赖 proto 默认值', () => {
+  it('build* 把没改的标量填 -1', () => {
+    expect(buildRunningCtrlSet(9, '新风1', { dewPoint: 14 })).toEqual({ id: 9, name: '新风1', controlType: -1, dewPoint: 14, humiditySet: -1, windSpeed: -1, switch: -1 })
+    expect(buildProjectRoomSwitchSet(false)).toEqual({ switch: 0 })
+  })
+
+  it.each([
+    [201, { equipmentId: 1, temperature: 26 }, 'humidity'],
+    [203, { roomTemp: 26 }, 'systemSwitch'],
+    [204, { id: 1, name: 'x', controlType: 1 }, 'dewPoint'],
+    [206, {}, 'switch'],
+  ] as const)('%i 缺字段的写请求被拒绝，不发请求', async (type, q, missing) => {
+    setConfig({ apiBase: '/api', apiEnv: 'test' })
+    const be = fakeBackend({})
+    await expect(writeCtrl(type, 'p1', q as never)).rejects.toMatchObject({ kind: 'bad_request', message: expect.stringContaining(missing) })
+    expect(be.calls).toHaveLength(0)
+    setConfig(null)
+  })
+
+  it('NaN、嵌套末端缺字段也拒绝', () => {
+    expect(() => validateWriteQuery(pb.RoomTemperatureSetQuerySchema, { ...buildRoomTemperatureSet(1, {}), temperature: NaN })).toThrow(/temperature/)
+    expect(() => validateWriteQuery(pb.RoomTemperatureSetQuerySchema, buildRoomTemperatureSet(1, { endModes: [{ optionName: '风盘', type: 0 } as never] }))).toThrow(/endModes\[0\]\.isSelected/)
+  })
+})
+
+describe('写接口只有一个入口', () => {
+  beforeEach(() => { writeTokens({ accessToken: 'A1', refreshToken: 'R1', expiresAt: Date.now() + 3600_000 }) })
+  afterEach(() => { vi.unstubAllGlobals(); setConfig(null) })
+
+  it('request() 直接请求写接口路径一律拒绝（测试环境也一样），不发请求', async () => {
+    setConfig({ apiBase: '/api', apiEnv: 'test' })
+    const be = fakeBackend({})
+    for (const p of ['/ctrl/room-temperature-set', '/ctrl/unified-ctrl-set', '/ctrl/running-ctrl-set', '/ctrl/project-room-switch-set',
+      '/ctrl/unified-ctrls-send', 'ctrl/project-room-switch-set/', '/v1/ctrl/room-temperature-set?x=1', '/ctrl/some-new-set', '/ctrl/trans-ctrl-message']) {
+      await expect(request(p, { body: {} })).rejects.toMatchObject({ kind: 'write_blocked' })
+    }
+    expect(be.calls).toHaveLength(0)
+  })
+
+  it('callCtrl() 遇到写消息号拒绝', async () => {
+    setConfig({ apiBase: '/api', apiEnv: 'test' })
+    const be = fakeBackend({})
+    for (const t of [201, 203, 204, 206]) await expect(callCtrl(t as never, 'p1')).rejects.toMatchObject({ kind: 'write_blocked' })
+    expect(be.calls).toHaveLength(0)
+  })
+
+  it('requestWrite() 自带防护：生产 / writeMode=off 拦截', async () => {
+    const be = fakeBackend({})
+    setConfig({ apiBase: 'https://api.cosyhome.com.cn/v1' })
+    await expect(requestWrite('ctrl-206', ['p1'], {})).rejects.toMatchObject({ kind: 'write_blocked' })
+    setConfig({ apiBase: '/api', apiEnv: 'test', writeMode: 'off' })
+    await expect(requestWrite('unified-ctrls-send', ['p1'], {})).rejects.toMatchObject({ kind: 'write_blocked' })
+    expect(be.calls).toHaveLength(0)
+  })
+
+  it('ctrlQuery 只接受只读消息号', () => {
+    for (const t of [201, 203, 204, 206]) expect(() => ctrlQuery(t as never, 'p1')).toThrow(expect.objectContaining({ kind: 'write_blocked' }))
+    expect(ctrlQuery(205, 'p1').queryKey).toEqual(['ctrl', 205, 'p1', null])
   })
 })

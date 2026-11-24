@@ -2,6 +2,8 @@
 // 不存用户名和角色（角色每次从 /me 取，见方案第 2 节）。每次都从存储读取，
 // 这样别的标签页刷新令牌后，本页下一次请求自然拿到新值。
 
+import { ApiError, registerSecrets } from './errors'
+
 export interface Tokens {
   accessToken: string
   refreshToken: string
@@ -49,7 +51,13 @@ export function clearTokens() {
 
 /** 后端 login / refresh 的返回 → Tokens */
 export function tokensFromResponse(r: { access_token?: string; refresh_token?: string; expires_in?: number | string }, now = Date.now()): Tokens {
-  if (!r.access_token || !r.refresh_token) throw new Error('登录响应缺少令牌')
+  if (!r.access_token || !r.refresh_token) throw new ApiError('server', '登录响应缺少令牌')
   const sec = Number(r.expires_in) > 0 ? Number(r.expires_in) : 7200
   return { accessToken: r.access_token, refreshToken: r.refresh_token, expiresAt: now + sec * 1000 }
 }
+
+// 错误信息与日志脱敏时，把当前令牌原文也当作敏感串
+registerSecrets(() => {
+  const t = readTokens()
+  return t ? [t.accessToken, t.refreshToken] : []
+})

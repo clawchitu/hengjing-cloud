@@ -126,6 +126,35 @@ describe('令牌续期', () => {
     expect(readTokens()?.refreshToken).toBe('R1')
   })
 
+  it('刷新途中重新登录：旧刷新的结果不覆盖新会话', async () => {
+    login()
+    fakeBackend({ '/auth/refresh': async () => {
+      writeTokens({ accessToken: 'NEW', refreshToken: 'NEWR', expiresAt: Date.now() + HOUR }) // 模拟期间重新登录
+      return json({ access_token: 'A2', refresh_token: 'R2', expires_in: 7200 })
+    } })
+    await expect(refreshSession()).resolves.toMatchObject({ accessToken: 'NEW' })
+    expect(readTokens()?.refreshToken).toBe('NEWR')
+  })
+
+  it('刷新途中重新登录：旧刷新失败不清新会话', async () => {
+    login()
+    const expired = vi.fn()
+    onSessionExpired(expired)
+    fakeBackend({ '/auth/refresh': async () => {
+      writeTokens({ accessToken: 'NEW', refreshToken: 'NEWR', expiresAt: Date.now() + HOUR })
+      return json({ code: 16, message: 'invalid refresh_token' }, 401)
+    } })
+    await expect(refreshSession()).rejects.toMatchObject({ kind: 'unauthenticated' })
+    expect(readTokens()?.refreshToken).toBe('NEWR')
+    expect(expired).not.toHaveBeenCalled()
+  })
+
+  it('refresh 返回 200 但缺令牌 → server 错误', async () => {
+    login()
+    fakeBackend({ '/auth/refresh': () => json({}) })
+    await expect(refreshSession()).rejects.toMatchObject({ kind: 'server' })
+  })
+
   it('无权限（no permission）不触发续期', async () => {
     login()
     const be = fakeBackend({ '/weather': () => text('no permission', 403) })

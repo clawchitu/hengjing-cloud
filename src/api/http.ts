@@ -6,8 +6,12 @@
 // - access_token 过期前 60 秒主动续期；请求返回「未认证」（401 code 16 或网关 403 token err）时
 //   续期一次并重放一次，再失败就清掉登录态并通知 onSessionExpired。
 // 多标签页之间的互斥（Web Locks）在 S5 接入。
+//
+// 写接口只能走 requestWrite()（先过 guard.ts 防护、不重试、超时/断网提示结果未知）；
+// request() 遇到写接口路径直接拒绝。
 import { getConfig } from './config'
 import { ApiError, errorFromResponse, errorFromThrown } from './errors'
+import { assertWriteAllowed, isWritePath, WRITE_ROUTES, type WriteOp } from './guard'
 import { clearTokens, readTokens, tokensFromResponse, writeTokens, type Tokens } from './tokens'
 
 export interface RequestOptions {
@@ -94,10 +98,19 @@ export function refreshSession(): Promise<Tokens> {
       const r = await send<{ access_token?: string; refresh_token?: string; expires_in?: number }>(
         '/auth/refresh', { body: { refresh_token: cur.refreshToken } }, cur.accessToken)
       const next = tokensFromResponse(r)
+      // 刷新途中退出或重新登录了：不能用旧会话的结果覆盖新会话
+      const now = readTokens()
+      if (!now || now.refreshToken !== cur.refreshToken) {
+        if (now) return now
+        throw new ApiError('unauthenticated', '登录已过期，请重新登录')
+      }
       writeTokens(next)
       return next
     } catch (e) {
       const err = e instanceof ApiError ? e : errorFromThrown(e, false)
+      // 失败的是旧会话：存储里已是另一个会话（或已退出），不清它
+      const now = readTokens()
+      if (!now || now.refreshToken !== cur.refreshToken) throw err
       // 网络问题不等于令牌失效，不清登录态；令牌被拒才算过期
       if (err.kind === 'unauthenticated' || err.kind === 'forbidden' || err.kind === 'bad_request') {
         const expired = new ApiError('unauthenticated', '登录已过期，请重新登录', { status: err.status, code: err.code, cause: err })
@@ -121,7 +134,29 @@ async function freshAccessToken(): Promise<string | null> {
 // ---------------------------------------------------------------------------
 // 对外入口
 
+/** 普通请求（读接口、登录等）。写接口一律拒绝，须走 requestWrite() */
 export async function request<T>(path: string, opts: RequestOptions = {}): Promise<T> {
+  if (isWritePath(path)) throw new ApiError('write_blocked', `写接口只能经 requestWrite() 下发：${path}`)
+  return authed<T>(path, opts)
+}
+
+/**
+ * 唯一的写入口：路径由写操作决定，发送前过写操作防护；不自动重试；
+ * 超时或断网时结果未知（请求可能已经到达控制屏），提示页面回读确认，不重发。
+ */
+export async function requestWrite<T>(op: WriteOp, projectIds: readonly string[], body: unknown, opts: Omit<RequestOptions, 'body' | 'method' | 'auth'> = {}): Promise<T> {
+  assertWriteAllowed(op, projectIds)
+  try {
+    return await authed<T>(WRITE_ROUTES[op], { ...opts, method: 'POST', body })
+  } catch (e) {
+    if (e instanceof ApiError && (e.kind === 'timeout' || e.kind === 'network')) {
+      throw new ApiError(e.kind, e.kind === 'timeout' ? '未收到控制屏应答，下发结果未知' : '网络中断，下发结果未知', { status: e.status, code: e.code, cause: e })
+    }
+    throw e
+  }
+}
+
+async function authed<T>(path: string, opts: RequestOptions): Promise<T> {
   if (opts.auth === false) return send<T>(path, opts, null)
   const token = await freshAccessToken()
   if (!token) {

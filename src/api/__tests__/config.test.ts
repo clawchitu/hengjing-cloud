@@ -16,6 +16,10 @@ describe('运行时配置', () => {
   it('开发代理指向测试环境时 /api 按测试环境处理', () => {
     expect(resolveConfig([{ apiBase: '/api' }], TEST_API_ORIGIN).apiEnv).toBe('test')
     expect(resolveConfig([{ apiBase: '/api' }], 'https://api.cosyhome.com.cn/v1').apiEnv).toBe('prod')
+    // 代理只转发 /api，其他相对路径不沿用代理目标
+    expect(resolveConfig([{ apiBase: '/backend' }], TEST_API_ORIGIN).apiEnv).toBe('prod')
+    // 协议相对地址按域名判断
+    expect(resolveConfig([{ apiBase: '//api.cosyhome.com.cn/v1', apiEnv: 'test' }], TEST_API_ORIGIN).apiEnv).toBe('prod')
   })
   it('相对路径时可显式声明 apiEnv（Worker 代理到测试环境）', () => {
     expect(resolveConfig([{ apiBase: '/api', apiEnv: 'test' }]).apiEnv).toBe('test')

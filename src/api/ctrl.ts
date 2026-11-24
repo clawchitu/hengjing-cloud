@@ -15,8 +15,8 @@ import { base64Decode, base64Encode, BinaryReader, WireType } from '@bufbuild/pr
 import { getCurrentUserId } from './auth'
 import { getConfig } from './config'
 import { ApiError } from './errors'
-import { assertWriteAllowed, type WriteOp } from './guard'
-import { request } from './http'
+import { type WriteOp } from './guard'
+import { request, requestWrite } from './http'
 import * as pb from './gen/ctrl200_pb.js'
 
 interface CtrlDef { route: string; query: DescMessage; reply: DescMessage; write?: WriteOp }
@@ -106,8 +106,15 @@ function scanTopLevel(bytes: Uint8Array): { fields: Set<number>; field2?: string
 /** 解出 Reply；ctrl 业务失败时抛 ApiError('ctrl') */
 export function decodeReply(schema: DescMessage, body: string | undefined): unknown {
   const b64 = (body ?? '').replace(/\s+/g, '')
-  const bytes = b64 ? base64Decode(b64) : new Uint8Array()
-  const msg = toPlain(fromBinary(schema, bytes)) as Record<string, unknown>
+  let bytes: Uint8Array
+  let msg: Record<string, unknown>
+  try {
+    bytes = b64 ? base64Decode(b64) : new Uint8Array()
+    msg = toPlain(fromBinary(schema, bytes)) as Record<string, unknown>
+  } catch (e) {
+    if (e instanceof ApiError) throw e
+    throw new ApiError('server', '控制屏回复无法解析', { cause: e })
+  }
   const hasSuccess = schema.fields.some((f) => f.localName === 'success')
   if (hasSuccess) {
     if (msg.success !== true) throw new ApiError('ctrl', (msg.msg as string) || '下发失败')
@@ -122,40 +129,122 @@ export function decodeReply(schema: DescMessage, body: string | undefined): unkn
 }
 
 // ---------------------------------------------------------------------------
+// 写消息：每个字段都必须显式给出（类型必填 + 运行时校验），绝不依赖 proto3 默认值 0，
+// 因为 0 在这些字段上的含义是「关闭」「湿度控制」等真实指令。不改的标量传 -1，end_modes 不改传 []。
+
+export const WRITE_CTRL = [201, 203, 204, 206] as const
+export type WriteCtrlType = (typeof WRITE_CTRL)[number]
+export type ReadCtrlType = Exclude<CtrlType, WriteCtrlType>
+export const isWriteCtrl = (t: number): t is WriteCtrlType => (WRITE_CTRL as readonly number[]).includes(t)
+
+/** 写消息的完整 Query：所有字段必填 */
+export type WriteQuery<T extends WriteCtrlType> = CtrlQuery<T>
+
+/** 校验写消息每个字段都在且合法（数值有限、字符串、布尔、列表）；缺一个就拒绝下发 */
+export function validateWriteQuery(schema: DescMessage, q: unknown, path = ''): void {
+  if (!q || typeof q !== 'object') throw new ApiError('bad_request', `写消息缺少内容：${path || schema.name}`)
+  const o = q as Record<string, unknown>
+  for (const f of schema.fields) {
+    const name = path + f.localName
+    const v = o[f.localName]
+    if (v === undefined || v === null) throw new ApiError('bad_request', `写消息缺少字段：${name}`)
+    if (f.fieldKind === 'list') {
+      if (!Array.isArray(v)) throw new ApiError('bad_request', `写消息字段应为列表：${name}`)
+      if (f.listKind === 'message') v.forEach((x, i) => validateWriteQuery(f.message, x, `${name}[${i}].`))
+    } else if (f.fieldKind === 'message') {
+      validateWriteQuery(f.message, v, name + '.')
+    } else if (f.fieldKind === 'enum' || (f.fieldKind === 'scalar' && f.scalar !== ScalarType.STRING && f.scalar !== ScalarType.BOOL && f.scalar !== ScalarType.BYTES)) {
+      if (typeof v !== 'number' || !Number.isFinite(v)) throw new ApiError('bad_request', `写消息字段不是有效数值：${name}`)
+    } else if (f.fieldKind === 'scalar' && f.scalar === ScalarType.STRING) {
+      if (typeof v !== 'string') throw new ApiError('bad_request', `写消息字段应为字符串：${name}`)
+    } else if (f.fieldKind === 'scalar' && f.scalar === ScalarType.BOOL) {
+      if (typeof v !== 'boolean') throw new ApiError('bad_request', `写消息字段应为布尔值：${name}`)
+    }
+  }
+}
+
+const U = -1 // 后端约定：不变
+type Changes<T extends WriteCtrlType, Fixed extends string> = Partial<Omit<WriteQuery<T>, Fixed>>
+
+/** 201 房间温控设置：只改给出的项，其余标量 -1，末端不改传 [] */
+export function buildRoomTemperatureSet(equipmentId: number, changes: Changes<201, 'equipmentId'>): WriteQuery<201> {
+  return {
+    equipmentId,
+    temperature: changes.temperature ?? U,
+    humidity: changes.humidity ?? U,
+    windSpeed: changes.windSpeed ?? U,
+    eco: changes.eco ?? U,
+    switch: changes.switch ?? U,
+    endModes: changes.endModes ?? [],
+  }
+}
+
+/** 203 统一控制：开关/温度不改为 -1；运行模式是枚举，不改为 0（OPERATION_MODE_NONE） */
+export function buildUnifiedCtrlSet(changes: Changes<203, never>): WriteQuery<203> {
+  return {
+    systemSwitch: changes.systemSwitch ?? U,
+    systemMode: changes.systemMode ?? pb.UnifiedCtrlSetQuery_OperatingMode.OPERATION_MODE_NONE,
+    roomSwitch: changes.roomSwitch ?? U,
+    roomTemp: changes.roomTemp ?? U,
+  }
+}
+
+/** 204 运行控制设置：id、name 必给，其余不改为 -1 */
+export function buildRunningCtrlSet(id: number, name: string, changes: Changes<204, 'id' | 'name'>): WriteQuery<204> {
+  return {
+    id,
+    name,
+    controlType: changes.controlType ?? U,
+    dewPoint: changes.dewPoint ?? U,
+    humiditySet: changes.humiditySet ?? U,
+    windSpeed: changes.windSpeed ?? U,
+    switch: changes.switch ?? U,
+  }
+}
+
+/** 206 全部房间开关：必须明确 1 开 / 0 关 */
+export function buildProjectRoomSwitchSet(on: boolean): WriteQuery<206> {
+  return { switch: on ? 1 : 0 }
+}
+
+// ---------------------------------------------------------------------------
 // 调用
 
 export interface CtrlOptions { signal?: AbortSignal; userId?: string }
 
-/**
- * 调一条 ctrl 同步消息。写类消息（201/203/204/206）先过写操作防护；写操作超时不重发，
- * 提示「结果未知」，由页面回读确认。
- */
-export async function callCtrl<T extends CtrlType>(type: T, projectId: string, query?: Partial<CtrlQuery<T>>, opts: CtrlOptions = {}): Promise<CtrlReply<T>> {
+/** 只读 ctrl 消息（200/202/205/207–210）。写消息号直接拒绝，须用 writeCtrl() */
+export async function callCtrl<T extends ReadCtrlType>(type: T, projectId: string, query?: Partial<CtrlQuery<T>>, opts: CtrlOptions = {}): Promise<CtrlReply<T>> {
+  if (isWriteCtrl(type)) throw new ApiError('write_blocked', `写消息 ${type} 只能经 writeCtrl() 下发`)
   const def: CtrlDef = CTRL[type]
-  if (def.write) assertWriteAllowed(def.write, [projectId])
-  const body = encodeMessage(def.query, query ?? {})
-  try {
-    const res = await request<{ body?: string }>(`/ctrl/${def.route}`, {
-      body: { project_id: projectId, user_id: opts.userId ?? getCurrentUserId(), body },
-      timeoutMs: getConfig().ctrlTimeoutMs,
-      signal: opts.signal,
-    })
-    return decodeReply(def.reply, res.body) as CtrlReply<T>
-  } catch (e) {
-    if (def.write && e instanceof ApiError && e.kind === 'timeout') {
-      throw new ApiError('timeout', '未收到控制屏应答，下发结果未知', { status: e.status, code: e.code, cause: e })
-    }
-    throw e
-  }
+  const res = await request<{ body?: string }>(`/ctrl/${def.route}`, {
+    body: { project_id: projectId, user_id: opts.userId ?? getCurrentUserId(), body: encodeMessage(def.query, query ?? {}) },
+    timeoutMs: getConfig().ctrlTimeoutMs,
+    signal: opts.signal,
+  })
+  return decodeReply(def.reply, res.body) as CtrlReply<T>
+}
+
+/**
+ * 写 ctrl 消息（201/203/204/206）。Query 必须完整（用 build* 组装），经 requestWrite() 过写防护；
+ * 不重试，超时提示「结果未知」，由页面回读确认。
+ */
+export async function writeCtrl<T extends WriteCtrlType>(type: T, projectId: string, query: WriteQuery<T>, opts: CtrlOptions = {}): Promise<CtrlReply<T>> {
+  if (!isWriteCtrl(type)) throw new ApiError('bad_request', `不是写消息：${type}`)
+  const def: CtrlDef = CTRL[type]
+  validateWriteQuery(def.query, query)
+  const res = await requestWrite<{ body?: string }>(def.write!, [projectId],
+    { project_id: projectId, user_id: opts.userId ?? getCurrentUserId(), body: encodeMessage(def.query, query) },
+    { timeoutMs: getConfig().ctrlTimeoutMs, signal: opts.signal })
+  return decodeReply(def.reply, res.body) as CtrlReply<T>
 }
 
 /** 批量统一控制：POST /ctrl/unified-ctrls-send（操作人由后端取登录用户，不传 user_id） */
-export async function sendUnifiedCtrls(projectIds: string[], query: Partial<CtrlQuery<203>>) {
+export async function sendUnifiedCtrls(projectIds: string[], query: WriteQuery<203>) {
   const ids = [...new Set(projectIds)]
-  assertWriteAllowed('unified-ctrls-send', ids)
-  return request<{ batch_id?: string; total?: number }>('/ctrl/unified-ctrls-send', {
-    body: { project_ids: ids, body: encodeMessage(pb.UnifiedCtrlSetQuerySchema, query) },
-  })
+  validateWriteQuery(pb.UnifiedCtrlSetQuerySchema, query)
+  return requestWrite<{ batch_id?: string; total?: number }>('unified-ctrls-send', ids,
+    { project_ids: ids, body: encodeMessage(pb.UnifiedCtrlSetQuerySchema, query) },
+    { timeoutMs: getConfig().ctrlTimeoutMs })
 }
 
 /** 批量统一控制执行记录（只读） */

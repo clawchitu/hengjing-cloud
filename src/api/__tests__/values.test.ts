@@ -10,8 +10,12 @@ describe('-1 不变项', () => {
     expect(withUnchanged(['eco', 'switch'] as const, { eco: 0, switch: undefined })).toEqual({ eco: 0, switch: UNCHANGED })
   })
   it('全是 -1 的请求不算有改动', () => {
-    expect(hasChanges(withUnchanged(['a', 'b'] as const, {}))).toBe(false)
-    expect(hasChanges(withUnchanged(['a', 'b'] as const, { b: 1 }))).toBe(true)
+    const F = ['a', 'b'] as const
+    expect(hasChanges(withUnchanged(F, {}), F)).toBe(false)
+    expect(hasChanges(withUnchanged(F, { b: 1 }), F)).toBe(true)
+    // 设备 ID 等不在可改字段里的值不算改动
+    const withId: Record<'a' | 'b' | 'id', number> = { ...withUnchanged(F, {}), id: 5 }
+    expect(hasChanges(withId, F)).toBe(false)
   })
 })
 

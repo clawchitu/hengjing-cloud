@@ -43,5 +43,5 @@ export function withUnchanged<K extends string>(fields: readonly K[], changes: P
   return out
 }
 
-/** 是否真的有要改的项（全是 -1 的请求不应发出） */
-export const hasChanges = (q: Record<string, number>) => Object.values(q).some((v) => v !== UNCHANGED)
+/** fields 里是否有不是 -1 的项（全是 -1 的请求不应发出）。只看给出的可改字段，不看设备 ID 等 */
+export const hasChanges = <K extends string>(q: Record<K, number>, fields: readonly K[]) => fields.some((f) => q[f] !== UNCHANGED)

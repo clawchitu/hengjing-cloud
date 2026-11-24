@@ -39,10 +39,13 @@ describe('测试环境只读联调', () => {
     // 写防护：测试环境放行判断（不真正下发），生产配置拦截
     expect(checkWrite('ctrl-206', [online[0].id]).ok).toBe(true)
 
+    // 只断言布尔值，失败时日志里不会出现令牌原文
     const before = readTokens()!
     const after = await refreshSession()
-    expect(after.refreshToken).not.toBe(before.refreshToken)
-    expect((await me()).user_entity?.id).toBe(m.user_entity?.id)
+    const rotated = after.refreshToken !== before.refreshToken && after.accessToken !== before.accessToken
+    expect(rotated, '刷新后令牌应轮换').toBe(true)
+    const sameUser = (await me()).user_entity?.id === m.user_entity?.id
+    expect(sameUser, '刷新后 /me 应是同一用户').toBe(true)
   }, 60_000)
 
   it('经销商账号：login → me(type=1) → projects', async () => {

@@ -13,13 +13,34 @@ export type ApiErrorKind =
   | 'write_blocked' // 写操作被前端防护拦截（guard.ts）
   | 'aborted' // 调用方主动取消（如页面卸载）
 
+// ---------------------------------------------------------------------------
+// 脱敏：错误信息、日志里不能出现令牌原文
+
+const JWT = /eyJ[\w-]{4,}\.[\w-]{4,}\.[\w-]{4,}/g
+const BEARER = /(Bearer\s+)[^\s"',;]+/gi
+const TOKEN_FIELD = /((?:access|refresh)_?token["']?\s*[:=]\s*["']?)[^\s"',;}]+/gi
+const secretSources: Array<() => string[]> = []
+/** 登记额外的敏感串来源（tokens.ts 登记当前令牌） */
+export function registerSecrets(fn: () => string[]) { secretSources.push(fn) }
+
+/** 把文本里的 JWT、Bearer 值、*_token 字段值和已登记的令牌原文替换成 *** */
+export function redact(text: string): string {
+  let out = text.replace(JWT, '***').replace(BEARER, '$1***').replace(TOKEN_FIELD, '$1***')
+  for (const src of secretSources) {
+    let list: string[] = []
+    try { list = src() } catch { /* 读不到存储就跳过 */ }
+    for (const s of list) if (s && s.length >= 8) out = out.split(s).join('***')
+  }
+  return out
+}
+
 export class ApiError extends Error {
   readonly kind: ApiErrorKind
   readonly status?: number
   /** 后端 gRPC 错误码（JSON 错误体里的 code） */
   readonly code?: number
   constructor(kind: ApiErrorKind, message: string, opts: { status?: number; code?: number; cause?: unknown } = {}) {
-    super(message, opts.cause === undefined ? undefined : { cause: opts.cause })
+    super(redact(message), opts.cause === undefined ? undefined : { cause: opts.cause })
     this.name = 'ApiError'
     this.kind = kind
     this.status = opts.status
