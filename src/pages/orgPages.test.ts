@@ -252,13 +252,14 @@ describe('Layout（真实数据形状）', () => {
     expect(screen.queryByText('离线')).toBeNull()
   })
 
-  it('有项目且离线时照常显示离线横幅（门控不影响真实离线）', async () => {
+  it('有项目且离线时照常显示离线横幅（门控不影响真实离线）；设备页显示空态，不挂载页面（S11）', async () => {
     localStorage.setItem('hjc-project', 'p3')
     backend()
     await signIn('u', 'pw', true)
     mountLayout('/sensors')
-    await screen.findByText('传感器页内容')
+    expect(await screen.findByText('项目离线，暂无数据')).toBeTruthy()
     expect(screen.getByRole('alert').textContent).toContain('项目离线')
+    expect(screen.queryByText('传感器页内容')).toBeNull()
   })
 })
 

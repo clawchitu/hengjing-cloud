@@ -4,7 +4,6 @@
 import * as M from '../mock/data'
 import * as O from '../mock/org'
 import * as G from '../mock/gen'
-import { gatewayOf } from '../data/constants'
 import { isMockMode } from './config'
 
 // 演示数据（src/mock）只经由本文件进入页面。生产交付包（__HJC_MOCK__ = false，见 src/build-flags.d.ts）里，
@@ -123,12 +122,9 @@ export async function applyFreshAir(projectId: string, id: string, patch: Partia
 }
 
 // connections ------------------------------------------------------------
-/** GET /api/projects/:id/connections */
+/** 演示数据的设备连接明细；真实接口是 ctrl 205（src/data/connections.ts useDeviceSummary），不经过这里 */
 export const getConnections = (projectId: string): Promise<M.Conn[]> => delay(__HJC_MOCK__ ? G.connectionsFor(projectId) : [])
-type Gateway = ReturnType<typeof G.gateway>
-/** GET /api/projects/:id/gateway */
-export const getGateway = (projectId: string): Promise<Gateway> =>
-  delay(__HJC_MOCK__ ? G.gateway(projectId) : { id: gatewayOf(projectId), online: false, ip: '—', uptime: '—', latency: '—', lastOnline: undefined })
+// 网关 IP / 延迟 / 运行时长接口无此字段（方案 1.2），演示版的 getGateway 已去掉；控制屏 / DTU 编号取自项目（src/data/connections.ts linksOf）
 
 // unified control ----------------------------------------------------------------
 export const getLastRun = (): Promise<typeof M.lastRun | null> => delay(__HJC_MOCK__ ? M.lastRun : null)

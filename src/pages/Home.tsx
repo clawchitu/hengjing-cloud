@@ -55,7 +55,7 @@ export default function Home() {
   // 有在线状态未知的项目时（只在前端回退计算时出现），在线 / 离线只能给出范围：在线 ≥ 已知在线，离线 ≤ 已知离线 + 未知
   const unknown = st?.unknown ?? 0
   const range = (v: number | undefined, sign: '≥' | '≤') => (v === undefined ? '—' : unknown ? `${sign}${sign === '≥' ? v : v + unknown}` : v)
-  const open = (p: Project) => whenProjectSet(setProjectId(p.id), () => { if (!p.online) toast(`${p.name} 当前离线，显示最后在线数据`, true); nav('/sensors') }, (t) => toast(t, true))
+  const open = (p: Project) => whenProjectSet(setProjectId(p.id), () => { if (!p.online) toast(`${p.name} 当前离线，暂无实时数据`, true); nav('/sensors') }, (t) => toast(t, true))
   const now = new Date()
   const hour = now.getHours()
   const greet = hour < 11 ? '上午好' : hour < 13 ? '中午好' : hour < 18 ? '下午好' : '晚上好'

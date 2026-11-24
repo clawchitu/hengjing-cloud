@@ -4,7 +4,7 @@
 // - real：S4 的请求层（src/api/pcfg.ts），只读接口。
 import { getApps, getCtrlProjects, getDistributors, getIntegratedProjects } from '../../api/pcfg'
 import { isMockMode } from '../../api/config'
-import { scopeOf } from '../../api'
+import { gatewayOf, scopeOf } from '../../api'
 import { PLATFORM_DEALER_ID, toDealer, toGroup, toProject } from './map'
 import type { Dealer, Group, Project, User } from './types'
 
@@ -36,7 +36,8 @@ function mockView(user: User) {
   let v = viewCache.get(key)
   if (!v) {
     const s = scopeOf(user)
-    const projects: Project[] = s.projects.map((p) => ({ ...p, code: p.id }))
+    // 演示项目没有控制屏编号，沿用演示版的网关编号（GW-xxxxx）作控制屏编号，连接状态页与离线横幅显示它
+    const projects: Project[] = s.projects.map((p) => ({ ...p, code: p.id, controlScreenId: gatewayOf(p.id) }))
     const groups: Group[] = s.groups.map((g) => ({ ...g, code: g.id, projectIds: s.projects.filter((p) => p.groupId === g.id).map((p) => p.id) }))
     v = { dealers: s.dealers.map((d) => ({ ...d })), groups, projects }
     viewCache.set(key, v)

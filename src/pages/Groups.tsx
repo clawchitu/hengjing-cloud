@@ -145,7 +145,7 @@ export default function Groups() {
                     <TableCell><Badge variant={p.online ? 'green' : 'gray'} style={{ color: p.online ? undefined : 'var(--muted)' }}><span className="dot" style={{ width: 5, height: 5 }} />{p.online ? '在线' : '离线'}</Badge></TableCell>
                     <TableCell className="num">{p.version}</TableCell>
                     <TableCell><Badge variant={p.programCode === 12 ? 'purple' : 'gray'} style={{ color: p.programCode === 12 ? undefined : 'var(--muted)' }}>{p.appName || PROGRAMS[p.programCode] || '未知应用'} <span className="num">({p.programCode})</span></Badge></TableCell>
-                    <TableCell className="text-right"><Button variant="link" onClick={() => whenProjectSet(setProjectId(p.id), () => { toast(p.online ? `已进入「${p.name}」` : `「${p.name}」当前离线，显示最后在线数据`, !p.online); nav('/sensors') }, (t) => toast(t, true))}>查看数据 <Icon icon={faArrowRight} /></Button></TableCell>
+                    <TableCell className="text-right"><Button variant="link" onClick={() => whenProjectSet(setProjectId(p.id), () => { toast(p.online ? `已进入「${p.name}」` : `「${p.name}」当前离线，暂无实时数据`, !p.online); nav('/sensors') }, (t) => toast(t, true))}>查看数据 <Icon icon={faArrowRight} /></Button></TableCell>
                   </TableRow>
                 ))}
               </TableBody>

@@ -1,8 +1,8 @@
-import { Fragment, useEffect, useId, useRef, useState } from 'react'
+import { Fragment, useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
 import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import {
   faCloudSun, faLayerGroup, faSliders, faLeaf, faTemperatureHalf, faFan, faSitemap, faGear, faRightFromBracket,
-  faChevronDown, faChevronRight, faMagnifyingGlass, faHouse, faPlugCircleXmark, faClock,
+  faChevronDown, faChevronRight, faMagnifyingGlass, faHouse, faPlugCircleXmark,
 } from '@fortawesome/free-solid-svg-icons'
 import { Avatar, Icon, LogoMark } from './legacy'
 import { Badge } from '@/components/ui/badge'
@@ -13,8 +13,12 @@ import { Popover, PopoverAnchor, PopoverContent, PopoverTrigger } from '@/compon
 import { cn } from '@/lib/utils'
 import { useApp } from '../app/store'
 import { useCancelConfirmOnLeave, useConfirm } from '../app/feedback'
-import { dealerSections, projectsInGroup, useOrgScope, whenProjectSet } from '../data/org'
-import { gatewayOf, type Project } from '../api'
+import { useIsFetching } from '@tanstack/react-query'
+import { dealerSections, orgKeys, projectsInGroup, useOrgScope, whenProjectSet } from '../data/org'
+import type { Project } from '../api'
+import { linksOf, OFFLINE_RECHECK_MS } from '../data/connections'
+import { Button } from '@/components/ui/button'
+import { Card } from '@/components/ui/card'
 
 export const NAV_MAIN = [
   { to: '/home', label: '欢迎首页', icon: faCloudSun },
@@ -318,15 +322,59 @@ function ProjectSearch() {
 /** cmdk 选项上带 data-value（菜单为「组 id:项目 id」） */
 const itemValue = (groupId: string, projectId: string) => groupId + ':' + projectId
 
+/**
+ * 项目离线（项目列表的 online 不为 true：控制屏不在线，且没有在线的 DTU，见接口文档 4）。
+ * 后端没有最后在线时间（Q9 ④），离线时也读不到设备数据（ctrl 返回 503），所以设备页不挂载、不显示旧数据，
+ * 只显示横幅和空态（方案 1.2「离线横幅」、S11 验收）。
+ */
 function OfflineBanner({ p }: { p: Project }) {
+  const links = linksOf(p)
   return (
     <div className="offline-banner" role="alert">
       <div className="ob-ico"><Icon icon={faPlugCircleXmark} /></div>
       <div className="ob-main">
         <b>项目离线 · {p.name}</b>
-        <span>网关 <span className="num">{gatewayOf(p.id)}</span> 已失去连接，以下为最后在线时的数据（仅供参考），无法下发控制。</span>
+        <span>
+          {links.length ? <>{links.map((l, i) => <Fragment key={l.label}>{i > 0 && '、'}{l.label} <span className="num">{l.id}</span></Fragment>)}{' '}未连接</> : '控制屏未连接'}
+          ，暂时读不到设备数据，也无法下发控制。
+        </span>
       </div>
-      <div className="ob-last"><small><Icon icon={faClock} /> 最后在线</small><b className="num">{p.lastOnline ?? '—'}</b><small>{p.lastOnlineAgo ?? ''}</small></div>
+    </div>
+  )
+}
+
+function OfflinePage({ p, title, onLeave }: { p: Project; title: string; onLeave: (hadFocus: boolean) => void }) {
+  // 卸载时（DOM 移除之前）告诉 Layout 焦点是否在空态里：只有这种情况恢复在线后才移焦点
+  const box = useRef<HTMLDivElement>(null)
+  const leave = useRef(onLeave)
+  useLayoutEffect(() => { leave.current = onLeave })
+  useLayoutEffect(() => {
+    const el = box.current
+    return () => leave.current(!!el && el.contains(document.activeElement))
+  }, [])
+  const org = useOrgScope()
+  // 组织数据（项目列表、集成项目等，都是只读接口）正在请求：按钮禁用，不重复发
+  const fetching = useIsFetching({ queryKey: orgKeys.all }) > 0
+  const [asked, setAsked] = useState(false)
+  const refetch = org.refetch
+  // 挂载期间每 60 秒只读重取一次（标签页不可见时跳过），项目恢复在线后自动显示页面
+  useEffect(() => {
+    const t = setInterval(() => { if (document.visibilityState !== 'hidden') refetch() }, OFFLINE_RECHECK_MS)
+    return () => clearInterval(t)
+  }, [refetch])
+  // 手动重取后失败（有旧数据时后台刷新失败记在 staleError）：提示可重试
+  const failed = asked && !fetching ? org.staleError : null
+  return (
+    <div className="page offline-page" ref={box}>
+      <OfflineBanner p={p} />
+      <div className="page-head"><div><h1>{title}</h1><div className="sub">{p.name}</div></div></div>
+      <Card className="placeholder" role="status">
+        <div className="ph-ico"><Icon icon={faPlugCircleXmark} /></div>
+        <h3>项目离线，暂无数据</h3>
+        <p>项目恢复在线后即可查看实时数据。</p>
+        <Button style={{ marginTop: 16 }} disabled={fetching} aria-busy={fetching} onClick={() => { setAsked(true); refetch() }}>重新获取在线状态</Button>
+        {failed && <p role="alert" style={{ marginTop: 10, color: 'var(--red)' }}>获取在线状态失败：{failed.message}，请稍后重试</p>}
+      </Card>
     </div>
   )
 }
@@ -343,6 +391,26 @@ export default function Layout() {
   const noProject = !project.id
 
   useEffect(() => { window.scrollTo(0, 0) }, [loc.pathname])
+  // 同一项目由离线变为在线（看 project.online，不看路由），且焦点原本在即将卸载的离线空态里（如刚点的「重新获取在线状态」）：
+  // 焦点会掉到 body，移到页面标题（tabIndex=-1），页面还没有标题时移到主区域。导航离开、焦点在侧栏等其他地方时不动
+  const offlineHadFocus = useRef(false)
+  const noteOfflineLeave = useCallback((had: boolean) => { offlineHadFocus.current = had }, [])
+  const prevState = useRef({ id: project.id, online: project.online })
+  useEffect(() => {
+    const prev = prevState.current
+    prevState.current = { id: project.id, online: project.online }
+    const had = offlineHadFocus.current
+    offlineHadFocus.current = false
+    if (!(had && isProjectPage && prev.id === project.id && !prev.online && project.online)) return
+    const t = setTimeout(() => {
+      if (document.activeElement && document.activeElement !== document.body) return // 期间用户已把焦点放到别处
+      const h = document.querySelector<HTMLElement>('.main .page h1') ?? document.querySelector<HTMLElement>('.main')
+      if (!h) return
+      if (!h.hasAttribute('tabindex')) h.tabIndex = -1
+      h.focus()
+    }, 0)
+    return () => clearTimeout(t)
+  }, [project.id, project.online, isProjectPage])
   // 确认弹窗随离开失效：路由变化（含后退）或 Layout 卸载（如会话过期换成登录页）时按取消结算
   useCancelConfirmOnLeave()
 
@@ -402,10 +470,7 @@ export default function Layout() {
         {isProjectPage && noProject ? (
           <div className="page"><div className="empty-fav" role="status"><b>暂无可用项目</b><small>当前账号下没有可查看的项目，请到「集成项目」确认，或联系管理员</small></div></div>
         ) : offline ? (
-          <div className="page offline-page">
-            <OfflineBanner p={project} />
-            <div className="offline-data" aria-disabled inert><Fragment key={project.id}><Outlet /></Fragment></div>
-          </div>
+          <OfflinePage p={project} title={cur?.label ?? ''} onLeave={noteOfflineLeave} />
         ) : <Fragment key={project.id}><Outlet /></Fragment>}
       </div>
     </div>

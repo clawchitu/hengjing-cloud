@@ -5,7 +5,7 @@
 //   PRJ-10252 / PRJ-30057 / PRJ-50102 / PRJ-60014  新风单机版 (程序编码 12): no room panels, fresh-air 运行设置,
 //              units in modes 2 / 13 / 23 / 33 (露点 or 湿度) and other modes (湿度 only)
 import { connections, freshAirUnits, rooms, sensors, type Conn, type FreshAir, type Room, type Sensor } from './data'
-import { gatewayOf, hasRooms, isStandalone, projects, type Project } from './org'
+import { hasRooms, isStandalone, projects, type Project } from './org'
 
 import { DEW_MODES } from '../data/constants'
 export { DEW_MODES }
@@ -126,14 +126,6 @@ export function connectionsFor(projectId: string): Conn[] {
   if (!p.online) list = list.map((c) => ({ ...c, state: '离线' as const }))
   return list
 }
-
-export function gatewayInfo(projectId: string) {
-  const p = proj(projectId)
-  const rnd = rng(projectId + ':gw')
-  return { id: gatewayOf(projectId), online: p.online, ip: `10.42.${10 + Math.floor(rnd() * 40)}.${2 + Math.floor(rnd() * 200)}`, uptime: p.online ? `${10 + Math.floor(rnd() * 50)}d ${String(Math.floor(rnd() * 24)).padStart(2, '0')}h` : '—', latency: p.online ? `${50 + Math.floor(rnd() * 60)} ms` : '—', lastOnline: p.lastOnline }
-}
-// keep 10241's gateway identical to the design
-export const gateway = (projectId: string) => (projectId === 'PRJ-10241' ? { id: 'GW-10241', online: true, ip: '10.42.18.6', uptime: '38d 06h', latency: '86 ms', lastOnline: undefined } : gatewayInfo(projectId))
 
 // ------------------------------------------------------------------ statistics series
 export type MetricKey = 'temp' | 'hum' | 'dew' | 'pm25' | 'co2'
