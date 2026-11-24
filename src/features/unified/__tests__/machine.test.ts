@@ -1,6 +1,7 @@
 // 统一控制状态机。全部用注入的假函数，不连任何后端。
 import { describe, expect, it, vi } from 'vitest'
 import { ApiError } from '@/api/errors'
+import type { WriteProject } from '@/api/guard'
 import { TEXT } from '../constants'
 import type { UnifiedLogEntry } from '../log'
 import { createUnifiedController, INITIAL, outcomeOf, transition, type UnifiedDeps, type UnifiedEvent, type UnifiedState, type UnifiedTarget } from '../machine'
@@ -107,7 +108,7 @@ describe('控制器：正常流程', () => {
     expect(readBack.mock.calls[0][0]).toBe(CTX.projectId)
     expect(readBack.mock.calls[0][1]).toBeInstanceOf(AbortSignal)
     expect(send).toHaveBeenCalledTimes(1)
-    expect(send).toHaveBeenCalledWith(CTX.projectId, Q)
+    expect(send).toHaveBeenCalledWith({ id: CTX.projectId, code: CTX.projectCode }, Q)
     expect(readBack.mock.invocationCallOrder[0]).toBeLessThan(send.mock.invocationCallOrder[0])
     expect(send.mock.invocationCallOrder[0]).toBeLessThan(readBack.mock.invocationCallOrder[1])
     expect(logs.map((l) => l.event)).toEqual(['confirm', 'read-before', 'send', 'read-after', 'success'])
@@ -253,7 +254,7 @@ describe('控制器：abort（页面卸载、切换项目）', () => {
     await p1
     expect((await p2).status).toBe('success')
     expect(send).toHaveBeenCalledTimes(1)
-    expect(send).toHaveBeenCalledWith(CTX.projectId, { systemSwitch: -1, systemMode: 0, roomSwitch: 0, roomTemp: -1 })
+    expect(send).toHaveBeenCalledWith({ id: CTX.projectId, code: CTX.projectCode }, { systemSwitch: -1, systemMode: 0, roomSwitch: 0, roomTemp: -1 })
   })
 
   it('已经发出后 abort 无效：照常走完回读', async () => {
@@ -332,8 +333,8 @@ describe('控制器：abort（页面卸载、切换项目）', () => {
 
   it('send 内部同步调用 abort：已视为发出，abort 无效', async () => {
     let ctlRef: { abort: () => void } | null = null
-    const send = vi.fn(async (_id: string, _q: typeof Q) => ({ success: true, msg: '' }))
-    const sendWrap = vi.fn((id: string, q: typeof Q) => { ctlRef!.abort(); return send(id, q) })
+    const send = vi.fn(async (_p: WriteProject, _q: typeof Q) => ({ success: true, msg: '' }))
+    const sendWrap = vi.fn((p: WriteProject, q: typeof Q) => { ctlRef!.abort(); return send(p, q) })
     const { ctl } = setup({ send: sendWrap })
     ctlRef = ctl
     ctl.request({ roomTemp: 24 })

@@ -14,8 +14,8 @@ export interface RuntimeConfig {
   dataSource: DataSource
   /** 写操作（下发）开关，见 guard.ts */
   writeMode: WriteMode
-  /** 非空时只允许对这些项目下发 */
-  writeProjectIds: string[]
+  /** 下发白名单（项目 code，不是实体 id）。只允许对名单里的项目下发；为空则拒绝所有写操作 */
+  writeProjectCodes: readonly string[]
   /** 普通请求超时（毫秒） */
   requestTimeoutMs: number
   /** ctrl 同步消息超时（毫秒）：服务端等控制屏 10 秒，前端多留 2 秒 */
@@ -32,6 +32,21 @@ declare global {
 // vite.config.ts 注入：开发服务器 /api 代理的目标地址（构建产物里为空串）
 declare const __HJC_DEV_PROXY_TARGET__: string | undefined
 
+/** 下发白名单默认值（测试项目 code） */
+export const DEFAULT_WRITE_PROJECT_CODES: readonly string[] = Object.freeze(['260911001', '240829001'])
+
+/**
+ * 白名单解析：各层都没有写这个键才用默认值；写了就以最后一层为准（写成 undefined / null 也算写了，按空名单）。
+ * 数组只留非空字符串；逗号分隔字符串（环境变量）拆开；其他类型按空名单（全拒）。结果冻结，运行中不能改。
+ */
+function parseCodes(layers: Input[]): readonly string[] {
+  const set = layers.filter((l) => l && Object.prototype.hasOwnProperty.call(l, 'writeProjectCodes'))
+  if (!set.length) return DEFAULT_WRITE_PROJECT_CODES
+  const v = set[set.length - 1].writeProjectCodes
+  const list: unknown[] = typeof v === 'string' ? v.split(',') : Array.isArray(v) ? v : []
+  return Object.freeze(list.filter((c): c is string => typeof c === 'string').map((c) => c.trim()).filter(Boolean))
+}
+
 const isAbsolute = (u: string) => /^(https?:)?\/\//i.test(u)
 
 /** 按域名判断完整地址属于哪个环境；不认识的域名一律当生产 */
@@ -39,7 +54,7 @@ export function envOfUrl(url: string): ApiEnv {
   try { return TEST_HOSTS.has(new URL(url.startsWith('//') ? 'https:' + url : url).hostname) ? 'test' : 'prod' } catch { return 'prod' }
 }
 
-type Input = Partial<Omit<RuntimeConfig, 'apiEnv'>> & { apiEnv?: string }
+type Input = Partial<Omit<RuntimeConfig, 'apiEnv' | 'writeProjectCodes'>> & { apiEnv?: string; writeProjectCodes?: unknown }
 
 /** 合并各层配置并推导 apiEnv。导出供测试使用 */
 export function resolveConfig(layers: Input[], devProxyTarget = ''): RuntimeConfig {
@@ -57,7 +72,7 @@ export function resolveConfig(layers: Input[], devProxyTarget = ''): RuntimeConf
     apiEnv,
     dataSource: m.dataSource === 'real' ? 'real' : 'mock',
     writeMode,
-    writeProjectIds: Array.isArray(m.writeProjectIds) ? m.writeProjectIds.map(String) : [],
+    writeProjectCodes: parseCodes(layers),
     requestTimeoutMs: Number(m.requestTimeoutMs) > 0 ? Number(m.requestTimeoutMs) : 10_000,
     ctrlTimeoutMs: Number(m.ctrlTimeoutMs) > 0 ? Number(m.ctrlTimeoutMs) : 12_000,
   }
@@ -70,6 +85,8 @@ function buildTimeLayer(): Input {
   if (env.VITE_API_ENV) out.apiEnv = env.VITE_API_ENV
   if (env.VITE_DATA_SOURCE) out.dataSource = env.VITE_DATA_SOURCE as DataSource
   if (env.VITE_WRITE_MODE) out.writeMode = env.VITE_WRITE_MODE as WriteMode
+  // 逗号分隔；设为空串即「名单为空，拒绝所有写操作」
+  if (env.VITE_WRITE_PROJECT_CODES !== undefined) out.writeProjectCodes = env.VITE_WRITE_PROJECT_CODES
   return out
 }
 

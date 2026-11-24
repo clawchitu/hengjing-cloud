@@ -5,7 +5,8 @@
 // - writeMode='off'：全部拦截；
 // - 默认 writeMode='test-only'：只在测试环境放行，生产环境一律拦截；
 // - 生产环境下发必须在运行时配置里显式写 writeMode='on'（须负责人确认）；
-// - writeProjectIds 非空时，只放行名单里的项目（任何环境都生效）。
+// - 项目白名单 writeProjectCodes 按项目 code 比对（任何环境都生效）：只放行名单里的 code，
+//   名单为空则拒绝所有写操作；code 缺失、为空串、不是字符串一律拒绝。请求里用的是后端实体 id。
 // 判断不出环境时 config.ts 按生产处理，所以「不确定」等于「拦截」。
 import { getConfig, type RuntimeConfig } from './config'
 import { ApiError } from './errors'
@@ -64,19 +65,50 @@ export function isWritePath(path: string): boolean {
 
 export type WriteDecision = { ok: true } | { ok: false; reason: string }
 
-export function checkWrite(op: WriteOp, projectIds: readonly string[], cfg: RuntimeConfig = getConfig()): WriteDecision {
+/** 写操作的目标项目：code 用于白名单比对，id（后端实体 id）用于请求体 */
+export interface WriteProject { id: string; code: string }
+
+/** 只读一次 id / code 并校验类型，得到不可变快照（防 getter 前后取值不同）；不合规返回 null */
+export function snapshotProject(p: unknown): WriteProject | null {
+  if (!p || typeof p !== 'object') return null
+  let id: unknown, code: unknown
+  try { ({ id, code } = p as Record<string, unknown>) } catch { return null }
+  // 首尾有空白也拒绝：id 会原样写进请求体，code 要和名单精确相等
+  if (typeof id !== 'string' || !id || id.trim() !== id || typeof code !== 'string' || !code || code.trim() !== code) return null
+  return Object.freeze({ id, code })
+}
+
+function decide(op: WriteOp, projects: readonly (WriteProject | null)[], cfg: RuntimeConfig): WriteDecision {
   if (!WRITE_OPS.includes(op)) return { ok: false, reason: `未登记的写操作：${op}` }
   if (cfg.writeMode === 'off') return { ok: false, reason: '下发已关闭（writeMode=off）' }
   if (cfg.apiEnv !== 'test' && cfg.writeMode !== 'on') return { ok: false, reason: '生产环境下发未开启' }
-  if (!projectIds.length) return { ok: false, reason: '未指定项目' }
-  if (cfg.writeProjectIds.length) {
-    const outside = projectIds.filter((id) => !cfg.writeProjectIds.includes(id))
-    if (outside.length) return { ok: false, reason: `项目不在下发名单内：${outside.join('、')}` }
-  }
+  if (!projects.length) return { ok: false, reason: '未指定项目' }
+  if (projects.some((p) => p === null)) return { ok: false, reason: '项目缺少有效的 id 或 code' }
+  const allow = Array.isArray(cfg.writeProjectCodes) ? cfg.writeProjectCodes : []
+  if (!allow.length) return { ok: false, reason: '下发名单为空' }
+  const outside = (projects as WriteProject[]).filter((p) => !allow.includes(p.code)).map((p) => p.code)
+  if (outside.length) return { ok: false, reason: `项目不在下发名单内：${outside.join('、')}` }
   return { ok: true }
 }
 
-export function assertWriteAllowed(op: WriteOp, projectIds: readonly string[], cfg?: RuntimeConfig) {
-  const d = checkWrite(op, projectIds, cfg)
+export function checkWrite(op: WriteOp, projects: readonly unknown[], cfg: RuntimeConfig = getConfig()): WriteDecision {
+  if (!Array.isArray(projects)) return { ok: false, reason: '未指定项目' }
+  return decide(op, projects.map(snapshotProject), cfg)
+}
+
+/**
+ * 通过则返回项目快照（之后请求体只能用这份快照里的 id），不通过抛 write_blocked。
+ * 同一 id 出现多次按一个处理；同一 id 对应不同 code 视为数据异常，拒绝。
+ */
+export function assertWriteAllowed(op: WriteOp, projects: readonly unknown[], cfg: RuntimeConfig = getConfig()): WriteProject[] {
+  const snaps = Array.isArray(projects) ? projects.map(snapshotProject) : []
+  const d = decide(op, snaps, cfg)
   if (!d.ok) throw new ApiError('write_blocked', d.reason)
+  const byId = new Map<string, WriteProject>()
+  for (const p of snaps as WriteProject[]) {
+    const prev = byId.get(p.id)
+    if (prev && prev.code !== p.code) throw new ApiError('write_blocked', '同一项目 id 对应了不同的 code')
+    byId.set(p.id, p)
+  }
+  return [...byId.values()]
 }
