@@ -27,10 +27,19 @@ case "$API_BASE" in
   https://*) ;;
   *) echo "API_BASE 只能是 /api 或 https:// 开头的完整地址：$API_BASE" >&2; exit 1 ;;
 esac
-if [[ "$API_BASE" == https://* ]] && [[ ! "$API_BASE" =~ ^https://[A-Za-z0-9.-]+\.[A-Za-z]{2,}(:[0-9]+)?(/[A-Za-z0-9._~-]+)*$ ]]; then
-  echo "API_BASE 不是有效的 https 地址：$API_BASE" >&2; exit 1
+if [[ "$API_BASE" == https://* ]]; then
+  API_LC="$(printf '%s' "$API_BASE" | tr '[:upper:]' '[:lower:]')"
+  HOSTPORT="${API_LC#https://}"; HOSTPORT="${HOSTPORT%%/*}"
+  HOST="${HOSTPORT%%:*}"
+  PORT=""; [[ "$HOSTPORT" == *:* ]] && PORT="${HOSTPORT#*:}"
+  # 主机名：小写字母数字与连字符组成的标签，点分隔，至少两段，标签不以连字符开头或结尾
+  LABEL='[a-z0-9]([a-z0-9-]*[a-z0-9])?'
+  if [[ ! "$HOST" =~ ^${LABEL}(\.${LABEL})+$ ]] || { [ -n "$PORT" ] && { [[ ! "$PORT" =~ ^[0-9]{1,5}$ ]] || [ "$((10#$PORT))" -lt 1 ] || [ "$((10#$PORT))" -gt 65535 ]; }; } \
+     || [[ ! "$API_LC" =~ ^https://[^/]+(/[a-z0-9._~-]+)*$ ]]; then
+    echo "API_BASE 不是有效的 https 地址：$API_BASE" >&2; exit 1
+  fi
+  case "$HOST" in test.cosyhome.com.cn) echo "生产包不能指向测试环境：$API_BASE" >&2; exit 1 ;; esac
 fi
-case "$API_BASE" in *test.cosyhome.com.cn*) echo "生产包不能指向测试环境：$API_BASE" >&2; exit 1 ;; esac
 if [[ ! "$API_BASE" =~ ^[A-Za-z0-9:/._~-]+$ ]]; then echo "API_BASE 含非法字符：$API_BASE" >&2; exit 1; fi
 
 VERSION="$(node -p "require('./package.json').version")"
