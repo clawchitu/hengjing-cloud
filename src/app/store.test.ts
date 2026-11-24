@@ -11,14 +11,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { setConfig } from '../api/config'
 import { createQueryClient } from '../api/query'
 import { __resetSessionViewForTests, logout, mockSignIn } from '../data/session'
-import { __resetCurrentForTests } from '../data/org/current'
+import { __resetCurrentForTests, getStoredProjectId, setStoredProjectId } from '../data/org/current'
 import { AppProvider, useApp } from './store'
 import { createConfirmController, useCancelConfirmOnLeave, useConfirm, type ConfirmOwner } from './feedback'
 
 type Confirm = ReturnType<typeof useConfirm>
 const box: {
   confirm?: Confirm; nav?: (to: string) => void
-  ownerConfirm?: Confirm; sent: number; setOffline?: (v: boolean) => void; setProject?: (id: string) => void
+  ownerConfirm?: Confirm; sent: number; projectId?: string; setOffline?: (v: boolean) => void; setProject?: (id: string) => void
 } = { sent: 0 }
 
 /** 用 useConfirm() 发起确认的页面；确认为 true 才“下发”（sent + 1） */
@@ -32,6 +32,7 @@ function MiniLayout({ keyed }: { keyed: boolean }) {
   const { project, setProjectId } = useApp()
   const [offline, setOffline] = useState(false)
   useEffect(() => { box.setOffline = setOffline; box.setProject = (id) => { setProjectId(id) } }, [setProjectId])
+  useEffect(() => { box.projectId = project.id }, [project.id])
   if (offline) return createElement('div', null, '离线')
   return keyed ? createElement(Fragment, { key: project.id }, createElement(OwnerPage)) : createElement(OwnerPage)
 }
@@ -459,5 +460,42 @@ describe('confirm()', () => {
     expect(info).not.toHaveBeenCalled()
     expect(document.querySelector('[data-sonner-toaster]')?.textContent ?? '').not.toContain('页面已变化')
     info.mockRestore()
+  })
+
+  it('兼容入口 useApp().confirm 同样绑定调用组件：组件卸载后按 false，不下发', async () => {
+    let show!: (v: boolean) => void
+    function AppConfirmPage() {
+      const { confirm } = useApp()
+      useEffect(() => { box.ownerConfirm = (o) => confirm(o).then((ok) => { if (ok) box.sent++; return ok }) }, [confirm])
+      return null
+    }
+    function Host() {
+      const [v, setV] = useState(true)
+      useEffect(() => { show = setV }, [])
+      return v ? createElement(AppConfirmPage) : null
+    }
+    render(createElement(QueryClientProvider, { client: createQueryClient() }, createElement(AppProvider, null,
+      createElement(BrowserRouter, null, createElement(Host)))))
+    const r = await ownerOpen({ title: '全部开启', body: 'x', okText: '确认下发' })
+    expect(screen.getByRole('alertdialog')).toBeTruthy()
+    await act(async () => { show(false) })
+    await flush()
+    expect(r).toEqual({ value: false, settled: 1 })
+    expect(box.sent).toBe(0)
+    expect(screen.queryByRole('alertdialog')).toBeNull()
+  })
+
+  it('边界：当前项目存储从空（回退到第一个项目）变成同一个项目的 id，也按取消处理（偏保守，见 feedback.ts ⑤）', async () => {
+    mountOwner(false)
+    expect(getStoredProjectId()).toBe('') // 没有存过：回退显示第一个可见项目
+    const r = await ownerOpen({ title: '全部开启', body: 'x', okText: '确认下发' })
+    const ok = screen.getByRole('button', { name: '确认下发' })
+    const fallbackId = box.projectId!
+    expect(fallbackId).toBeTruthy()
+    setStoredProjectId(fallbackId) // 显示的项目没变，只是存储从空写成了它的 id
+    ok.dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 1 }))
+    await flush()
+    expect(r).toEqual({ value: false, settled: 1 })
+    expect(box.sent).toBe(0)
   })
 })

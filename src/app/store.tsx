@@ -7,7 +7,7 @@
 import { createContext, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { ConfirmHost } from '@/components/ConfirmHost'
 import { Toaster } from '@/components/ui/sonner'
-import { ConfirmControllerContext as Ctl, createConfirmController, routeScope, showToast, type ExpireReason } from './feedback'
+import { ConfirmControllerContext as Ctl, createConfirmController, routeScope, showToast, useConfirm, type ConfirmOptions, type ExpireReason } from './feedback'
 import type { Project, Role, Scope, User } from '../api'
 import type { ApiError } from '../api/errors'
 import type { SessionInfo } from '../api/session'
@@ -17,15 +17,16 @@ import { getStoredProjectId } from '../data/org/current'
 
 type Auth = { username: string; role: Role }
 
-/**
- * useApp() 只提供 toast。确认弹窗不再从这里取（S3a 第四轮起删掉了 useApp().confirm）：写操作确认必须用 app/feedback 的
- * useConfirm()，它把请求绑定到发起它的组件实例，随页面卸载、路由 / 会话 / 当前项目变化同步失效（见 docs/分工.md 第 3 节）
- */
 interface Feedback {
   toast: (text: string, err?: boolean) => void
 }
 
 interface Ctx extends Feedback {
+  /**
+   * 确认弹窗，签名同拆分前（(o) => Promise<boolean>）。内部就是 app/feedback 的 useConfirm()：请求绑定到调用 useApp() 的这个组件实例，
+   * 与直接用 useConfirm() 同等保护（组件卸载、路由 / 会话 / 当前项目变化时同步失效，按 false 结算）。两个入口都可以用（docs/分工.md 第 3 节）
+   */
+  confirm: (o: ConfirmOptions) => Promise<boolean>
   authed: boolean
   /** 真实接口模式：正在用已存的令牌取 /me 恢复登录态，路由守卫等它结束再决定是否跳登录页 */
   authLoading: boolean
@@ -75,6 +76,7 @@ export function useApp(): Ctx {
   const s = useSession()
   const scope = useOrgScope()
   const cur = useCurrentProject()
+  const confirm = useConfirm()
   const project = cur.project ?? NO_PROJECT
   return {
     authed: s.authed,
@@ -93,6 +95,7 @@ export function useApp(): Ctx {
     project,
     selectTick: cur.selectTick,
     toast: fb.toast,
+    confirm,
   }
 }
 

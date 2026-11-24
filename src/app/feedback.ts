@@ -104,7 +104,7 @@ export function createConfirmController(getScope: () => ConfirmScope = () => ({ 
   }
 
   return {
-    /** owner：发起它的组件实例（useConfirm() 传入；页面只能经 useConfirm() 发起，不带所有者只用于控制器自身的测试） */
+    /** owner：发起它的组件实例（useConfirm() 传入，useApp().confirm 内部也是它；不带所有者只用于控制器自身的测试） */
     request(o: ConfirmOptions, owner: ConfirmOwner | null = null): Promise<boolean> {
       return new Promise<boolean>((resolve) => {
         const prev = current
@@ -233,7 +233,7 @@ export function focusWithRing(el: HTMLElement, ring: boolean) {
 }
 
 /**
- * 页面里发起确认用这个（代替 useApp().confirm，签名相同）：请求绑定到调用它的组件实例。实例卸载时同步失效并关闭弹窗；
+ * 页面里发起确认用这个或 useApp().confirm（后者内部就调用它，签名、保护都相同）：请求绑定到调用它的组件实例。实例卸载时同步失效并关闭弹窗；
  * 接受「确认」时核对实例仍存活、当前项目没变（见 createConfirmController 的「离开即失效」④）
  */
 export function useConfirm(): (o: ConfirmOptions) => Promise<boolean> {
