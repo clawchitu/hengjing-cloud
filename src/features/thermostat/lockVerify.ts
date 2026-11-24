@@ -59,7 +59,7 @@ export const match206 = (p: AllSwitch, raw: Reply200) => matchAllRoomsSwitchChec
 export { roomsAsReply }
 
 /**
- * 201 / 206 的核对函数（刷新恢复、写后自动核对都用）。由 src/app/writeLockSetup.ts 的 registerAllVerifiers 注册，这里不注册。
+ * 201 / 206 的核对函数（刷新恢复、写后自动核对都用）。由 src/app/writeLockSetup.ts 的 registerThermostatVerifiersOnce 注册，这里不注册。
  */
 const readRaw = async (projectId: string, signal: AbortSignal) => (await thermostatSource().roomsRaw(projectId, signal)).raw
 export const verifier201 = async (rec: StoredLock, signal: AbortSignal) => matchRoomSetChecked(rec, await readRaw(rec.projectId, signal))
