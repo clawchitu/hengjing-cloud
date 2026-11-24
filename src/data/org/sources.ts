@@ -1,0 +1,83 @@
+// 组织数据的两个数据源，接口相同，按运行时配置 dataSource 选择（src/api/config.ts）：
+// - mock：演示数据（e2e 截图全走这里）。同步可得，hooks 把它作为 initialData，首屏就有数据，
+//   与拆分前 store.tsx 同步算出 scope 的行为一致，截图零差异；
+// - real：S4 的请求层（src/api/pcfg.ts），只读接口。
+import { getApps, getCtrlProjects, getDistributors, getIntegratedProjects } from '../../api/pcfg'
+import { isMockMode } from '../../api/config'
+import { scopeOf } from '../../api'
+import { PLATFORM_DEALER_ID, toDealer, toGroup, toProject } from './map'
+import type { Dealer, Group, Project, User } from './types'
+
+export interface OrgContext {
+  user: User
+  /** 经销商账号（/me type=1；演示数据 role=dealer） */
+  dealerAccount: boolean
+}
+
+export interface ProjectFilter { onlyOnline?: boolean }
+
+export interface OrgSource {
+  /** 经销商选择器的列表（只给平台账号用） */
+  dealers(ctx: OrgContext, signal?: AbortSignal): Promise<Dealer[]>
+  /** 集成项目；dealerId 不传按账号范围全部返回 */
+  groups(ctx: OrgContext, dealerId: string | undefined, signal?: AbortSignal): Promise<Group[]>
+  /** 项目列表（含在线状态、app_code） */
+  projects(ctx: OrgContext, filter: ProjectFilter, signal?: AbortSignal): Promise<Project[]>
+  /** app_id → 应用名称 */
+  apps(ctx: OrgContext, signal?: AbortSignal): Promise<Record<string, string>>
+}
+
+// ---------------------------------------------------------------------------
+// mock：同步函数，结果按用户缓存，同一用户多次取到同一批对象
+
+const viewCache = new Map<string, { dealers: Dealer[]; groups: Group[]; projects: Project[] }>()
+function mockView(user: User) {
+  const key = user.username + '|' + user.role
+  let v = viewCache.get(key)
+  if (!v) {
+    const s = scopeOf(user)
+    const projects: Project[] = s.projects.map((p) => ({ ...p, code: p.id }))
+    const groups: Group[] = s.groups.map((g) => ({ ...g, code: g.id, projectIds: s.projects.filter((p) => p.groupId === g.id).map((p) => p.id) }))
+    v = { dealers: s.dealers.map((d) => ({ ...d })), groups, projects }
+    viewCache.set(key, v)
+  }
+  return v
+}
+
+export const mockOrg = {
+  dealers: (ctx: OrgContext): Dealer[] => mockView(ctx.user).dealers,
+  groups: (ctx: OrgContext, dealerId?: string): Group[] => {
+    const all = mockView(ctx.user).groups
+    return dealerId ? all.filter((g) => g.dealerId === dealerId) : all
+  },
+  projects: (ctx: OrgContext, filter: ProjectFilter = {}): Project[] => {
+    const all = mockView(ctx.user).projects
+    return filter.onlyOnline ? all.filter((p) => p.online) : all
+  },
+  /** 演示数据的集成项目没有 app_id，类型名称直接写在 Group.type 里 */
+  apps: (): Record<string, string> => ({}),
+}
+
+const mockSource: OrgSource = {
+  dealers: async (ctx) => mockOrg.dealers(ctx),
+  groups: async (ctx, dealerId) => mockOrg.groups(ctx, dealerId),
+  projects: async (ctx, filter) => mockOrg.projects(ctx, filter),
+  apps: async () => mockOrg.apps(),
+}
+
+// ---------------------------------------------------------------------------
+// real
+
+export const realSource: OrgSource = {
+  dealers: async (_ctx, signal) => (await getDistributors({ signal })).map(toDealer).filter((d): d is Dealer => d !== null),
+  groups: async (_ctx, dealerId, signal) => {
+    // 虚拟经销商「平台」：取全部再过滤没有归属经销商的
+    if (dealerId === PLATFORM_DEALER_ID) return (await getIntegratedProjects({}, { signal })).map(toGroup).filter((g) => g.dealerId === PLATFORM_DEALER_ID)
+    return (await getIntegratedProjects({ distributorId: dealerId }, { signal })).map(toGroup)
+  },
+  projects: async (_ctx, filter, signal) => (await getCtrlProjects({ onlyOnline: filter.onlyOnline }, { signal })).map(toProject),
+  apps: async (_ctx, signal) => Object.fromEntries((await getApps({ signal })).filter((a) => a.id).map((a) => [a.id, a.name ?? ''])),
+}
+
+/** 当前配置的数据源（每次调用时读配置，测试里 setConfig() 切换即可） */
+export const orgSource = (): OrgSource => (isMockMode() ? mockSource : realSource)

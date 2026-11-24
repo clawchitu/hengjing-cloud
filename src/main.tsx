@@ -13,6 +13,7 @@ import './styles/global.css'
 import './styles/pages.css'
 import { AppProvider, useApp } from './app/store'
 import { safeFrom } from './app/redirect'
+import { OrgGate } from './app/OrgGate'
 import { QueryProvider } from './api/QueryProvider'
 import Layout from './components/Layout'
 import Login from './pages/Login'
@@ -55,7 +56,7 @@ createRoot(document.getElementById('root')!).render(
       <BrowserRouter>
         <Routes>
           <Route path="/login" element={<LoginRoute />} />
-          <Route element={<Guard><Layout /></Guard>}>
+          <Route element={<Guard><OrgGate><Layout /></OrgGate></Guard>}>
             <Route path="/home" element={<Home />} />
             <Route path="/groups" element={<Groups />} />
             <Route path="/control" element={<Control />} />

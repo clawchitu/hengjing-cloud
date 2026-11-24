@@ -1,18 +1,29 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+// 展示层反馈（toast、confirm 弹窗）留在这里（S3a 会换成 Sonner / AlertDialog）。
+// 数据状态已拆到独立模块（S6a）：
+//   登录态        src/data/session.ts   useSession() / mockSignIn() / logout() / can()
+//   组织数据      src/data/org          useOrgScope() / useDealers() / useIntegratedProjects() / useProjects()
+//   当前项目      src/data/org          useCurrentProject()（hjc-project 持久化）
+// useApp() 保留为兼容门面，把上面几块拼成拆分前的形状，现有页面不用改；新代码直接用对应的 hook。
+import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react'
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome'
 import { faCircleCheck, faCircleXmark, faTriangleExclamation } from '@fortawesome/free-solid-svg-icons'
 import { Button } from '@/components/ui/button'
-import * as api from '../api'
 import type { Project, Role, Scope, User } from '../api'
-import { isMockMode } from '../api/config'
-import { can as canRoute, getSession, initSession, restoreSession, signOut, subscribeSession, type SessionInfo, type SessionState } from '../api/session'
-import { readTokens } from '../api/tokens'
+import type { ApiError } from '../api/errors'
+import type { SessionInfo } from '../api/session'
+import { can, logout, mockSignIn, useSession, useSessionBoot } from '../data/session'
+import { useCurrentProject, useOrgScope, useResetOnAccountChange, type LoadStatus, type SetProjectResult } from '../data/org'
 
 type Toast = { id: number; text: string; err?: boolean }
 type Confirm = { title: string; body: ReactNode; okText?: string; danger?: boolean; resolve: (v: boolean) => void }
 type Auth = { username: string; role: Role }
 
-interface Ctx {
+interface Feedback {
+  toast: (text: string, err?: boolean) => void
+  confirm: (o: Omit<Confirm, 'resolve'>) => Promise<boolean>
+}
+
+interface Ctx extends Feedback {
   authed: boolean
   /** 真实接口模式：正在用已存的令牌取 /me 恢复登录态，路由守卫等它结束再决定是否跳登录页 */
   authLoading: boolean
@@ -22,65 +33,64 @@ interface Ctx {
   can: (route: string) => boolean
   user: User
   scope: Scope
+  /** 组织数据（集成项目 + 项目列表）的加载状态；main.tsx 的 OrgGate 在 success 且有项目之前不渲染 Layout */
+  orgStatus: LoadStatus
+  orgError: ApiError | null
+  orgRefetch: () => void
   /** 演示数据模式的登录（Worker 校验演示账号）；真实接口模式由登录页调 session.signIn() */
   login: (a: Auth, remember: boolean) => void
   logout: () => void
   projectId: string
   /** make a project the 当前项目 and report the select event to the backend */
-  setProjectId: (id: string) => void
+  /** 返回是否成功（见 useCurrentProject）；调用方用 whenProjectSet() 只在成功时跳转 / 提示 */
+  setProjectId: (id: string) => SetProjectResult
+  /**
+   * 当前项目。OrgGate 保证 Layout 及页面渲染时一定有可见项目，这里不会是占位；
+   * 只有 Layout 之外（登录页等）才会拿到 id 为 '' 的占位。新代码（S8–S12）用 useCurrentProject() 并判空，写入口前也判空
+   */
   project: Project
-  toast: (text: string, err?: boolean) => void
-  confirm: (o: Omit<Confirm, 'resolve'>) => Promise<boolean>
   /** bumps whenever a select event was reported (常用项目 refresh) */
   selectTick: number
 }
 
-const C = createContext<Ctx>(null as unknown as Ctx)
-export const useApp = () => useContext(C)
+const C = createContext<Feedback>(null as unknown as Feedback)
 
-const KEY = 'hjc-auth'
-function readAuth(): Auth | null {
-  const raw = localStorage.getItem(KEY) || sessionStorage.getItem(KEY)
-  if (!raw) return null
-  try {
-    const a = JSON.parse(raw) as Auth
-    return a && typeof a.username === 'string' && (a.role === 'dealer' || a.role === 'admin') ? a : null
-  } catch { return null }
-}
+/** 没有可见项目时的占位，保证旧页面拿到的 project 不为空 */
+const NO_PROJECT: Project = Object.freeze({
+  id: '', code: '', name: '', groupId: '', city: '', district: '', kind: '', online: false, version: '', devices: 0, programCode: 0,
+}) as Project
 
-/**
- * 真实接口模式下页面用的 User。S6 之前项目、经销商仍是演示数据，所以按身份借用对应演示账号的
- * 数据范围（经销商 → cosyhome，平台 → hjadmin），名字、手机号、身份取自 /me。
- */
-function userOf(info: SessionInfo): User {
-  const base = api.profile(info.dealer ? 'cosyhome' : 'hjadmin')
-  const role: Role = info.dealer ? 'dealer' : 'admin'
+/** 兼容门面：拆分前 AppProvider 提供的全部字段 */
+export function useApp(): Ctx {
+  const fb = useContext(C)
+  const s = useSession()
+  const scope = useOrgScope()
+  const cur = useCurrentProject()
+  const project = cur.project ?? NO_PROJECT
   return {
-    ...base,
-    username: info.user.mobile || info.user.id,
-    name: info.user.name || info.user.mobile || base.name,
-    org: '恒境云平台',
-    role,
-    roleLabel: info.dealer ? '经销商' : '管理员',
+    authed: s.authed,
+    authLoading: s.authLoading,
+    session: s.session,
+    can,
+    user: s.user,
+    scope: scope.data,
+    orgStatus: scope.status,
+    orgError: scope.error,
+    orgRefetch: scope.refetch,
+    login: mockSignIn,
+    logout,
+    projectId: project.id,
+    setProjectId: cur.setProjectId,
+    project,
+    selectTick: cur.selectTick,
+    toast: fb.toast,
+    confirm: fb.confirm,
   }
 }
 
-const mock = isMockMode()
-
 export function AppProvider({ children }: { children: ReactNode }) {
-  const [auth, setAuth] = useState<Auth | null>(() => (mock ? readAuth() : null))
-  // 有令牌就先进入 loading，避免首屏在恢复完成前被守卫踢到登录页
-  const [sess, setSess] = useState<SessionState>(() => (!mock && readTokens() ? { status: 'loading', info: null } : getSession()))
-  const [storedPid, setStoredPid] = useState(() => localStorage.getItem('hjc-project') || '')
   const [toasts, setToasts] = useState<Toast[]>([])
   const [dlg, setDlg] = useState<Confirm | null>(null)
-  const [selectTick, setTick] = useState(0)
-
-  const info = mock ? null : sess.info
-  const user = useMemo(() => (info ? userOf(info) : api.profile(auth?.username ?? 'cosyhome')), [auth, info])
-  const scope = useMemo(() => api.scopeOf(user), [user])
-  // stale / foreign project id (e.g. after switching account) → first visible project
-  const project = scope.projects.find((p) => p.id === storedPid) ?? scope.projects[0]
 
   const toast = useCallback((text: string, err?: boolean) => {
     const id = Date.now() + Math.random()
@@ -90,43 +100,19 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const confirm = useCallback((o: Omit<Confirm, 'resolve'>) => new Promise<boolean>((resolve) => setDlg({ ...o, resolve })), [])
   const close = (v: boolean) => { dlg?.resolve(v); setDlg(null) }
 
-  // 真实接口模式：接上会话（过期通知、跨标签页同步），用已存令牌恢复登录态
-  const prevStatus = useRef(sess.status)
-  useEffect(() => {
-    if (mock) return
-    localStorage.removeItem(KEY); sessionStorage.removeItem(KEY) // 旧的 hjc-auth（可伪造）废弃
-    const unwire = initSession()
-    const unsub = subscribeSession(setSess)
-    void restoreSession()
-    return () => { unsub(); unwire() }
-  }, [])
+  // 真实接口模式：接上会话并恢复登录态；退出或换账号时清掉上一个账号的组织数据缓存
+  useSessionBoot()
+  useResetOnAccountChange()
+  const sess = useSession()
+  const prevAuthed = useRef(sess.authed)
   useEffect(() => {
     // 已登录 → 被动变成未登录（续期失败、令牌失效）时提示一次；主动退出不带 reason
-    if (prevStatus.current === 'authed' && sess.status === 'anon' && sess.reason?.kind === 'unauthenticated') toast('登录已过期，请重新登录', true)
-    prevStatus.current = sess.status
+    if (prevAuthed.current && !sess.authed && !sess.authLoading && sess.reason?.kind === 'unauthenticated') toast('登录已过期，请重新登录', true)
+    prevAuthed.current = sess.authed
   }, [sess, toast])
 
-  const setProjectId = useCallback((id: string) => {
-    setStoredPid(id)
-    localStorage.setItem('hjc-project', id)
-    api.reportProjectSelect(user, id).then(() => setTick((t) => t + 1))
-  }, [user])
-
-  const value: Ctx = {
-    authed: mock ? !!auth : sess.status === 'authed',
-    authLoading: !mock && sess.status === 'loading',
-    session: info,
-    can: (route) => mock || canRoute(route),
-    user, scope,
-    login: (a, remember) => { localStorage.removeItem(KEY); sessionStorage.removeItem(KEY); (remember ? localStorage : sessionStorage).setItem(KEY, JSON.stringify(a)); setAuth(a) },
-    logout: () => {
-      if (!mock) { void signOut(); return }
-      localStorage.removeItem(KEY); sessionStorage.removeItem(KEY); setAuth(null)
-    },
-    projectId: project.id, setProjectId,
-    project,
-    toast, confirm, selectTick,
-  }
+  // 每次渲染给新对象：与拆分前一致，toast / 弹窗变化时 useApp() 的使用方照旧跟着重渲染（S3a 换 Sonner 时再收紧）
+  const value: Feedback = { toast, confirm }
 
   return (
     <C.Provider value={value}>
