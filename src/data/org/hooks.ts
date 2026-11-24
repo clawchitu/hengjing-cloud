@@ -2,14 +2,14 @@
 // 查询键都以 ['org', userKey] 开头：按账号隔离缓存，退出时整体清掉（useResetOrgOnSignOut）。
 // 每个 hook 返回 Loadable：data（加载中 / 失败时为空数组或上一次的数据）、status 三态、error、isEmpty。
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
+import { useCallback, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { reportProjectSelect } from '../../api'
 import { isMockMode } from '../../api/config'
 import { ApiError, isApiError } from '../../api/errors'
 import { useSession } from '../session'
 import { capabilitiesOf, type Capabilities } from './capabilities'
 import { bumpSelectTick, getSelectTick, getStoredProjectId, setStoredProjectId, subscribeCurrent } from './current'
-import { joinScope, resolveCurrentProject, resolveDealerId } from './map'
+import { joinScope, resolveCurrentProject, resolveDealerId, withPlatformDealer } from './map'
 import { mockOrg, orgSource, type OrgContext, type ProjectFilter } from './sources'
 import type { Dealer, Group, LoadStatus, Project, Scope } from './types'
 
@@ -69,8 +69,9 @@ function useOrgQuery<T>(
   const refetch = useCallback(() => { void qRefetch() }, [qRefetch])
   if (!on) return { data: fallback, status: authed ? 'success' : 'loading', error: null, isEmpty: authed && isEmptyData(fallback), refetch: noop }
   const data = (q.data ?? fallback) as T
-  const status: LoadStatus = q.isError ? 'error' : q.isPending ? 'loading' : 'success'
-  return { data, status, error: toApiError(q.error), isEmpty: status === 'success' && isEmptyData(data), refetch }
+  // 有数据（含后台刷新失败时保留的旧数据）就是 success；只有从没拿到过数据时失败才报 error
+  const status: LoadStatus = q.data !== undefined ? 'success' : q.isError ? 'error' : 'loading'
+  return { data, status, error: status === 'error' ? toApiError(q.error) : null, isEmpty: status === 'success' && isEmptyData(data), refetch }
 }
 
 const isEmptyData = (d: unknown) => (Array.isArray(d) ? d.length === 0 : d && typeof d === 'object' ? Object.keys(d).length === 0 : !d)
@@ -84,7 +85,12 @@ const isEmptyData = (d: unknown) => (Array.isArray(d) ? d.length === 0 : d && ty
  */
 export function useDealers(): Loadable<Dealer[]> {
   const { ctx, userKey } = useOrgCtx()
-  return useOrgQuery<Dealer[]>(orgKeys.dealers(userKey), (c, s) => orgSource().dealers(c, s), mockOrg.dealers, NONE, isMockMode() || !ctx.dealerAccount)
+  const platform = !ctx.dealerAccount
+  const list = useOrgQuery<Dealer[]>(orgKeys.dealers(userKey), (c, s) => orgSource().dealers(c, s), mockOrg.dealers, NONE, isMockMode() || platform)
+  // 平台账号：有没有归属经销商的集成项目时，列表末尾补虚拟经销商「平台」（演示数据没有这种集成项目，不变）
+  const all = useIntegratedProjects({ enabled: platform })
+  const data = useMemo(() => (platform && list.status === 'success' ? withPlatformDealer(list.data, all.data) : list.data), [platform, list.status, list.data, all.data])
+  return data === list.data ? list : { ...list, data, isEmpty: list.status === 'success' && data.length === 0 }
 }
 
 /**
@@ -126,20 +132,26 @@ const combine = (...ls: Loadable<unknown>[]): { status: LoadStatus; error: ApiEr
   return { status: ls.some((l) => l.status === 'loading') ? 'loading' : 'success', error: null }
 }
 
+export interface OrgScope extends Loadable<Scope> {
+  /** /distributors 失败（只影响经销商选择和侧栏的经销商分组，不拖垮整个组织范围） */
+  dealersError: ApiError | null
+}
+
 /**
  * 当前账号可见的组织范围 { dealers, groups, projects }：集成项目里的项目（见 map.ts joinScope）。
- * 侧栏项目切换、顶栏搜索、首页统计、统一控制用它；三个请求任一失败即 error，任一加载中即 loading。
+ * 侧栏项目切换、顶栏搜索、首页统计、统一控制用它。status 只看集成项目与项目列表：任一失败即 error、
+ * 任一加载中即 loading；经销商列表失败单独放在 dealersError。
  */
-export function useOrgScope(): Loadable<Scope> {
+export function useOrgScope(): OrgScope {
   const { ctx } = useOrgCtx()
   const d = useDealers()
   const g = useIntegratedProjects()
   const p = useProjects()
   const scope = useMemo(() => joinScope(d.data, g.data, p.data, { dealerAccount: ctx.dealerAccount }), [d.data, g.data, p.data, ctx.dealerAccount])
-  const { status, error } = combine(d, g, p)
+  const { status, error } = combine(g, p)
   const [rd, rg, rp] = [d.refetch, g.refetch, p.refetch]
   const refetch = useCallback(() => { rd(); rg(); rp() }, [rd, rg, rp])
-  return { data: scope, status, error, isEmpty: status === 'success' && scope.projects.length === 0, refetch }
+  return { data: scope, status, error, dealersError: d.status === 'error' ? d.error : null, isEmpty: status === 'success' && scope.projects.length === 0, refetch }
 }
 
 export interface CurrentProject {
@@ -188,13 +200,20 @@ export function useDealerPick(dealers: readonly Pick<Dealer, 'id'>[]): [string, 
   return [resolveDealerId(dealers, picked), setPicked]
 }
 
-/** 退出（或换账号）时清掉上一个账号的组织数据缓存。AppProvider 调一次 */
-export function useResetOrgOnSignOut() {
+/**
+ * 账号变化（主动退出、续期失败、别的标签页退出或换账号、同账号重新登录中间的未登录）时，
+ * 取消进行中的请求并清掉全部查询缓存：组织数据按账号分键，但 S4 的 ['ctrl', …] 等不含账号，
+ * 不清就会让下一个账号先看到上一个账号的数据。用 layout effect，在新账号的界面绘制前清掉。AppProvider 调一次
+ */
+export function useResetOnAccountChange() {
   const qc = useQueryClient()
   const { userKey } = useSession()
   const prev = useRef(userKey)
-  useEffect(() => {
-    if (prev.current && prev.current !== userKey) qc.removeQueries({ queryKey: orgKeys.user(prev.current) })
+  useLayoutEffect(() => {
+    if (prev.current && prev.current !== userKey) {
+      void qc.cancelQueries()
+      qc.removeQueries()
+    }
     prev.current = userKey
   }, [userKey, qc])
 }

@@ -9,9 +9,10 @@ import { FontAwesomeIcon } from '@fortawesome/react-fontawesome'
 import { faCircleCheck, faCircleXmark, faTriangleExclamation } from '@fortawesome/free-solid-svg-icons'
 import { Button } from '@/components/ui/button'
 import type { Project, Role, Scope, User } from '../api'
+import type { ApiError } from '../api/errors'
 import type { SessionInfo } from '../api/session'
 import { can, logout, mockSignIn, useSession, useSessionBoot } from '../data/session'
-import { useCurrentProject, useOrgScope, useResetOrgOnSignOut } from '../data/org'
+import { useCurrentProject, useOrgScope, useResetOnAccountChange, type LoadStatus } from '../data/org'
 
 type Toast = { id: number; text: string; err?: boolean }
 type Confirm = { title: string; body: ReactNode; okText?: string; danger?: boolean; resolve: (v: boolean) => void }
@@ -32,13 +33,20 @@ interface Ctx extends Feedback {
   can: (route: string) => boolean
   user: User
   scope: Scope
+  /** 组织数据（集成项目 + 项目列表）的加载状态；main.tsx 的 OrgGate 在 success 且有项目之前不渲染 Layout */
+  orgStatus: LoadStatus
+  orgError: ApiError | null
+  orgRefetch: () => void
   /** 演示数据模式的登录（Worker 校验演示账号）；真实接口模式由登录页调 session.signIn() */
   login: (a: Auth, remember: boolean) => void
   logout: () => void
   projectId: string
   /** make a project the 当前项目 and report the select event to the backend */
   setProjectId: (id: string) => void
-  /** 当前项目。可见项目为空（真实接口加载中 / 无数据）时是空占位（id 为 ''），新代码请用 useCurrentProject() 判空 */
+  /**
+   * 当前项目。OrgGate 保证 Layout 及页面渲染时一定有可见项目，这里不会是占位；
+   * 只有 Layout 之外（登录页等）才会拿到 id 为 '' 的占位。新代码（S8–S12）用 useCurrentProject() 并判空，写入口前也判空
+   */
   project: Project
   /** bumps whenever a select event was reported (常用项目 refresh) */
   selectTick: number
@@ -65,6 +73,9 @@ export function useApp(): Ctx {
     can,
     user: s.user,
     scope: scope.data,
+    orgStatus: scope.status,
+    orgError: scope.error,
+    orgRefetch: scope.refetch,
     login: mockSignIn,
     logout,
     projectId: project.id,
@@ -90,7 +101,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   // 真实接口模式：接上会话并恢复登录态；退出或换账号时清掉上一个账号的组织数据缓存
   useSessionBoot()
-  useResetOrgOnSignOut()
+  useResetOnAccountChange()
   const sess = useSession()
   const prevAuthed = useRef(sess.authed)
   useEffect(() => {

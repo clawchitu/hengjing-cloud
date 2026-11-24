@@ -3,6 +3,13 @@ import type { DistributorEntity, IntegratedProjectEntity, ProjectEntity } from '
 import { toAppCode } from './capabilities'
 import type { Dealer, Group, Project, Scope } from './types'
 
+/**
+ * 平台账号下没有 distributor_id 的集成项目（平台创建的）归到这个虚拟经销商「平台」，
+ * 侧栏分组、经销商选择都能看到它们。按它取集成项目时不传 distributor_id，前端过滤。
+ */
+export const PLATFORM_DEALER_ID = '__platform__'
+export const PLATFORM_DEALER: Dealer = Object.freeze({ id: PLATFORM_DEALER_ID, name: '平台', short: '平台', region: '' })
+
 /** 在线判定：后端只在 true 时输出 online，缺失（或任何非 true 的值）都按离线 */
 export const isOnlineEntity = (e: { online?: unknown }) => e.online === true
 
@@ -35,7 +42,7 @@ export function toGroup(e: IntegratedProjectEntity): Group {
   return {
     id: e.id,
     code: str(e.code),
-    dealerId: str(e.distributor_id),
+    dealerId: str(e.distributor_id) || PLATFORM_DEALER_ID,
     name: str(e.name),
     type: '',
     typeColor: 'cyan',
@@ -50,6 +57,12 @@ export function toGroup(e: IntegratedProjectEntity): Group {
 export function toDealer(e: DistributorEntity): Dealer {
   const name = str(e.name)
   return { id: e.id, name, short: str(e.abbreviation) || name, region: str(e.region), code: e.code }
+}
+
+/** 经销商列表后面补上虚拟经销商「平台」（有没有归属经销商的集成项目时） */
+export function withPlatformDealer<T extends readonly Dealer[]>(dealers: T, groups: readonly Pick<Group, 'dealerId'>[]): T | Dealer[] {
+  if (!groups.some((g) => g.dealerId === PLATFORM_DEALER_ID) || dealers.some((d) => d.id === PLATFORM_DEALER_ID)) return dealers
+  return [...dealers, PLATFORM_DEALER]
 }
 
 /** 某个集成项目里的项目（按 Group.projectIds 判断，保持 projects 的原有顺序） */
@@ -80,8 +93,8 @@ export function joinScope(dealers: readonly Dealer[], groups: readonly Group[], 
   let ds = [...dealers]
   if (opts.dealerAccount && ds.length === 0) {
     const ids = [...new Set(groups.map((g) => g.dealerId))]
-    ds = ids.map((id) => ({ id, name: '', short: '', region: '' }))
-  }
+    ds = ids.map((id) => (id === PLATFORM_DEALER_ID ? PLATFORM_DEALER : { id, name: '', short: '', region: '' }))
+  } else if (!opts.dealerAccount) ds = [...withPlatformDealer(ds, groups)]
   return { dealers: ds, groups: [...groups], projects: visible }
 }
 

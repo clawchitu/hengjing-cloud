@@ -4,6 +4,7 @@ import { __resetHttpForTests } from '../../../api/http'
 import { clearTokens, writeTokens } from '../../../api/tokens'
 import { fakeBackend, json, text } from '../../../api/__tests__/helpers'
 import { users } from '../../../mock/org'
+import { PLATFORM_DEALER_ID } from '../map'
 import { mockOrg, orgSource, realSource } from '../sources'
 
 const ctx = { user: users.hjadmin, dealerAccount: false }
@@ -37,6 +38,12 @@ describe('真实数据源（只读接口）', () => {
     expect((await realSource.groups(ctx, undefined)).map((g) => g.projectIds)).toEqual([['p1']])
     await realSource.groups(ctx, 'D1')
     expect(be.callsTo('/integrated-projects').map((c) => c.body)).toEqual([{}, { distributor_id: 'D1' }])
+  })
+
+  it('虚拟经销商「平台」：不传 distributor_id 取全部，只留没有归属经销商的', async () => {
+    const be = fakeBackend({ '/integrated-projects': () => json({ entities: [{ id: 'g0', project_ids: ['p1'] }, { id: 'g1', distributor_id: 'D1' }] }) })
+    expect((await realSource.groups(ctx, PLATFORM_DEALER_ID)).map((g) => g.id)).toEqual(['g0'])
+    expect(be.callsTo('/integrated-projects')[0].body).toEqual({})
   })
 
   it('空响应 {}（proto3 不输出空列表）→ 空数组', async () => {

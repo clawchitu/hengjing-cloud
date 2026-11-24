@@ -5,7 +5,7 @@
 import { getApps, getCtrlProjects, getDistributors, getIntegratedProjects } from '../../api/pcfg'
 import { isMockMode } from '../../api/config'
 import { scopeOf } from '../../api'
-import { toDealer, toGroup, toProject } from './map'
+import { PLATFORM_DEALER_ID, toDealer, toGroup, toProject } from './map'
 import type { Dealer, Group, Project, User } from './types'
 
 export interface OrgContext {
@@ -70,7 +70,11 @@ const mockSource: OrgSource = {
 
 export const realSource: OrgSource = {
   dealers: async (_ctx, signal) => (await getDistributors({ signal })).map(toDealer),
-  groups: async (_ctx, dealerId, signal) => (await getIntegratedProjects({ distributorId: dealerId }, { signal })).map(toGroup),
+  groups: async (_ctx, dealerId, signal) => {
+    // 虚拟经销商「平台」：取全部再过滤没有归属经销商的
+    if (dealerId === PLATFORM_DEALER_ID) return (await getIntegratedProjects({}, { signal })).map(toGroup).filter((g) => g.dealerId === PLATFORM_DEALER_ID)
+    return (await getIntegratedProjects({ distributorId: dealerId }, { signal })).map(toGroup)
+  },
   projects: async (_ctx, filter, signal) => (await getCtrlProjects({ onlyOnline: filter.onlyOnline }, { signal })).map(toProject),
   apps: async (_ctx, signal) => Object.fromEntries((await getApps({ signal })).filter((a) => a.id).map((a) => [a.id, a.name ?? ''])),
 }

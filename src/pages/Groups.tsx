@@ -13,6 +13,11 @@ import { projectsInGroup, projectsInGroups, useDealerPick, useDealers, useIntegr
 import { NO_DEALER, dealerPickModel } from './dealerPick'
 import { PROGRAMS } from '../api'
 
+/** 真实接口只有行政区划码、没有区县名：空值归到「未知区域」（Radix Select 不允许空字符串选项） */
+const UNKNOWN_AREA = '未知区域'
+const areaOf = (p: { district: string }) => p.district || UNKNOWN_AREA
+const pctOf = (on: number, total: number) => (total ? (on / total) * 100 : 0)
+
 export default function Groups() {
   const nav = useNavigate()
   const { projectId, setProjectId, toast, user } = useApp()
@@ -65,10 +70,10 @@ export default function Groups() {
     </div>
   )
   const inG = projectsInGroup(g, projects)
-  const areas = ['全部区域', ...new Set(inG.map((p) => p.district))]
+  const areas = ['全部区域', ...new Set(inG.map(areaOf))]
   // 下拉显示和列表过滤用同一个有效值：不在当前集成项目里的区域一律按「全部区域」
   const areaV = areas.includes(area) ? area : '全部区域'
-  const list = inG.filter((p) => (!pq || (p.name + p.code).toLowerCase().includes(pq.toLowerCase())) && (areaV === '全部区域' || p.district === areaV) && (st === '全部' || (st === '在线') === p.online))
+  const list = inG.filter((p) => (!pq || (p.name + p.code).toLowerCase().includes(pq.toLowerCase())) && (areaV === '全部区域' || areaOf(p) === areaV) && (st === '全部' || (st === '在线') === p.online))
   const SIZE = 6
   const shown = list.slice((page - 1) * SIZE, page * SIZE)
   const on = inG.filter((p) => p.online).length
@@ -87,7 +92,7 @@ export default function Groups() {
           {dealerPick}
           <Card pad={false} className="row" style={{ height: 40, padding: '0 14px', marginBottom: 14, color: 'var(--faint)', boxShadow: 'none' }}><Icon icon={faMagnifyingGlass} /><InputGroupInput placeholder="搜索集成项目名称 / 编码" value={gq} onChange={(e) => setGq(e.target.value)} /></Card>
           {groups.filter((x) => !gq || (x.name + x.code).includes(gq)).map((x) => {
-            const ps = projectsInGroup(x, projects), o = ps.filter((p) => p.online).length, pct = (o / ps.length) * 100
+            const ps = projectsInGroup(x, projects), o = ps.filter((p) => p.online).length, pct = pctOf(o, ps.length)
             return (
               <Card key={x.id} className={'grp-card' + (x.id === gid ? ' on' : '')} pad={false}>
                 <div onClick={() => pickGroup(x.id)}>
@@ -114,7 +119,7 @@ export default function Groups() {
               <div><span>集成项目编码</span><b className="num">{g.code}</b></div>
               <div><span>应用类型</span><b>{g.type}</b></div>
               <div><span>创建时间</span><b className="num">{g.created}</b></div>
-              <div><span>在线率</span><b className="green num">{((on / inG.length) * 100).toFixed(1)}% <small className="faint" style={{ fontWeight: 400, fontSize: 12 }}>({on}/{inG.length})</small></b></div>
+              <div><span>在线率</span><b className="green num">{pctOf(on, inG.length).toFixed(1)}% <small className="faint" style={{ fontWeight: 400, fontSize: 12 }}>({on}/{inG.length})</small></b></div>
             </div>
           </Card>
           <Card pad={false}>
@@ -135,10 +140,10 @@ export default function Groups() {
                 {shown.map((p) => (
                   <TableRow key={p.id} className={p.id === projectId ? 'cur-row' : ''}>
                     <TableCell style={{ fontWeight: 600 }}><span className="bico"><Icon icon={faBuilding} /></span>{p.name}</TableCell>
-                    <TableCell className="num">{p.code}</TableCell><TableCell>{p.city} · {p.district}</TableCell>
+                    <TableCell className="num">{p.code}</TableCell><TableCell>{p.city && p.district ? <>{p.city} · {p.district}</> : p.city || p.district || UNKNOWN_AREA}</TableCell>
                     <TableCell><Badge variant={p.online ? 'green' : 'gray'} style={{ color: p.online ? undefined : 'var(--muted)' }}><span className="dot" style={{ width: 5, height: 5 }} />{p.online ? '在线' : '离线'}</Badge></TableCell>
                     <TableCell className="num">{p.version}</TableCell>
-                    <TableCell><Badge variant={p.programCode === 12 ? 'purple' : 'gray'} style={{ color: p.programCode === 12 ? undefined : 'var(--muted)' }}>{PROGRAMS[p.programCode]} <span className="num">({p.programCode})</span></Badge></TableCell>
+                    <TableCell><Badge variant={p.programCode === 12 ? 'purple' : 'gray'} style={{ color: p.programCode === 12 ? undefined : 'var(--muted)' }}>{p.appName || PROGRAMS[p.programCode] || '未知应用'} <span className="num">({p.programCode})</span></Badge></TableCell>
                     <TableCell className="text-right"><Button variant="link" onClick={() => { setProjectId(p.id); toast(p.online ? `已进入「${p.name}」` : `「${p.name}」当前离线，显示最后在线数据`, !p.online); nav('/sensors') }}>查看数据 <Icon icon={faArrowRight} /></Button></TableCell>
                   </TableRow>
                 ))}

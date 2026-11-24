@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { APP_CODE, capabilitiesOf, hasRooms, isStandalone, toAppCode } from '../capabilities'
-import { isOnlineEntity, joinScope, projectsInGroup, projectsInGroups, resolveCurrentProject, resolveDealerId, toDealer, toGroup, toProject } from '../map'
+import { isOnlineEntity, joinScope, PLATFORM_DEALER, PLATFORM_DEALER_ID, withPlatformDealer, projectsInGroup, projectsInGroups, resolveCurrentProject, resolveDealerId, toDealer, toGroup, toProject } from '../map'
 import type { Group, Project } from '../types'
 
 const P = (id: string, extra: Partial<Project> = {}): Project => ({
@@ -61,7 +61,7 @@ describe('实体映射', () => {
   it('IntegratedProjectEntity → Group：project_ids 去重；平台创建的没有 distributor_id', () => {
     expect(toGroup({ id: 'g1', code: '2', name: '五恒集成项目', distributor_id: 'D1', project_ids: ['a', 'b', 'a'], created_at: '2026-11-24 07:49:41' }))
       .toMatchObject({ id: 'g1', code: '2', dealerId: 'D1', projectIds: ['a', 'b'], created: '2026-11-24 07:49:41' })
-    expect(toGroup({ id: 'g0' })).toMatchObject({ dealerId: '', projectIds: [] })
+    expect(toGroup({ id: 'g0' })).toMatchObject({ dealerId: PLATFORM_DEALER_ID, projectIds: [] })
   })
   it('DistributorEntity → Dealer：简称缺失时用全称', () => {
     expect(toDealer({ id: 'D1', name: '科希家研发苏州main', abbreviation: '科希家研发' }).short).toBe('科希家研发')
@@ -79,6 +79,16 @@ describe('组织范围', () => {
     const s = joinScope([], [G('g1', ['a'], 'D1'), G('g2', ['b'], 'D2'), G('g3', ['c'], 'D1')], projects, { dealerAccount: true })
     expect(s.dealers.map((d) => d.id)).toEqual(['D1', 'D2'])
     expect(joinScope([], [G('g1', ['a'])], projects, { dealerAccount: false }).dealers).toEqual([])
+  })
+  it('平台账号：没有 distributor_id 的集成项目归到虚拟经销商「平台」，侧栏能看到', () => {
+    const plat = toGroup({ id: 'g0', project_ids: ['a'] })
+    const s = joinScope([{ id: 'D1', name: '甲', short: '甲', region: '' }], [plat, G('g1', ['b'], 'D1')], projects, { dealerAccount: false })
+    expect(s.dealers.map((d) => d.id)).toEqual(['D1', PLATFORM_DEALER_ID])
+    expect(s.groups.find((g) => g.id === 'g0')?.dealerId).toBe(PLATFORM_DEALER_ID)
+    expect(s.dealers[1]).toEqual(PLATFORM_DEALER)
+    // 都有归属时不补，原数组原样返回（引用不变）
+    const ds = [{ id: 'D1', name: '甲', short: '甲', region: '' }]
+    expect(withPlatformDealer(ds, [G('g1', [], 'D1')])).toBe(ds)
   })
   it('projectsInGroup / projectsInGroups 按 projectIds 判断归属（一个项目可属于多个集成项目）', () => {
     const g1 = G('g1', ['b', 'a']), g2 = G('g2', ['a', 'c'])

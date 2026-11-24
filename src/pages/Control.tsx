@@ -9,6 +9,7 @@ import { InputGroup, InputGroupInput } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger } from '@/components/ui/select'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { useApp } from '../app/store'
+import { projectsInGroup, useDealerPick } from '../data/org'
 import * as api from '../api'
 import { hasRooms } from '../api'
 
@@ -18,14 +19,16 @@ export default function Control() {
   const { toast, confirm, scope, user } = useApp()
   const isAdmin = user.role === 'admin'
   const { projects } = scope
-  const [dealerId, setDealerId] = useState(scope.dealers[0]?.id ?? '')
-  const groups = scope.groups.filter((g) => g.dealerId === dealerId)
+  // S6a：经销商默认值随列表异步到达（派生值）；经销商账号没有选择器，直接用账号范围内的全部集成项目
+  const [dealerId, setDealerId] = useDealerPick(scope.dealers)
+  const groups = isAdmin ? scope.groups.filter((g) => g.dealerId === dealerId) : scope.groups
   const [gidRaw, setGid] = useState('')
   const gid = groups.some((g) => g.id === gidRaw) ? gidRaw : groups[0]?.id ?? ''
   const [pq, setPq] = useState('')
-  const inGroup = projects.filter((p) => p.groupId === gid)
+  // 按 Group.projectIds 判断归属：一个项目可能属于多个集成项目
+  const inGroup = projectsInGroup(groups.find((g) => g.id === gid), projects)
   const ps = inGroup.filter((p) => !pq.trim() || (p.name + p.id).toLowerCase().includes(pq.trim().toLowerCase()))
-  const [picked, setPicked] = useState<string[]>(() => ['PRJ-10241', 'PRJ-10242', 'PRJ-10243', 'PRJ-10245'].filter((id) => projects.some((p) => p.id === id && p.groupId === gid)))
+  const [picked, setPicked] = useState<string[]>(() => ['PRJ-10241', 'PRJ-10242', 'PRJ-10243', 'PRJ-10245'].filter((id) => inGroup.some((p) => p.id === id)))
   const [expand, setExpand] = useState(false)
   const [power, setPower] = useState<'开启' | '关闭' | '不变'>('开启')
   const [mode, setMode] = useState('制冷')

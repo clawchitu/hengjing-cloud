@@ -6,12 +6,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { setConfig } from '../../../api/config'
 import { __resetHttpForTests } from '../../../api/http'
 import { createQueryClient } from '../../../api/query'
-import { __resetSessionForTests, signIn, signOut } from '../../../api/session'
+import { __resetSessionForTests, signIn } from '../../../api/session'
 import { clearTokens } from '../../../api/tokens'
 import { fakeBackend, json, text, type Call } from '../../../api/__tests__/helpers'
 import { __resetSessionViewForTests, mockSignIn } from '../../session'
 import { __resetCurrentForTests, PROJECT_KEY } from '../current'
-import { useCurrentProject, useDealerPick, useDealers, useIntegratedProjects, useOrgScope, useProjects, useResetOrgOnSignOut } from '../hooks'
+import { PLATFORM_DEALER_ID } from '../map'
+import { useCurrentProject, useDealerPick, useDealers, useIntegratedProjects, useOrgScope, useProjects } from '../hooks'
 
 function wrapper() {
   const client = createQueryClient()
@@ -195,25 +196,48 @@ describe('真实数据源', () => {
     }, { wrapper: w })
     expect(result.current.dealerId).toBe('')
     expect(result.current.groups.data).toEqual([])
-    expect(be.counts['/integrated-projects']).toBeUndefined() // 没选出经销商前不取
+    // 经销商列表自己会取一次全部集成项目（判断要不要补「平台」）；按经销商取要等选出经销商
+    const byDealer = () => be.callsTo('/integrated-projects').map((c) => c.body as Record<string, unknown>).filter((b) => b.distributor_id)
+    expect(byDealer()).toEqual([])
     d.release()
     await waitFor(() => expect(result.current.dealerId).toBe('D1'))
     await waitFor(() => expect(result.current.groups.status).toBe('success'))
-    expect(be.callsTo('/integrated-projects').map((c) => c.body)).toEqual([{ distributor_id: 'D1' }])
+    expect(byDealer()).toEqual([{ distributor_id: 'D1' }])
     act(() => result.current.setDealerId('D2'))
     expect(result.current.dealerId).toBe('D2')
-    await waitFor(() => expect(be.callsTo('/integrated-projects').map((c) => c.body)).toEqual([{ distributor_id: 'D1' }, { distributor_id: 'D2' }]))
+    await waitFor(() => expect(byDealer()).toEqual([{ distributor_id: 'D1' }, { distributor_id: 'D2' }]))
   })
 
-  it('退出后清掉上一个账号的组织数据缓存', async () => {
-    backend({ '/auth/invalidate': () => json({}) })
+  it('后台刷新失败时保留旧数据，不报 error', async () => {
+    let fail = false
+    backend({ '/ctrl/projects': () => (fail ? text('no permission', 403) : json({ project_entities: PROJECTS })) })
     await signIn('u', 'pw', true)
-    const { client, wrapper: w } = wrapper()
-    const { result } = renderHook(() => { useResetOrgOnSignOut(); return useProjects() }, { wrapper: w })
+    const { wrapper: w } = wrapper()
+    const { result } = renderHook(() => useProjects(), { wrapper: w })
     await waitFor(() => expect(result.current.status).toBe('success'))
-    expect(client.getQueryCache().findAll({ queryKey: ['org', 'user:admin-1'] }).length).toBeGreaterThan(0)
-    await act(() => signOut())
-    await waitFor(() => expect(client.getQueryCache().findAll({ queryKey: ['org', 'user:admin-1'] }).length).toBe(0))
+    fail = true
+    await act(async () => { result.current.refetch(); await new Promise((r) => setTimeout(r, 20)) })
+    expect(result.current.status).toBe('success')
+    expect(result.current.error).toBeNull()
+    expect(result.current.data.length).toBe(3)
+  })
+
+  it('/distributors 失败不拖垮组织范围：status 仍 success，错误单独放在 dealersError', async () => {
+    backend({ '/distributors': () => text('no permission', 403) })
+    await signIn('u', 'pw', true)
+    const { wrapper: w } = wrapper()
+    const { result } = renderHook(() => useOrgScope(), { wrapper: w })
+    await waitFor(() => expect(result.current.dealersError?.kind).toBe('forbidden'))
+    expect(result.current.status).toBe('success')
+    expect(result.current.data.projects.length).toBe(3)
+  })
+
+  it('平台账号的经销商列表：有没有归属的集成项目时末尾补「平台」', async () => {
+    backend({ '/integrated-projects': () => json({ entities: [...GROUPS, { id: 'g0', code: '1', project_ids: ['p1'] }] }) })
+    await signIn('u', 'pw', true)
+    const { wrapper: w } = wrapper()
+    const { result } = renderHook(() => useDealers(), { wrapper: w })
+    await waitFor(() => expect(result.current.data.map((d) => d.id)).toEqual(['D1', 'D2', PLATFORM_DEALER_ID]))
   })
 })
 

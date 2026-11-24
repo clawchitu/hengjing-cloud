@@ -6,6 +6,6 @@
 //   projectsInGroup / projectsInGroups                                         按 Group.projectIds 取项目
 export * from './types'
 export { APP_CODE, capabilitiesOf, hasRooms, isStandalone, toAppCode, type Capabilities } from './capabilities'
-export { isOnlineEntity, joinScope, projectsInGroup, projectsInGroups, resolveCurrentProject, resolveDealerId } from './map'
-export { orgKeys, useApps, useCapabilities, useCurrentProject, useDealerPick, useDealers, useIntegratedProjects, useOrgScope, useProjects, useResetOrgOnSignOut, type CurrentProject, type Loadable } from './hooks'
+export { isOnlineEntity, joinScope, PLATFORM_DEALER, PLATFORM_DEALER_ID, withPlatformDealer, projectsInGroup, projectsInGroups, resolveCurrentProject, resolveDealerId } from './map'
+export { orgKeys, useApps, useCapabilities, useCurrentProject, useDealerPick, useDealers, useIntegratedProjects, useOrgScope, useProjects, useResetOnAccountChange, type CurrentProject, type Loadable, type OrgScope } from './hooks'
 export { orgSource, type OrgSource, type ProjectFilter } from './sources'
