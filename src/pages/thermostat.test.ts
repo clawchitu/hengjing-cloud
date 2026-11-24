@@ -16,11 +16,12 @@ import { __resetHttpForTests } from '../api/http'
 import { createQueryClient } from '../api/query'
 import { __resetSessionForTests, signIn, signOut } from '../api/session'
 import { clearTokens } from '../api/tokens'
+import { ApiError } from '../api/errors'
 import { fakeBackend, json, type Call } from '../api/__tests__/helpers'
 import { AppProvider } from '../app/store'
 import { __resetCurrentForTests, setStoredProjectId } from '../data/org/current'
 import { __resetSessionViewForTests } from '../data/session'
-import { __resetWritesForTests, LIMITS } from '../features/thermostat'
+import { __resetWritesForTests, LIMITS, realSource as thermoRealSource } from '../features/thermostat'
 import Layout from '../components/Layout'
 import { OrgGate } from '../app/OrgGate'
 import { __resetWriteLockForTests, acquire as acquireLock, release as releaseLock, STORAGE_PREFIX, verify as verifyLock } from '../api/writeLock'
@@ -940,7 +941,7 @@ describe('共用写锁（按控制屏）', () => {
 })
 
 describe('#35 评审修正', () => {
-  it('写接口 503 不带 code 14（网关纯文本 503 / JSON 无 code）：结果未知，不说失败，锁保持、草稿保留；503 + code 14 才是未下发、放锁、草稿回退', async () => {
+  it('写接口 503 不带 code 14（网关纯文本 503 / JSON 无 code）：结果未知，不说失败，锁保持、草稿保留；503 + code 14 才是未下发、放锁（没发出，草稿保留可再下发）', async () => {
     const plain503 = () => new Response('Service Unavailable', { status: 503, headers: { 'content-type': 'text/plain' } })
     for (const make of [plain503, () => json({ message: 'upstream unavailable' }, 503)]) {
       const be = backend({ '/ctrl/room-temperature-set': make })
@@ -963,7 +964,8 @@ describe('#35 评审修正', () => {
     expect(writes(be)).toHaveLength(1)
     await waitFor(() => expect((screen.getByRole('button', { name: '全部开启' }) as HTMLButtonElement).disabled).toBe(false))
     expect(document.querySelector('[data-lock]')).toBeNull()
-    expect(within(card('客厅')).getByLabelText('客厅 设定温度').textContent).toBe('25.5°C') // 草稿回退
+    expect(card('客厅').textContent).toContain('待下发：设定温度 25.5 → 26.0°C') // 没发出：草稿保留（不是待确认）
+    expect(card('客厅').querySelector('[data-pending]')).toBeNull()
   })
 
   it('206 全部开启：记录确认后预检的目标房间 id 集合；回读只剩部分房间（其余都一致）→ 无法核对，不提示全部已生效、锁保持，记录带 roomIds', async () => {
@@ -1184,6 +1186,45 @@ describe('#35 第三轮：回读 ID 歧义、重新下发中止、跨项目', ()
     await act(async () => { await verifyLock('screen:SCREEN-T') })
     await flush(80)
     expect(card('客厅').textContent).toContain('待下发：设定温度 25.5 → 25.0°C')
+  })
+})
+
+describe('#35 第四轮：重新下发没发出（写防护 / 503 code 14 / 认领前断网）', () => {
+  async function expiredThenRetry(retryWrite: () => Response | Promise<Response>, setup?: () => void) {
+    let n = 0
+    const be = backend({ '/ctrl/room-temperature-set': () => (++n === 1 ? ok201NoApply() : retryWrite()) })
+    await draftAndSend()
+    await confirmOk()
+    await waitFor(() => expect(document.querySelector('[data-lock="unknown"]')).toBeTruthy())
+    vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 3 * 60_000)
+    fireEvent.click(within(document.querySelector('[data-lock="unknown"]') as HTMLElement).getByRole('button', { name: '核对' }))
+    await waitFor(() => expect(document.querySelector('[data-lock]')).toBeNull())
+    await flush(80)
+    setup?.()
+    fireEvent.click(btn(card('客厅'), '重新下发'))
+    await confirmOk()
+    await waitFor(() => expect(toasts()).toMatch(/客厅 未下发：/))
+    await flush(80)
+    await poll([ROOM, OFF_ROOM])
+    // 本次没发出：上次的待确认原样恢复，草稿不清
+    expect(card('客厅').querySelector('[data-pending]')?.textContent).toContain('上次下发未核对一致：设定温度 25.5 → 26.0°C')
+    expect(document.querySelector('[data-lock]')).toBeNull()
+    return be
+  }
+  it('503 code 14', async () => {
+    const be = await expiredThenRetry(() => json({ code: 14, message: '控制屏消息发送失败' }, 503))
+    expect(writes(be)).toHaveLength(2)
+  })
+  it('写防护拦截（项目不在写入名单）', async () => {
+    const be = await expiredThenRetry(() => ok201(), () => setConfig({ apiBase: '/api', apiEnv: 'test', dataSource: 'real', writeProjectCodes: ['999999999'] }))
+    expect(writes(be)).toHaveLength(1)
+  })
+  it('认领前断网（写入口在 beforeSend 之前就出错，如发送前续期断网）', async () => {
+    const be = await expiredThenRetry(() => ok201(), () => {
+      // 写入口在调 beforeSend 之前抛网络错误（不认领、不发 fetch）
+      vi.spyOn(thermoRealSource, 'setRoom').mockRejectedValue(new ApiError('network', '网络中断'))
+    })
+    expect(writes(be)).toHaveLength(1)
   })
 })
 

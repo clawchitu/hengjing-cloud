@@ -81,7 +81,7 @@ describe('正常路径', () => {
     const x = spec({ present: () => here, preflight: async () => ({ ok: true, payload: 26 }) })
     const orig = x.s.send
     x.s.send = (p, bs) => { here = false; return orig(p, bs) }
-    expect(await W.runOp(x.s)).toBe('fail')
+    expect(await W.runOp(x.s)).toBe('not-sent')
     expect(x.calls).toEqual([])
     expect(L.lockOf(P1)).toBeNull()
   })
@@ -140,7 +140,7 @@ describe('预检', () => {
     // 写入口等令牌期间换代（beforeSend 之前）：beforeSend 里会话 / claim 不过 → 写入口不发，按未下发结束
     acct = { user: 'u1', gen: 2 }
     const b = spec({ send: async (_p, bs) => { acct = { user: 'u1', gen: 3 }; if (!bs()) throw new ApiError('write_blocked', '发送前复核未通过，未下发'); b.calls.push('send') } })
-    expect(await W.runOp(b.s)).toBe('fail')
+    expect(await W.runOp(b.s)).toBe('not-sent')
     expect(b.calls).toEqual(['preflight'])
     expect(L.lockOf(P1)).toBeNull()
   })
@@ -171,7 +171,7 @@ describe('发送结果', () => {
     expect(L.lockOf(P1)).toBeNull()
     expect(f.toasts[0]).toBe('客厅 下发失败：控制屏拒绝')
     const b = spec({ send: async () => { throw new ApiError('write_blocked', '名单外') } })
-    expect(await W.runOp(b.s)).toBe('fail')
+    expect(await W.runOp(b.s)).toBe('not-sent')
     expect(b.calls).toEqual(['preflight'])
     expect(L.lockOf(P1)).toBeNull()
     expect(W.getResult('P1', 'R1')).toMatchObject({ outcome: 'fail', text: '未下发：名单外' })
@@ -326,7 +326,7 @@ describe('核对结论只在写锁认可后才进页面（#35 Codex 第二轮第
 describe('没认领就结束的结果未知', () => {
   it('发送前（beforeSend 之前）断网 / 续期失败：一定没发出 → 按「未下发」结束、放锁，不显示「已下发」或「已到期」', async () => {
     const x = spec({ send: async () => { throw new ApiError('network', '网络中断') } })
-    expect(await W.runOp(x.s)).toBe('fail')
+    expect(await W.runOp(x.s)).toBe('not-sent')
     await flush()
     expect(x.toasts[0]).toBe('客厅 未下发：网络中断')
     expect(L.lockOf(P1)).toBeNull()

@@ -183,12 +183,14 @@ function RoomCard({ room: r, ctx, range, selected, onSelect, draft, conflict, on
     // 下发开始：这份草稿进入「待确认」（与写锁分开维护）。只有写锁认可的核对全部一致（onApplied，含之后的自动再核对）、
     // 确定失败需回滚（fail），或用户点「放弃本次改动」才清；没发出（中止 / 被占）取消待确认、照常整理。
     // 待核对、回读失败、面板离线、目标缺失期间，以及写锁到期放开之后，普通轮询都不整理它（到期只恢复下发资格并强制重读）
-    // 重新下发（上次未核对一致）：本次没发出就恢复原来的待确认，不能因为这次中止就当作上次已了结
+    // 重新下发（上次未核对一致）：本次没发出（中止、被占、写防护、503 code 14、认领前断网）就恢复原来的待确认，
+    // 不能因为这次没发出就当作上次已了结
     const wasPending = pending
     onPending(true)
     const out = await submit(p, { query: built.query, draft: now.draft }, okText, 'set', undefined, onDiscard)
+    // ok（写锁认可的核对一致）/ fail（已发出被明确拒绝，回滚为面板值）才清；没发出（not-sent / 中止 / 被占）保留草稿、恢复原待确认
     if (out === 'ok' || out === 'fail') onDiscard()
-    else if (out === 'aborted' || out === 'busy') onPending(wasPending)
+    else if (out === 'not-sent' || out === 'aborted' || out === 'busy') onPending(wasPending)
   }
 
   async function toggle(v: boolean) {

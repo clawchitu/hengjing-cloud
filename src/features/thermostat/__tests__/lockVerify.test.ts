@@ -56,3 +56,22 @@ describe('回读房间 ID 歧义（S9 在共用比对器之前检查）', () => 
     expect(match206(p, raw(room(), r8))).toMatchObject({ verdict: 'applied' })
   })
 })
+
+describe('206 回读歧义逐目标汇总（verdictOf：结果未知 > 未变化 > 无法核对 > 已生效）', () => {
+  const p = { on: true, roomIds: [7, 8, 9] }
+  const r8 = room({ key: '8', equipmentId: 8 })
+  const dup7 = [room(), room({ on: false })]
+  it('歧义 + 另一个目标面板离线 → 结果未知', () => {
+    expect(match206(p, raw(...dup7, r8, room({ key: '9', equipmentId: 9, connected: false })))).toEqual({ verdict: 'unknown', fields: { switch: 'unknown' } })
+    expect(match206(p, raw(room(), r8, room({ key: '9', equipmentId: 9, connected: false }), room({ key: '0', equipmentId: 0 })))).toMatchObject({ verdict: 'unknown' })
+  })
+  it('歧义 + 另一个目标不一致 → 未变化', () => {
+    expect(match206(p, raw(...dup7, r8, room({ key: '9', equipmentId: 9, on: false })))).toEqual({ verdict: 'unchanged', fields: { switch: 'unchanged' } })
+    expect(match206(p, raw(room(), r8, room({ key: '9', equipmentId: 9, on: false }), room({ key: '0', equipmentId: 0 })))).toMatchObject({ verdict: 'unchanged' })
+  })
+  it('只有歧义（其余一致）→ 无法核对；其余目标缺失也按无法核对', () => {
+    expect(match206(p, raw(...dup7, r8, room({ key: '9', equipmentId: 9 })))).toEqual({ verdict: 'unverifiable', fields: { switch: 'unverifiable' } })
+    expect(match206(p, raw(...dup7, r8))).toMatchObject({ verdict: 'unverifiable' })
+  })
+})
+

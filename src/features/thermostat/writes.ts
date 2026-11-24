@@ -30,8 +30,12 @@ import { outcomeOf } from '@/features/unified/machine'
 
 export type Stage = 'preflight' | 'sending' | 'verifying'
 export type Outcome = 'ok' | 'fail' | 'unknown'
-/** ok = 已生效（核对一致）；unverified = 已下发但还没核对一致（未变化 / 无法核对 / 结果未知） */
-export type RunResult = Outcome | 'unverified' | 'busy' | 'aborted'
+/**
+ * ok = 已生效（核对一致）；unverified = 已下发但还没核对一致（未变化 / 无法核对 / 结果未知）；
+ * fail = 已发出、被明确拒绝（success=false、网关无权限、后端参数错误）；
+ * not-sent = 确定没发出（写防护拦截、503 code 14、401、认领前出错如续期断网）——页面据此保留草稿（重新下发时恢复原待确认）
+ */
+export type RunResult = Outcome | 'not-sent' | 'unverified' | 'busy' | 'aborted'
 /** 回读：等原写结束 / 读取中 / 已读到 / 读取失败 */
 export type Readback = 'waiting' | 'pending' | 'ok' | 'fail'
 
@@ -268,7 +272,7 @@ export async function runOp<P, L>(o: OpSpec<P, L>): Promise<RunResult> {
     record({ outcome, text, readback: outcome === 'unknown' ? 'waiting' : 'pending' })
     // 结论交给写锁：ok / unknown 进入待核对（原写已结算时立刻自动核对一次），fail 放锁
     settle(token, outcome)
-    if (!wrote) { patch({ readback: 'ok' }); return outcome }
+    if (!wrote) { patch({ readback: 'ok' }); return 'not-sent' }
     if (outcome === 'unknown') return outcome
 
     setStage('verifying')
