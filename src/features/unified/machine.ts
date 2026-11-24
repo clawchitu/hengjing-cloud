@@ -1,45 +1,56 @@
 // 统一控制下发流程的显式状态机：
 //
-//   idle ──request(校验通过)──▶ confirming ──confirm──▶ sending ──▶ success（Reply success=true 即已生效）
-//    ▲  ◀──request(校验不过，带 errors)        │                └──▶ failure（不自动重试）
-//    │  ◀────────────cancel──────────────────┘
-//    └────────────────reset───────────── success / failure
+//   idle ──request(校验通过)──▶ confirming ──confirm──▶ sending ──▶ success（Reply success=true 即已生效；
+//    ▲  ◀──request(校验不过，带 errors)  │   │            │          或结果未知但回读逐字段一致，verified）
+//    │  ◀──cancel / abort──────────────┘   │            ├──▶ failure（没发出 / 明确被拒）
+//    │  ◀──abort 或发送前复核不过──────────────┘            └──▶ unknown（结果未知且回读不一致或读不到：结果未确认）
+//    └────────────────reset───────────── success / failure / unknown
 //
 // - transition() 是纯函数：不合法的事件原样返回当前状态（比如 sending 期间再点确认）。
-// - createUnifiedController() 负责副作用：确认时重新取当前项目并复核（离线、换了项目就退回 idle）、
-//   下发前读一次、经 S4 的统一写入口 writeCtrl(203) 下发一次、下发后读一次核对、写脱敏日志。
-// - sending 期间重复 confirm() 返回同一个 Promise，不会重复下发；失败后只能 reset() 再走一遍确认。
+// - createUnifiedController() 负责副作用：确认时按最新上下文复核、下发前读一次、真正发送前再核对
+//   （AbortSignal 没取消、世代号没变、项目 code 没变、按最新上下文校验仍通过；任何一项不符就终止回 idle）、
+//   经 S4 的统一写入口 writeCtrl(203) 下发一次、下发后读一次并逐字段核对、写脱敏日志。
+// - 全程不重试：sending 期间重复 confirm() 返回同一个 Promise；结束后只能 reset() 再走一遍确认。
+// - abort()：页面卸载或切换项目时调用。发送前的流程立即终止；已经发出的下发无法撤回，照常走完回读。
 import { writeCtrl, type CtrlReply, type WriteQuery } from '@/api/ctrl'
 import { isApiError, type ApiErrorKind } from '@/api/errors'
 import { TEXT } from './constants'
-import { consoleLogger, makeEntry, type UnifiedLogEvent, type UnifiedLogger } from './log'
-import { describeQuery, validateUnified, type UnifiedContext, type UnifiedDraft } from './rules'
+import { consoleLogger, makeEntry, type EntryInput, type UnifiedLogEvent, type UnifiedLogger } from './log'
+import { changedFields, describeQuery, echoMismatches, validateUnified, type EchoMismatch, type Issue, type UnifiedContext, type UnifiedDraft, type UnifiedEcho } from './rules'
 
 export interface UnifiedTarget { projectId: string; projectCode: string; projectName: string }
 export type SendingStep = 'read-before' | 'send' | 'read-after'
 /**
- * 失败时下发到了哪一步：
- * - not-sent：没发出（下发前读取失败、写防护拦截、参数错误、复核不过）
- * - rejected：控制屏明确拒绝（Reply success=false 或后端返回错误）
- * - unknown：超时或断网，请求可能已到控制屏，结果未知，须看回读
+ * failure 的原因：
+ * - not-sent：没发出（下发前读取失败、写防护拦截、写消息校验不过）
+ * - rejected：明确被拒（控制屏 success=false、网关无权限 / 令牌失效、后端参数错误）
+ * 结果未知（超时、断网、500、503、取消等）不进 failure，见 unknown 状态
  */
-export type FailureOutcome = 'not-sent' | 'rejected' | 'unknown'
+export type FailureOutcome = 'not-sent' | 'rejected'
+export type Outcome = FailureOutcome | 'unknown'
 
+type Base = { target: UnifiedTarget; query: WriteQuery<203> }
 export type UnifiedState<S = unknown> =
   | { status: 'idle'; errors: string[] }
-  | { status: 'confirming'; target: UnifiedTarget; draft: UnifiedDraft; query: WriteQuery<203>; items: Array<{ label: string; value: string }> }
-  | { status: 'sending'; target: UnifiedTarget; query: WriteQuery<203>; step: SendingStep; before?: S }
-  | { status: 'success'; target: UnifiedTarget; query: WriteQuery<203>; before: S; after: S | null; afterError?: string; mismatches: string[] }
-  | { status: 'failure'; target: UnifiedTarget; query: WriteQuery<203>; outcome: FailureOutcome; error: string; before?: S; after?: S | null; afterError?: string }
+  | ({ status: 'confirming'; draft: UnifiedDraft; items: Array<{ label: string; value: string }> } & Base)
+  | ({ status: 'sending'; step: SendingStep; before?: S } & Base)
+  /** via='reply'：Reply success=true；via='readback'：结果未知，但回读逐字段一致。verified：回读逐字段一致 */
+  | ({ status: 'success'; via: 'reply' | 'readback'; verified: boolean; before: S; after: S | null; afterError?: string; mismatches: EchoMismatch[] } & Base)
+  | ({ status: 'failure'; outcome: FailureOutcome; error: string; before?: S; after?: S | null; afterError?: string } & Base)
+  /** 结果未知且没能核对一致：提示「结果未确认，请刷新查看」，不重试 */
+  | ({ status: 'unknown'; error: string; cause: string; before: S; after: S | null; afterError?: string; mismatches: EchoMismatch[] } & Base)
 
 export type UnifiedEvent<S = unknown> =
   | { type: 'REJECT'; errors: string[] }
   | { type: 'REQUEST'; target: UnifiedTarget; draft: UnifiedDraft; query: WriteQuery<203> }
   | { type: 'CANCEL' }
   | { type: 'CONFIRM' }
+  /** 页面卸载、切换项目或发送前复核不过：confirming / 发送前的 sending → idle */
+  | { type: 'ABORT'; errors: string[] }
   | { type: 'STEP'; step: SendingStep; before?: S }
-  | { type: 'SUCCEED'; before: S; after: S | null; afterError?: string; mismatches: string[] }
+  | { type: 'SUCCEED'; via: 'reply' | 'readback'; verified: boolean; before: S; after: S | null; afterError?: string; mismatches: EchoMismatch[] }
   | { type: 'FAIL'; outcome: FailureOutcome; error: string; before?: S; after?: S | null; afterError?: string }
+  | { type: 'UNKNOWN'; cause: string; before: S; after: S | null; afterError?: string; mismatches: EchoMismatch[] }
   | { type: 'RESET' }
 
 export const INITIAL: UnifiedState<never> = Object.freeze({ status: 'idle', errors: [] as string[] }) as UnifiedState<never>
@@ -55,35 +66,39 @@ export function transition<S>(s: UnifiedState<S>, e: UnifiedEvent<S>): UnifiedSt
       return s.status === 'confirming' ? { status: 'idle', errors: [] } : s
     case 'CONFIRM':
       return s.status === 'confirming' ? { status: 'sending', target: s.target, query: s.query, step: 'read-before' } : s
+    case 'ABORT':
+      // 发出之后不能回 idle：下发可能已生效，必须走完回读
+      return s.status === 'confirming' || (s.status === 'sending' && s.step === 'read-before') ? { status: 'idle', errors: e.errors } : s
     case 'STEP':
       return s.status === 'sending' ? { ...s, step: e.step, before: e.before ?? s.before } : s
     case 'SUCCEED':
       return s.status === 'sending'
-        ? { status: 'success', target: s.target, query: s.query, before: e.before, after: e.after, afterError: e.afterError, mismatches: e.mismatches }
+        ? { status: 'success', target: s.target, query: s.query, via: e.via, verified: e.verified, before: e.before, after: e.after, afterError: e.afterError, mismatches: e.mismatches }
         : s
     case 'FAIL':
       return s.status === 'sending'
         ? { status: 'failure', target: s.target, query: s.query, outcome: e.outcome, error: e.error, before: e.before, after: e.after, afterError: e.afterError }
         : s
+    case 'UNKNOWN':
+      return s.status === 'sending'
+        ? { status: 'unknown', target: s.target, query: s.query, error: TEXT.unconfirmed, cause: e.cause, before: e.before, after: e.after, afterError: e.afterError, mismatches: e.mismatches }
+        : s
     case 'RESET':
-      return s.status === 'success' || s.status === 'failure' ? { status: 'idle', errors: [] } : s
+      return s.status === 'success' || s.status === 'failure' || s.status === 'unknown' ? { status: 'idle', errors: [] } : s
   }
 }
 
-/** 下发函数：默认走 S4 统一写入口 writeCtrl(203)（内部 requestWrite() 过写防护、不重试） */
+/** 下发函数：默认走 S4 统一写入口 writeCtrl(203)（内部 requestWrite() 过写防护、不重试）。不传取消信号：发出后不中止 */
 export type UnifiedSender = (projectId: string, query: WriteQuery<203>) => Promise<CtrlReply<203>>
 export const defaultSender: UnifiedSender = (projectId, query) => writeCtrl(203, projectId, query)
 
 export interface UnifiedDeps<S> {
-  /** 取当前项目信息（S6a 合并前由页面注入）；确认时会再取一次复核 */
+  /** 取当前项目信息（S6a 合并前由页面注入）；确认时和发送前都会再取一次复核 */
   getContext: () => UnifiedContext | null | undefined
-  /** 回读当前状态，下发前后各调一次，用来回显核对。测试里注入假数据 */
-  readBack: (projectId: string) => Promise<S>
-  /**
-   * 核对回读结果与下发值，返回不一致项的说明（必填：回读就是为了核对）。
-   * 回读能整理成 UnifiedEcho 时可直接用 rules.ts 的 echoMismatches()
-   */
-  verify: (query: WriteQuery<203>, before: S, after: S) => string[]
+  /** 回读当前状态，下发前后各调一次。signal 在 abort() 时取消。测试里注入假数据 */
+  readBack: (projectId: string, signal: AbortSignal) => Promise<S>
+  /** 把回读结果整理成逐字段核对用的形状（必填：回读就是为了核对） */
+  toEcho: (snapshot: S) => UnifiedEcho
   send?: UnifiedSender
   log?: UnifiedLogger
 }
@@ -96,10 +111,10 @@ export interface UnifiedController<S> {
   cancel: () => void
   /** 确认下发；sending 期间重复调用返回同一个 Promise；其他状态下调用无效 */
   confirm: () => Promise<UnifiedState<S>>
-  /** success / failure → idle。失败不自动重试，要重新下发须再 request + confirm */
+  /** 结束状态 → idle。不自动重试，要重新下发须再 request + confirm */
   reset: () => void
-  /** 页面卸载时调用：之后的结果不再更新状态（已发出的下发无法撤回） */
-  dispose: () => void
+  /** 页面卸载或切换项目：终止还没发出的流程（回 idle）；已发出的照常走完 */
+  abort: () => void
 }
 
 /**
@@ -107,15 +122,12 @@ export interface UnifiedController<S> {
  * aborted 不算：fetch 发出后被取消也是无状态的 aborted，可能已经到了控制屏
  */
 const LOCAL_NOT_SENT = new Set<ApiErrorKind>(['write_blocked', 'bad_request'])
-/** 后端或网关明确拒绝、不会转给控制屏执行的：控制屏 success=false、无权限、令牌失效、参数错误 */
+/** 后端或网关明确拒绝、不会转给控制屏执行的 */
 const REJECTED = new Set<ApiErrorKind>(['ctrl', 'forbidden', 'unauthenticated', 'bad_request'])
 const errText = (e: unknown) => (e instanceof Error ? e.message : String(e))
 
-/**
- * 只有能确定的才算 not-sent / rejected，其余（超时、断网、500、503、后端返回的取消、普通异常）
- * 一律按结果未知处理并回读核对：请求可能已经到达控制屏并执行。
- */
-export function outcomeOf(e: unknown): FailureOutcome {
+/** 只有能确定的才算 not-sent / rejected，其余一律结果未知：请求可能已经到达控制屏并执行 */
+export function outcomeOf(e: unknown): Outcome {
   if (!isApiError(e)) return 'unknown'
   if (e.status === undefined && LOCAL_NOT_SENT.has(e.kind)) return 'not-sent'
   if (e.kind === 'ctrl' || (e.status !== undefined && REJECTED.has(e.kind))) return 'rejected'
@@ -125,12 +137,15 @@ export function outcomeOf(e: unknown): FailureOutcome {
 const sameQuery = (a: WriteQuery<203>, b: WriteQuery<203>) =>
   a.systemSwitch === b.systemSwitch && a.systemMode === b.systemMode && a.roomSwitch === b.roomSwitch && a.roomTemp === b.roomTemp
 
-/** 复核：项目没换，且按最新上下文（在线、app_code、温度范围）重新校验仍通过、组装结果不变。返回错误或 null */
-function recheck(ctx: UnifiedContext | null | undefined, target: UnifiedTarget, draft: UnifiedDraft, query: WriteQuery<203>): string[] | null {
-  if (!ctx || ctx.projectId !== target.projectId) return [TEXT.projectChanged]
+const PROJECT_CHANGED: Issue = { code: 'NO_PROJECT', message: TEXT.projectChanged }
+
+/** 复核：项目 id 与 code 都没变，且按最新上下文（在线、app_code、温度范围）重新校验仍通过、组装结果不变 */
+function recheck(ctx: UnifiedContext | null | undefined, target: UnifiedTarget, draft: UnifiedDraft, query: WriteQuery<203>): { changed: boolean; issues: Issue[] } | null {
+  if (!ctx || ctx.projectId !== target.projectId || ctx.projectCode !== target.projectCode) return { changed: true, issues: [PROJECT_CHANGED] }
   const v = validateUnified(draft, ctx)
-  if (!v.ok) return v.errors
-  return sameQuery(v.query, query) ? null : [TEXT.projectChanged]
+  if (!v.ok) return { changed: false, issues: v.issues }
+  // 同一份草稿组装结果理应不变；万一变了按「项目已变化」处理，要求重新确认
+  return sameQuery(v.query, query) ? null : { changed: true, issues: [PROJECT_CHANGED] }
 }
 
 function toTarget(ctx: UnifiedContext): UnifiedTarget {
@@ -142,80 +157,107 @@ export function createUnifiedController<S>(deps: UnifiedDeps<S>): UnifiedControl
   const log = deps.log ?? consoleLogger
   let state: UnifiedState<S> = INITIAL
   let inflight: Promise<UnifiedState<S>> | null = null
-  let disposed = false
+  /** 世代号：abort() 加一；进行中的流程发现世代变了就终止 */
+  let gen = 0
+  let ac: AbortController | null = null
   const subs = new Set<() => void>()
 
   const dispatch = (e: UnifiedEvent<S>) => {
-    if (disposed) return
     const next = transition(state, e)
     if (next === state) return
     state = next
     for (const fn of subs) fn()
   }
-  const write = (event: UnifiedLogEvent, t: UnifiedTarget | undefined, p: { query?: object; message?: string } = {}) => {
+  const write = (event: UnifiedLogEvent, t: UnifiedTarget | undefined, p: Omit<EntryInput, 'projectCode' | 'projectId'> = {}) => {
     try { log(makeEntry(event, { projectCode: t?.projectCode, projectId: t?.projectId, ...p })) } catch { /* 日志失败不影响下发 */ }
   }
 
-  async function run(target: UnifiedTarget, draft: UnifiedDraft, query: WriteQuery<203>): Promise<UnifiedState<S>> {
+  /** 逐字段核对；toEcho 抛错算全部字段没读到 */
+  const verify = (query: WriteQuery<203>, after: S | null): EchoMismatch[] => {
+    if (after === null) return echoMismatches(query, null)
+    try { return echoMismatches(query, deps.toEcho(after)) } catch { return echoMismatches(query, null) }
+  }
+
+  async function run(target: UnifiedTarget, draft: UnifiedDraft, query: WriteQuery<203>, myGen: number, signal: AbortSignal): Promise<UnifiedState<S>> {
+    const fields = changedFields(query)
+    const stopped = () => signal.aborted || myGen !== gen
+    const abortRun = (code: 'ABORTED' | 'PROJECT_CHANGED', errors: string[]) => {
+      write('aborted', target, { codes: [code], fields })
+      // abort() 已经把状态放回 idle（之后可能又开始了新一轮）：被作废的这一轮不再碰状态
+      if (myGen === gen) dispatch({ type: 'ABORT', errors })
+      return state
+    }
+
     // 1. 下发前读一次；读不到就不下发（无法核对）
     let before: S
     try {
-      before = await deps.readBack(target.projectId)
+      before = await deps.readBack(target.projectId, signal)
     } catch (e) {
-      const error = `${TEXT.readBeforeFailed}：${errText(e)}`
-      write('read-before', target, { message: error })
-      dispatch({ type: 'FAIL', outcome: 'not-sent', error })
+      if (stopped()) return abortRun('ABORTED', [TEXT.aborted])
+      write('read-before', target, { codes: ['READ_FAILED'], error: e })
+      dispatch({ type: 'FAIL', outcome: 'not-sent', error: `${TEXT.readBeforeFailed}：${errText(e)}` })
       return state
     }
-    write('read-before', target)
 
-    // 读取是异步的，期间项目可能离线或被切换：发送前再复核一次
+    // 2. 真正发送前的最后核对：没取消、世代没变、项目 code 没变、按最新上下文校验仍通过。不符就终止回 idle
+    if (stopped()) return abortRun('ABORTED', [TEXT.aborted])
     const stale = recheck(deps.getContext(), target, draft, query)
-    if (stale) {
-      const error = stale.join('；')
-      write('blocked', target, { message: error })
-      dispatch({ type: 'FAIL', outcome: 'not-sent', error, before })
-      return state
-    }
+    if (stale) return abortRun('PROJECT_CHANGED', stale.changed ? [TEXT.projectChanged] : stale.issues.map((i) => i.message))
+    write('read-before', target, { codes: ['OK'] })
 
-    // 2. 下发一次，不重试
+    // 3. 下发一次，不重试
     dispatch({ type: 'STEP', step: 'send', before })
-    write('send', target, { query })
+    write('send', target, { fields })
     let sendError: unknown = null
     try {
       await send(target.projectId, query)
     } catch (e) {
       sendError = e
     }
-    const outcome = sendError === null ? null : outcomeOf(sendError)
+    const outcome: Outcome | null = sendError === null ? null : outcomeOf(sendError)
 
-    // 3. 下发后读一次（没发出去就不读）
-    let after: S | null = null
-    let afterError: string | undefined
-    if (outcome !== 'not-sent') {
-      dispatch({ type: 'STEP', step: 'read-after' })
-      try {
-        after = await deps.readBack(target.projectId)
-        write('read-after', target)
-      } catch (e) {
-        afterError = `${sendError === null ? TEXT.readAfterFailed : TEXT.readAfterFailedUnknown}：${errText(e)}`
-        write('read-after', target, { message: afterError })
-      }
-    }
-
-    if (sendError !== null) {
-      const error = `${TEXT.failure}：${errText(sendError)}`
-      write('failure', target, { query, message: `${outcome}；${error}` })
-      dispatch({ type: 'FAIL', outcome: outcome!, error, before, after: outcome === 'not-sent' ? undefined : after, afterError })
+    if (outcome === 'not-sent') {
+      write('failure', target, { codes: ['NOT_SENT'], error: sendError, fields })
+      dispatch({ type: 'FAIL', outcome: 'not-sent', error: `${TEXT.failure}：${errText(sendError)}`, before })
       return state
     }
 
-    let mismatches: string[] = []
-    if (after !== null) {
-      try { mismatches = deps.verify(query, before, after) } catch (e) { mismatches = [`${TEXT.verifyFailed}：${errText(e)}`] }
+    // 4. 下发后读一次（已发出就读，不受 abort 影响：下发可能已生效）
+    dispatch({ type: 'STEP', step: 'read-after' })
+    let after: S | null = null
+    let readErr: unknown = null
+    try {
+      after = await deps.readBack(target.projectId, new AbortController().signal)
+      write('read-after', target, { codes: ['OK'] })
+    } catch (e) {
+      readErr = e
+      write('read-after', target, { codes: ['READ_FAILED'], error: e })
     }
-    write('success', target, { query, message: mismatches.length ? `${TEXT.echoMismatch}：${mismatches.join('；')}` : afterError })
-    dispatch({ type: 'SUCCEED', before, after, afterError, mismatches })
+    const mismatches = verify(query, after)
+    const verified = after !== null && mismatches.length === 0
+    const mismatchFields = mismatches.map((m) => m.field)
+
+    if (outcome === null) {
+      const afterError = readErr === null ? undefined : `${TEXT.readAfterFailed}：${errText(readErr)}`
+      write('success', target, { codes: [verified ? 'VERIFIED' : readErr ? 'NOT_VERIFIED' : 'ECHO_MISMATCH'], fields: verified ? fields : mismatchFields })
+      dispatch({ type: 'SUCCEED', via: 'reply', verified, before, after, afterError, mismatches })
+      return state
+    }
+    if (outcome === 'rejected') {
+      const afterError = readErr === null ? undefined : `${TEXT.readAfterFailedUnknown}：${errText(readErr)}`
+      write('failure', target, { codes: ['REJECTED'], error: sendError, fields })
+      dispatch({ type: 'FAIL', outcome: 'rejected', error: `${TEXT.failure}：${errText(sendError)}`, before, after, afterError })
+      return state
+    }
+    // 结果未知：回读逐字段一致就算成功（已核对），否则停在 unknown，不重试
+    if (verified) {
+      write('success', target, { codes: ['UNKNOWN', 'VERIFIED'], error: sendError, fields })
+      dispatch({ type: 'SUCCEED', via: 'readback', verified: true, before, after, mismatches: [] })
+      return state
+    }
+    const afterError = readErr === null ? undefined : `${TEXT.readAfterFailedUnknown}：${errText(readErr)}`
+    write('unknown', target, { codes: ['UNKNOWN', readErr ? 'READ_FAILED' : 'ECHO_MISMATCH'], error: sendError, fields: mismatchFields })
+    dispatch({ type: 'UNKNOWN', cause: errText(sendError), before, after, afterError, mismatches })
     return state
   }
 
@@ -227,7 +269,7 @@ export function createUnifiedController<S>(deps: UnifiedDeps<S>): UnifiedControl
       const ctx = deps.getContext()
       const v = validateUnified(draft, ctx)
       if (!v.ok) {
-        write('blocked', ctx ? toTarget(ctx) : undefined, { message: v.errors.join('；') })
+        write('blocked', ctx ? toTarget(ctx) : undefined, { codes: v.issues.map((i) => i.code) })
         dispatch({ type: 'REJECT', errors: v.errors })
       } else {
         dispatch({ type: 'REQUEST', target: toTarget(ctx!), draft, query: v.query })
@@ -242,21 +284,36 @@ export function createUnifiedController<S>(deps: UnifiedDeps<S>): UnifiedControl
     confirm() {
       if (inflight) return inflight
       if (state.status !== 'confirming') return Promise.resolve(state)
-      const { target, draft, query: confirmed } = state
+      const { target, draft, query } = state
       // 复核：确认弹窗打开期间项目可能离线、被切换或 app_code 变了
-      const errors = recheck(deps.getContext(), target, draft, confirmed)
-      if (errors) {
-        write('blocked', target, { message: errors.join('；') })
-        dispatch({ type: 'CANCEL' })
-        dispatch({ type: 'REJECT', errors })
+      const stale = recheck(deps.getContext(), target, draft, query)
+      if (stale) {
+        write('blocked', target, { codes: stale.changed ? ['PROJECT_CHANGED'] : stale.issues.map((i) => i.code) })
+        dispatch({ type: 'ABORT', errors: stale.changed ? [TEXT.projectChanged] : stale.issues.map((i) => i.message) })
         return Promise.resolve(state)
       }
-      write('confirm', target, { query: confirmed })
+      write('confirm', target, { fields: changedFields(query) })
       dispatch({ type: 'CONFIRM' })
-      inflight = run(target, draft, confirmed).finally(() => { inflight = null })
-      return inflight
+      ac = new AbortController()
+      const myAc = ac
+      const p: Promise<UnifiedState<S>> = run(target, draft, query, gen, myAc.signal).finally(() => {
+        if (inflight === p) inflight = null
+        if (ac === myAc) ac = null
+      })
+      inflight = p
+      return p
     },
     reset() { dispatch({ type: 'RESET' }) },
-    dispose() { disposed = true; subs.clear() },
+    abort() {
+      // 已经发出（send / read-after）的不作废：下发可能已生效，必须走完回读
+      const s = state
+      if (!(s.status === 'confirming' || (s.status === 'sending' && s.step === 'read-before'))) return
+      gen++
+      ac?.abort()
+      ac = null
+      inflight = null
+      write('aborted', s.target, { codes: ['ABORTED'] })
+      dispatch({ type: 'ABORT', errors: [TEXT.aborted] })
+    },
   }
 }

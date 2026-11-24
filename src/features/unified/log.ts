@@ -1,20 +1,41 @@
-// 统一控制的下发日志（脱敏）。只记录核对需要的信息：事件、项目编号、脱敏后的项目 id、下发的值、
-// 结果和错误文案；不记录令牌、user_id、回读的原始数据。所有文本过 errors.ts 的 redact()。
-import { redact } from '@/api/errors'
+// 统一控制的下发日志（脱敏）。只记：事件、固定的结果/错误码、ApiError 的 kind、字段名、项目编号、
+// 首尾 4 位的项目 id。不记任何错误原文、文案、下发的值、user_id、令牌、回读内容。
+// makeEntry() 对每一项按白名单过滤，调用方传了别的东西也进不了日志。
+import type { ApiErrorKind } from '@/api/errors'
+import { ECHO_FIELDS, type EchoField, type IssueCode } from './rules'
 
-export type UnifiedLogEvent = 'confirm' | 'cancel' | 'blocked' | 'read-before' | 'send' | 'read-after' | 'success' | 'failure'
+export type UnifiedLogEvent =
+  | 'confirm' | 'cancel' | 'blocked' | 'aborted' | 'read-before' | 'send' | 'read-after' | 'success' | 'failure' | 'unknown'
+
+/** 流程里的固定代码 */
+export type FlowCode =
+  | 'OK' | 'VERIFIED' | 'NOT_VERIFIED' | 'ECHO_MISMATCH' | 'READ_FAILED' | 'PROJECT_CHANGED' | 'ABORTED'
+  | 'NOT_SENT' | 'REJECTED' | 'UNKNOWN'
+export type LogCode = FlowCode | IssueCode
+
+const LOG_CODES = new Set<string>([
+  'OK', 'VERIFIED', 'NOT_VERIFIED', 'ECHO_MISMATCH', 'READ_FAILED', 'PROJECT_CHANGED', 'ABORTED', 'NOT_SENT', 'REJECTED', 'UNKNOWN',
+  'NO_PROJECT', 'OFFLINE', 'BAD_SWITCH', 'BAD_MODE', 'TEMP_DISABLED', 'TEMP_INVALID', 'TEMP_WHILE_ROOM_OFF', 'NO_CHANGES',
+] satisfies LogCode[])
+const ERROR_KINDS = new Set<string>([
+  'unauthenticated', 'forbidden', 'unavailable', 'timeout', 'network', 'bad_request', 'server', 'ctrl', 'write_blocked', 'aborted',
+] satisfies ApiErrorKind[])
+const EVENTS = new Set<string>(['confirm', 'cancel', 'blocked', 'aborted', 'read-before', 'send', 'read-after', 'success', 'failure', 'unknown'] satisfies UnifiedLogEvent[])
+const FIELDS = new Set<string>(ECHO_FIELDS)
+/** 项目编号：只允许数字（如 240829001），其他一律不记 */
+const PROJECT_CODE = /^\d{1,20}$/
 
 export interface UnifiedLogEntry {
   event: UnifiedLogEvent
-  /** 项目编号（如 240829001），不敏感，便于对照 PR 里的记录 */
-  projectCode?: string
-  /** 后端项目 id，只留首尾各 4 位 */
-  projectId?: string
-  /** 下发的值（203 Query，全是数字） */
-  query?: Record<string, number>
-  /** 错误或核对结果的文案（已脱敏） */
-  message?: string
   at: string
+  projectCode?: string
+  /** 后端项目 id，只留首尾 4 位 */
+  projectId?: string
+  codes?: LogCode[]
+  /** 出错时 ApiError 的 kind；不是 ApiError 记 'other' */
+  errorKind?: ApiErrorKind | 'other'
+  /** 涉及的字段名（下发了哪些、哪些回读不一致） */
+  fields?: EchoField[]
 }
 
 export type UnifiedLogger = (entry: UnifiedLogEntry) => void
@@ -26,23 +47,32 @@ export function maskId(id: string | undefined | null): string | undefined {
   return s.length <= 8 ? '***' : `${s.slice(0, 4)}…${s.slice(-4)}`
 }
 
-/** 只保留有限数值字段，丢掉其他任何东西 */
-function numbersOnly(q: object | undefined): Record<string, number> | undefined {
-  if (!q) return undefined
-  const out: Record<string, number> = {}
-  for (const [k, v] of Object.entries(q)) if (typeof v === 'number' && Number.isFinite(v)) out[k] = v
-  return out
+export interface EntryInput {
+  projectCode?: string
+  projectId?: string
+  codes?: readonly string[]
+  error?: unknown
+  fields?: readonly string[]
 }
 
-export function makeEntry(event: UnifiedLogEvent, p: { projectCode?: string; projectId?: string; query?: object; message?: string } = {}, now = new Date()): UnifiedLogEntry {
-  const e: UnifiedLogEntry = { event, at: now.toISOString() }
-  if (p.projectCode) e.projectCode = redact(String(p.projectCode))
+/** 错误对象 → 只取 kind（白名单），其余丢弃 */
+export function errorKindOf(e: unknown): ApiErrorKind | 'other' | undefined {
+  if (e === undefined || e === null) return undefined
+  const k = (e as { kind?: unknown }).kind
+  return typeof k === 'string' && ERROR_KINDS.has(k) ? (k as ApiErrorKind) : 'other'
+}
+
+export function makeEntry(event: UnifiedLogEvent, p: EntryInput = {}, now = new Date()): UnifiedLogEntry {
+  const e: UnifiedLogEntry = { event: EVENTS.has(event) ? event : ('blocked' as UnifiedLogEvent), at: now.toISOString() }
+  if (p.projectCode && PROJECT_CODE.test(String(p.projectCode))) e.projectCode = String(p.projectCode)
   const id = maskId(p.projectId)
   if (id) e.projectId = id
-  const q = numbersOnly(p.query)
-  if (q) e.query = q
-  // 文案里可能带完整项目 id（比如写防护「项目不在下发名单内：…」），换成打码后的
-  if (p.message) e.message = redact(p.projectId ? String(p.message).split(String(p.projectId)).join(id ?? '***') : String(p.message))
+  const codes = [...new Set((p.codes ?? []).filter((c) => LOG_CODES.has(c)))] as LogCode[]
+  if (codes.length) e.codes = codes
+  const kind = errorKindOf(p.error)
+  if (kind) e.errorKind = kind
+  const fields = [...new Set((p.fields ?? []).filter((f) => FIELDS.has(f)))] as EchoField[]
+  if (fields.length) e.fields = fields
   return e
 }
 

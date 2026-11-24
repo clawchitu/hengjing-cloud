@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { UnifiedCtrlSetQuery_OperatingMode as Mode } from '@/api/gen/ctrl200_pb.js'
 import { DEFAULT_TEMP_RANGE, MODE_OPTIONS, TEMP_MAX, TEMP_MIN, TEMP_STEP, TEXT } from '../constants'
-import { checkTemp, clampTemp, describeQuery, echoMismatches, resolveTempRange, tempAvailability, validateUnified, type UnifiedContext } from '../rules'
+import { changedFields, checkTemp, clampTemp, describeQuery, echoMismatches, resolveTempRange, tempAvailability, validateUnified, type UnifiedContext } from '../rules'
 
 const ctx = (p: Partial<UnifiedContext> = {}): UnifiedContext => ({ projectId: 'p-0000000000000001', projectCode: '240829001', projectName: '测试项目0829', appCode: 1, online: true, ...p })
 
@@ -24,7 +24,7 @@ describe('app_code 规则', () => {
     expect(tempAvailability(code as number)).toEqual({ enabled: false, reason: TEXT.tempDisabledUnknownApp })
   })
   it.each([12, 8])('app %s：带温度的下发被拒，开关和模式照常可下发', (appCode) => {
-    expect(validateUnified({ roomTemp: 24 }, ctx({ appCode }))).toEqual({ ok: false, errors: [TEXT.tempDisabledByApp] })
+    expect(validateUnified({ roomTemp: 24 }, ctx({ appCode }))).toMatchObject({ ok: false, errors: [TEXT.tempDisabledByApp] })
     const v = validateUnified({ roomSwitch: 1, systemSwitch: 0, systemMode: Mode.OPERATION_MODE_AUTO }, ctx({ appCode }))
     expect(v).toEqual({ ok: true, query: { systemSwitch: 0, systemMode: 100, roomSwitch: 1, roomTemp: -1 } })
   })
@@ -58,11 +58,11 @@ describe('温度范围与步进', () => {
 describe('离线拦截', () => {
   it.each([false, undefined, null])('online=%s 不允许下发', (online) => {
     const v = validateUnified({ roomSwitch: 1 }, ctx({ online: online as boolean }))
-    expect(v).toEqual({ ok: false, errors: [TEXT.offline] })
+    expect(v).toMatchObject({ ok: false, errors: [TEXT.offline] })
   })
   it('没有项目', () => {
-    expect(validateUnified({ roomSwitch: 1 }, null)).toEqual({ ok: false, errors: [TEXT.noProject] })
-    expect(validateUnified({ roomSwitch: 1 }, ctx({ projectId: '' }))).toEqual({ ok: false, errors: [TEXT.noProject] })
+    expect(validateUnified({ roomSwitch: 1 }, null)).toMatchObject({ ok: false, errors: [TEXT.noProject] })
+    expect(validateUnified({ roomSwitch: 1 }, ctx({ projectId: '' }))).toMatchObject({ ok: false, errors: [TEXT.noProject] })
   })
 })
 
@@ -79,7 +79,7 @@ describe('-1 填充', () => {
     expect(validateUnified({ systemSwitch: 0, roomSwitch: 0 }, ctx())).toMatchObject({ ok: true, query: { systemSwitch: 0, roomSwitch: 0 } })
   })
   it('全部不变不允许下发', () => {
-    expect(validateUnified({}, ctx())).toEqual({ ok: false, errors: [TEXT.noChanges] })
+    expect(validateUnified({}, ctx())).toMatchObject({ ok: false, errors: [TEXT.noChanges] })
   })
 })
 
@@ -92,11 +92,11 @@ describe('其他校验', () => {
   it('模式必须是列出的值', () => {
     expect(validateUnified({ systemMode: 7 as Mode }, ctx())).toMatchObject({ ok: false, errors: [TEXT.badMode] })
     // 0 = 不变，等同于没选
-    expect(validateUnified({ systemMode: 0 as Mode }, ctx())).toEqual({ ok: false, errors: [TEXT.noChanges] })
+    expect(validateUnified({ systemMode: 0 as Mode }, ctx())).toMatchObject({ ok: false, errors: [TEXT.noChanges] })
     expect(validateUnified({ systemMode: 0 as Mode, roomSwitch: 1 }, ctx())).toMatchObject({ ok: true, query: { systemMode: 0, roomSwitch: 1 } })
   })
   it('关闭房间同时设温度被拒', () => {
-    expect(validateUnified({ roomSwitch: 0, roomTemp: 24 }, ctx())).toEqual({ ok: false, errors: [TEXT.tempWhileRoomOff] })
+    expect(validateUnified({ roomSwitch: 0, roomTemp: 24 }, ctx())).toMatchObject({ ok: false, errors: [TEXT.tempWhileRoomOff] })
   })
   it('describeQuery 只列有改动的项', () => {
     expect(describeQuery({ systemSwitch: -1, systemMode: 100, roomSwitch: 0, roomTemp: -1 })).toEqual([
@@ -110,24 +110,33 @@ describe('其他校验', () => {
   })
 })
 
-describe('echoMismatches（默认核对）', () => {
+describe('echoMismatches（逐字段核对）', () => {
   const q = { systemSwitch: 1, systemMode: 100, roomSwitch: -1, roomTemp: 24.5 }
   it('只核对下发了的字段，一致时为空', () => {
     expect(echoMismatches(q, { systemSwitch: 1, systemMode: 100, roomSwitch: 0, roomTemp: 24.500001 })).toEqual([])
   })
-  it('不一致、没读到分别给出说明', () => {
+  it('不一致、没读到分别给出字段和说明', () => {
     expect(echoMismatches(q, { systemSwitch: 0, systemMode: null, roomTemp: 22 })).toEqual([
-      TEXT.echoDiffer(TEXT.systemSwitch, TEXT.on, TEXT.off),
-      TEXT.echoMissing(TEXT.systemMode),
-      TEXT.echoDiffer(TEXT.roomTemp, '24.5°C', '22°C'),
+      { field: 'systemSwitch', kind: 'differ', message: TEXT.echoDiffer(TEXT.systemSwitch, TEXT.on, TEXT.off) },
+      { field: 'systemMode', kind: 'missing', message: TEXT.echoMissing(TEXT.systemMode) },
+      { field: 'roomTemp', kind: 'differ', message: TEXT.echoDiffer(TEXT.roomTemp, '24.5°C', '22°C') },
     ])
+  })
+  it('回读为空：所有下发字段都算没读到', () => {
+    expect(echoMismatches(q, null).map((m) => [m.field, m.kind])).toEqual([['systemSwitch', 'missing'], ['systemMode', 'missing'], ['roomTemp', 'missing']])
   })
   it('开关回读到异常值时显示原始数字', () => {
-    expect(echoMismatches({ systemSwitch: 0, systemMode: 0, roomSwitch: -1, roomTemp: -1 }, { systemSwitch: 2 })).toEqual([
-      TEXT.echoDiffer(TEXT.systemSwitch, TEXT.off, '2'),
-    ])
+    expect(echoMismatches({ systemSwitch: 0, systemMode: 0, roomSwitch: -1, roomTemp: -1 }, { systemSwitch: 2 })[0].message).toBe(TEXT.echoDiffer(TEXT.systemSwitch, TEXT.off, '2'))
   })
-  it('全是不变时不核对任何字段', () => {
+  it('全是不变时不核对任何字段；changedFields 只列改了的', () => {
     expect(echoMismatches({ systemSwitch: -1, systemMode: 0, roomSwitch: -1, roomTemp: -1 }, {})).toEqual([])
+    expect(changedFields(q)).toEqual(['systemSwitch', 'systemMode', 'roomTemp'])
+  })
+})
+
+describe('校验问题带固定代码', () => {
+  it('issues 与 errors 一一对应', () => {
+    const v = validateUnified({ roomTemp: 24, roomSwitch: 0 }, ctx({ online: false, appCode: 12 }))
+    expect(v).toMatchObject({ ok: false, issues: [{ code: 'OFFLINE' }, { code: 'TEMP_DISABLED' }, { code: 'TEMP_WHILE_ROOM_OFF' }] })
   })
 })

@@ -3,13 +3,15 @@ import { describe, expect, it, vi } from 'vitest'
 import { ApiError } from '@/api/errors'
 import { TEXT } from '../constants'
 import type { UnifiedLogEntry } from '../log'
-import { createUnifiedController, INITIAL, outcomeOf, transition, type UnifiedEvent, type UnifiedState, type UnifiedTarget } from '../machine'
+import { createUnifiedController, INITIAL, outcomeOf, transition, type UnifiedDeps, type UnifiedEvent, type UnifiedState, type UnifiedTarget } from '../machine'
 import type { UnifiedContext } from '../rules'
 
 type Snap = { roomTemp: number; roomSwitch: number }
 const CTX: UnifiedContext = { projectId: '66cfd7959fb60d63c917fd0a', projectCode: '240829001', projectName: '测试项目0829', appCode: 1, online: true }
 const T: UnifiedTarget = { projectId: CTX.projectId, projectCode: '240829001', projectName: '测试项目0829' }
 const Q = { systemSwitch: -1, systemMode: 0, roomSwitch: -1, roomTemp: 24 }
+const BEFORE: Snap = { roomTemp: 22, roomSwitch: 1 }
+const AFTER: Snap = { roomTemp: 24, roomSwitch: 1 }
 
 function deferred<V>() {
   let resolve!: (v: V) => void, reject!: (e: unknown) => void
@@ -17,17 +19,17 @@ function deferred<V>() {
   return { promise, resolve, reject }
 }
 
-function setup(over: Partial<Parameters<typeof createUnifiedController<Snap>>[0]> = {}, ctx: UnifiedContext | null = CTX) {
+function setup(over: Partial<UnifiedDeps<Snap>> = {}, ctx: UnifiedContext | null = CTX) {
   let context: UnifiedContext | null = ctx
-  const reads: Snap[] = [{ roomTemp: 22, roomSwitch: 1 }, { roomTemp: 24, roomSwitch: 1 }]
-  const readBack = vi.fn(async () => reads.shift() ?? { roomTemp: 0, roomSwitch: 0 })
+  const reads: Snap[] = [BEFORE, AFTER]
+  const readBack = vi.fn(async (_id: string, _signal: AbortSignal) => reads.shift() ?? { roomTemp: 0, roomSwitch: 0 })
   const send = vi.fn(async () => ({ success: true, msg: '' }))
   const logs: UnifiedLogEntry[] = []
   const ctl = createUnifiedController<Snap>({
     getContext: () => context,
     readBack,
     send,
-    verify: () => [],
+    toEcho: (s) => ({ roomTemp: s.roomTemp, roomSwitch: s.roomSwitch }),
     log: (e) => logs.push(e),
     ...over,
   })
@@ -38,66 +40,74 @@ describe('transition（纯函数）', () => {
   const idle: UnifiedState<Snap> = INITIAL
   const confirming = transition<Snap>(idle, { type: 'REQUEST', target: T, draft: { roomTemp: 24 }, query: Q })
   const sending = transition<Snap>(confirming, { type: 'CONFIRM' })
-  const before = { roomTemp: 22, roomSwitch: 1 }
-  const success = transition<Snap>(sending, { type: 'SUCCEED', before, after: before, mismatches: [] })
-  const failure = transition<Snap>(sending, { type: 'FAIL', outcome: 'rejected', error: 'x' })
+  const sent = transition<Snap>(sending, { type: 'STEP', step: 'send', before: BEFORE })
+  const reading = transition<Snap>(sent, { type: 'STEP', step: 'read-after' })
+  const success = transition<Snap>(reading, { type: 'SUCCEED', via: 'reply', verified: true, before: BEFORE, after: AFTER, mismatches: [] })
+  const failure = transition<Snap>(reading, { type: 'FAIL', outcome: 'rejected', error: 'x' })
+  const unknown = transition<Snap>(reading, { type: 'UNKNOWN', cause: 'timeout', before: BEFORE, after: null, mismatches: [] })
 
   it('合法转移', () => {
     expect(transition<Snap>(idle, { type: 'REJECT', errors: ['e'] })).toEqual({ status: 'idle', errors: ['e'] })
     expect(confirming).toMatchObject({ status: 'confirming', target: T, query: Q, items: [{ label: TEXT.roomTemp, value: '24°C' }] })
     expect(transition(confirming, { type: 'CANCEL' })).toEqual({ status: 'idle', errors: [] })
+    expect(transition(confirming, { type: 'ABORT', errors: ['a'] })).toEqual({ status: 'idle', errors: ['a'] })
     expect(sending).toEqual({ status: 'sending', target: T, query: Q, step: 'read-before' })
-    expect(transition(sending, { type: 'STEP', step: 'send', before })).toMatchObject({ step: 'send', before })
-    expect(transition(transition(sending, { type: 'STEP', step: 'send', before }), { type: 'STEP', step: 'read-after' })).toMatchObject({ step: 'read-after', before })
-    expect(success).toMatchObject({ status: 'success', before, after: before, mismatches: [] })
+    expect(transition(sending, { type: 'ABORT', errors: ['a'] })).toEqual({ status: 'idle', errors: ['a'] })
+    expect(sent).toMatchObject({ step: 'send', before: BEFORE })
+    expect(reading).toMatchObject({ step: 'read-after', before: BEFORE })
+    expect(success).toMatchObject({ status: 'success', via: 'reply', verified: true, before: BEFORE, after: AFTER })
     expect(failure).toMatchObject({ status: 'failure', outcome: 'rejected', error: 'x' })
-    expect(transition(success, { type: 'RESET' })).toEqual({ status: 'idle', errors: [] })
-    expect(transition(failure, { type: 'RESET' })).toEqual({ status: 'idle', errors: [] })
+    expect(unknown).toMatchObject({ status: 'unknown', error: TEXT.unconfirmed, cause: 'timeout' })
+    for (const end of [success, failure, unknown]) expect(transition(end, { type: 'RESET' })).toEqual({ status: 'idle', errors: [] })
   })
 
   it('不合法的事件原样返回（同一引用）', () => {
     const all: UnifiedEvent<Snap>[] = [
       { type: 'REJECT', errors: [] }, { type: 'REQUEST', target: T, draft: {}, query: Q }, { type: 'CANCEL' }, { type: 'CONFIRM' },
-      { type: 'STEP', step: 'send' }, { type: 'SUCCEED', before, after: null, mismatches: [] }, { type: 'FAIL', outcome: 'unknown', error: '' }, { type: 'RESET' },
+      { type: 'ABORT', errors: [] }, { type: 'STEP', step: 'send' }, { type: 'SUCCEED', via: 'reply', verified: false, before: BEFORE, after: null, mismatches: [] },
+      { type: 'FAIL', outcome: 'not-sent', error: '' }, { type: 'UNKNOWN', cause: '', before: BEFORE, after: null, mismatches: [] }, { type: 'RESET' },
     ]
-    const allowed: Record<string, string[]> = {
-      idle: ['REJECT', 'REQUEST'],
-      confirming: ['CANCEL', 'CONFIRM'],
-      sending: ['STEP', 'SUCCEED', 'FAIL'],
-      success: ['RESET'],
-      failure: ['RESET'],
-    }
-    for (const s of [idle, confirming, sending, success, failure]) {
+    const cases: Array<[UnifiedState<Snap>, string, string[]]> = [
+      [idle, 'idle', ['REJECT', 'REQUEST']],
+      [confirming, 'confirming', ['CANCEL', 'CONFIRM', 'ABORT']],
+      [sending, 'sending:read-before', ['ABORT', 'STEP', 'SUCCEED', 'FAIL', 'UNKNOWN']],
+      [sent, 'sending:send', ['STEP', 'SUCCEED', 'FAIL', 'UNKNOWN']],
+      [reading, 'sending:read-after', ['STEP', 'SUCCEED', 'FAIL', 'UNKNOWN']],
+      [success, 'success', ['RESET']],
+      [failure, 'failure', ['RESET']],
+      [unknown, 'unknown', ['RESET']],
+    ]
+    for (const [s, name, allowed] of cases) {
       for (const e of all) {
         const next = transition(s, e)
-        if (allowed[s.status].includes(e.type)) expect(next, `${s.status} + ${e.type}`).not.toBe(s)
-        else expect(next, `${s.status} + ${e.type}`).toBe(s)
+        if (allowed.includes(e.type)) expect(next, `${name} + ${e.type}`).not.toBe(s)
+        else expect(next, `${name} + ${e.type}`).toBe(s)
       }
     }
   })
 
-  it('sending 里不能直接 CONFIRM / RESET / CANCEL（防重复提交、不能中途放弃）', () => {
-    expect(transition(sending, { type: 'CONFIRM' })).toBe(sending)
-    expect(transition(sending, { type: 'RESET' })).toBe(sending)
-    expect(transition(sending, { type: 'CANCEL' })).toBe(sending)
+  it('发出之后不能 ABORT / CONFIRM / RESET / CANCEL', () => {
+    for (const s of [sent, reading]) for (const type of ['ABORT', 'CONFIRM', 'RESET', 'CANCEL'] as const) {
+      expect(transition(s, type === 'ABORT' ? { type, errors: [] } : { type })).toBe(s)
+    }
   })
 })
 
 describe('控制器：正常流程', () => {
-  it('idle → confirming → sending → success；前后各读一次，下发一次', async () => {
+  it('idle → confirming → sending → success（已核对）；前后各读一次，下发一次', async () => {
     const { ctl, readBack, send, logs } = setup()
     const seen: string[] = []
-    ctl.subscribe(() => seen.push(ctl.getState().status + (ctl.getState().status === 'sending' ? ':' + (ctl.getState() as { step: string }).step : '')))
+    ctl.subscribe(() => { const s = ctl.getState(); seen.push(s.status + (s.status === 'sending' ? ':' + s.step : '')) })
     expect(ctl.request({ roomTemp: 24 })).toMatchObject({ status: 'confirming', target: T, query: Q })
     expect(send).not.toHaveBeenCalled()
     const end = await ctl.confirm()
-    expect(end).toEqual({ status: 'success', target: T, query: Q, before: { roomTemp: 22, roomSwitch: 1 }, after: { roomTemp: 24, roomSwitch: 1 }, afterError: undefined, mismatches: [] })
+    expect(end).toEqual({ status: 'success', target: T, query: Q, via: 'reply', verified: true, before: BEFORE, after: AFTER, afterError: undefined, mismatches: [] })
     expect(seen).toEqual(['confirming', 'sending:read-before', 'sending:send', 'sending:read-after', 'success'])
     expect(readBack).toHaveBeenCalledTimes(2)
-    expect(readBack).toHaveBeenNthCalledWith(1, CTX.projectId)
+    expect(readBack.mock.calls[0][0]).toBe(CTX.projectId)
+    expect(readBack.mock.calls[0][1]).toBeInstanceOf(AbortSignal)
     expect(send).toHaveBeenCalledTimes(1)
     expect(send).toHaveBeenCalledWith(CTX.projectId, Q)
-    // 调用顺序：读 → 发 → 读
     expect(readBack.mock.invocationCallOrder[0]).toBeLessThan(send.mock.invocationCallOrder[0])
     expect(send.mock.invocationCallOrder[0]).toBeLessThan(readBack.mock.invocationCallOrder[1])
     expect(logs.map((l) => l.event)).toEqual(['confirm', 'read-before', 'send', 'read-after', 'success'])
@@ -114,7 +124,7 @@ describe('控制器：正常流程', () => {
     expect(send).not.toHaveBeenCalled()
   })
 
-  it('校验不过停在 idle 并带 errors；非 idle 时 request 无效', async () => {
+  it('校验不过停在 idle 并带 errors；非 idle 时 request 无效', () => {
     const { ctl } = setup({}, { ...CTX, appCode: 12 })
     expect(ctl.request({ roomTemp: 24 })).toEqual({ status: 'idle', errors: [TEXT.tempDisabledByApp] })
     ctl.request({ roomSwitch: 1 })
@@ -122,33 +132,23 @@ describe('控制器：正常流程', () => {
     expect(ctl.request({ systemSwitch: 0 })).toBe(confirming)
   })
 
-  it('verify 给出的不一致项记在 success 里', async () => {
-    const { ctl } = setup({ verify: (q, _b, a) => (a.roomTemp === q.roomTemp ? [] : [`温度回读 ${a.roomTemp}`]), readBack: vi.fn(async () => ({ roomTemp: 22, roomSwitch: 1 })) })
+  it('Reply 成功但回读不一致：success、verified=false，带逐字段不一致项', async () => {
+    const { ctl } = setup({ readBack: vi.fn(async () => BEFORE) })
     ctl.request({ roomTemp: 24 })
-    expect(await ctl.confirm()).toMatchObject({ status: 'success', mismatches: ['温度回读 22'] })
+    expect(await ctl.confirm()).toMatchObject({ status: 'success', via: 'reply', verified: false, mismatches: [{ field: 'roomTemp', kind: 'differ' }] })
   })
 
-  it('下发后回读失败：仍是 success（Reply success 即已生效），带 afterError', async () => {
+  it('Reply 成功但下发后回读失败：仍是 success（已生效），verified=false，带 afterError', async () => {
     let n = 0
-    const { ctl } = setup({ readBack: vi.fn(async () => { if (n++) throw new ApiError('unavailable', '控制屏未连接'); return { roomTemp: 22, roomSwitch: 1 } }) })
+    const { ctl } = setup({ readBack: vi.fn(async () => { if (n++) throw new ApiError('unavailable', '控制屏未连接'); return BEFORE }) })
     ctl.request({ roomTemp: 24 })
-    expect(await ctl.confirm()).toMatchObject({ status: 'success', after: null, afterError: `${TEXT.readAfterFailed}：控制屏未连接`, mismatches: [] })
+    expect(await ctl.confirm()).toMatchObject({ status: 'success', verified: false, after: null, afterError: `${TEXT.readAfterFailed}：控制屏未连接`, mismatches: [{ field: 'roomTemp', kind: 'missing' }] })
   })
 
-  it('verify 抛错时带前缀记为不一致', async () => {
-    const { ctl } = setup({ verify: () => { throw new Error('映射失败') } })
+  it('toEcho 抛错按没读到处理', async () => {
+    const { ctl } = setup({ toEcho: () => { throw new Error('映射失败') } })
     ctl.request({ roomTemp: 24 })
-    expect(await ctl.confirm()).toMatchObject({ status: 'success', mismatches: [`${TEXT.verifyFailed}：映射失败`] })
-  })
-
-  it('下发失败且回读失败：afterError 不说「已生效」', async () => {
-    let n = 0
-    const { ctl } = setup({
-      send: vi.fn(async () => { throw new ApiError('timeout', '未收到控制屏应答，下发结果未知') }),
-      readBack: vi.fn(async () => { if (n++) throw new Error('x'); return { roomTemp: 22, roomSwitch: 1 } }),
-    })
-    ctl.request({ roomTemp: 24 })
-    expect(await ctl.confirm()).toMatchObject({ status: 'failure', outcome: 'unknown', after: null, afterError: `${TEXT.readAfterFailedUnknown}：x` })
+    expect(await ctl.confirm()).toMatchObject({ status: 'success', verified: false, mismatches: [{ field: 'roomTemp', kind: 'missing' }] })
   })
 })
 
@@ -158,60 +158,123 @@ describe('控制器：离线与复核', () => {
     expect(ctl.request({ roomSwitch: 1 })).toEqual({ status: 'idle', errors: [TEXT.offline] })
     expect(readBack).not.toHaveBeenCalled()
     expect(send).not.toHaveBeenCalled()
-    expect(logs[0]).toMatchObject({ event: 'blocked', message: TEXT.offline })
+    expect(logs[0]).toMatchObject({ event: 'blocked', codes: ['OFFLINE'] })
   })
 
-  it('确认弹窗打开期间项目离线：confirm 退回 idle，不发', async () => {
+  it.each([
+    ['离线', (c: UnifiedContext) => ({ ...c, online: false }), [TEXT.offline]],
+    ['app_code 变成 8', (c: UnifiedContext) => ({ ...c, appCode: 8 }), [TEXT.tempDisabledByApp]],
+    ['切换了项目', (c: UnifiedContext) => ({ ...c, projectId: 'other-project-000000' }), [TEXT.projectChanged]],
+    ['项目 code 变了', (c: UnifiedContext) => ({ ...c, projectCode: '260911001' }), [TEXT.projectChanged]],
+    ['项目没了', () => null, [TEXT.projectChanged]],
+  ] as const)('确认弹窗打开期间%s：confirm 退回 idle，不读不发', async (_n, change, errors) => {
     const { ctl, send, readBack, setContext } = setup()
-    ctl.request({ roomSwitch: 1 })
-    setContext({ ...CTX, online: false })
-    expect(await ctl.confirm()).toEqual({ status: 'idle', errors: [TEXT.offline] })
+    ctl.request({ roomTemp: 24 })
+    setContext(change(CTX))
+    expect(await ctl.confirm()).toEqual({ status: 'idle', errors })
     expect(readBack).not.toHaveBeenCalled()
     expect(send).not.toHaveBeenCalled()
   })
 
-  it('确认弹窗打开期间 app_code 变成 8：confirm 退回 idle，不发', async () => {
-    const { ctl, send, setContext } = setup()
-    ctl.request({ roomTemp: 24 })
-    setContext({ ...CTX, appCode: 8 })
-    expect(await ctl.confirm()).toEqual({ status: 'idle', errors: [TEXT.tempDisabledByApp] })
-    expect(send).not.toHaveBeenCalled()
-  })
-
-  it('确认弹窗打开期间切换了项目：confirm 退回 idle，不发', async () => {
-    const { ctl, send, setContext } = setup()
-    ctl.request({ roomSwitch: 1 })
-    setContext({ ...CTX, projectId: 'other-project-000000' })
-    expect(await ctl.confirm()).toEqual({ status: 'idle', errors: [TEXT.projectChanged] })
-    setContext(null)
-    ctl.request({ roomSwitch: 1 })
-    expect(ctl.getState()).toEqual({ status: 'idle', errors: [TEXT.noProject] })
-    expect(send).not.toHaveBeenCalled()
-  })
-
   it.each([
-    ['离线', (c: UnifiedContext) => ({ ...c, online: false }), TEXT.offline],
-    ['换了项目', (c: UnifiedContext) => ({ ...c, projectId: 'another-project-0001' }), TEXT.projectChanged],
-    ['项目没了', () => null, TEXT.projectChanged],
-    ['app_code 变成 12', (c: UnifiedContext) => ({ ...c, appCode: 12 }), TEXT.tempDisabledByApp],
-    ['温度范围收窄', (c: UnifiedContext) => ({ ...c, tempRange: { max: 23 } }), TEXT.tempOutOfRange({ min: 16, max: 23, step: 0.5 })],
-  ] as const)('下发前读取期间%s：不下发，failure/not-sent', async (_n, change, msg) => {
+    ['离线', (c: UnifiedContext) => ({ ...c, online: false }), [TEXT.offline]],
+    ['换了项目 id', (c: UnifiedContext) => ({ ...c, projectId: 'another-project-0001' }), [TEXT.projectChanged]],
+    ['项目 code 变了', (c: UnifiedContext) => ({ ...c, projectCode: '260911001' }), [TEXT.projectChanged]],
+    ['项目没了', () => null, [TEXT.projectChanged]],
+    ['app_code 变成 12', (c: UnifiedContext) => ({ ...c, appCode: 12 }), [TEXT.tempDisabledByApp]],
+    ['温度范围收窄', (c: UnifiedContext) => ({ ...c, tempRange: { max: 23 } }), [TEXT.tempOutOfRange({ min: 16, max: 23, step: 0.5 })]],
+  ] as const)('下发前读取期间%s：终止，回 idle，不下发', async (_n, change, errors) => {
     const gate = deferred<Snap>()
     const readBack = vi.fn(() => gate.promise)
-    const { ctl, send, setContext } = setup({ readBack })
+    const { ctl, send, setContext, logs } = setup({ readBack })
     ctl.request({ roomSwitch: 1, roomTemp: 24 })
     const p = ctl.confirm()
     setContext(change(CTX))
-    gate.resolve({ roomTemp: 22, roomSwitch: 1 })
-    expect(await p).toMatchObject({ status: 'failure', outcome: 'not-sent', error: msg, before: { roomTemp: 22 } })
+    gate.resolve(BEFORE)
+    expect(await p).toEqual({ status: 'idle', errors })
     expect(send).not.toHaveBeenCalled()
     expect(readBack).toHaveBeenCalledTimes(1)
+    expect(logs.at(-1)).toMatchObject({ event: 'aborted', codes: ['PROJECT_CHANGED'] })
   })
 
   it('idle 下调 confirm 无效', async () => {
     const { ctl, send } = setup()
     expect(await ctl.confirm()).toEqual(INITIAL)
     expect(send).not.toHaveBeenCalled()
+  })
+})
+
+describe('控制器：abort（页面卸载、切换项目）', () => {
+  it('confirming 时 abort → idle', () => {
+    const { ctl } = setup()
+    ctl.request({ roomSwitch: 1 })
+    ctl.abort()
+    expect(ctl.getState()).toEqual({ status: 'idle', errors: [TEXT.aborted] })
+  })
+
+  it('下发前读取期间 abort：signal 取消、立即回 idle；读取之后完成也不下发', async () => {
+    const gate = deferred<Snap>()
+    let seenSignal: AbortSignal | null = null
+    const readBack = vi.fn((_id: string, signal: AbortSignal) => { seenSignal = signal; return gate.promise })
+    const { ctl, send } = setup({ readBack })
+    ctl.request({ roomSwitch: 1 })
+    const p = ctl.confirm()
+    ctl.abort()
+    expect(seenSignal!.aborted).toBe(true)
+    expect(ctl.getState()).toEqual({ status: 'idle', errors: [TEXT.aborted] })
+    gate.resolve(BEFORE) // 读取函数没理会 signal，照样返回
+    await p
+    expect(send).not.toHaveBeenCalled()
+    expect(ctl.getState()).toEqual({ status: 'idle', errors: [TEXT.aborted] })
+  })
+
+  it('读取函数响应 signal 而报错：同样回 idle，不算失败', async () => {
+    const readBack = vi.fn((_id: string, signal: AbortSignal) => new Promise<Snap>((_r, rej) => signal.addEventListener('abort', () => rej(new ApiError('aborted', '请求已取消')))))
+    const { ctl, send } = setup({ readBack })
+    ctl.request({ roomSwitch: 1 })
+    const p = ctl.confirm()
+    ctl.abort()
+    await p
+    expect(ctl.getState()).toEqual({ status: 'idle', errors: [TEXT.aborted] })
+    expect(send).not.toHaveBeenCalled()
+  })
+
+  it('abort 后立即开始新一轮：旧一轮的读取晚到不影响新一轮，只下发新一轮', async () => {
+    const g1 = deferred<Snap>()
+    const readBack = vi.fn().mockReturnValueOnce(g1.promise).mockResolvedValue(AFTER)
+    const { ctl, send } = setup({ readBack })
+    ctl.request({ roomSwitch: 1 })
+    const p1 = ctl.confirm()
+    ctl.abort()
+    ctl.request({ roomSwitch: 0 })
+    const p2 = ctl.confirm()
+    expect(p2).not.toBe(p1)
+    g1.resolve(BEFORE)
+    await p1
+    expect((await p2).status).toBe('success')
+    expect(send).toHaveBeenCalledTimes(1)
+    expect(send).toHaveBeenCalledWith(CTX.projectId, { systemSwitch: -1, systemMode: 0, roomSwitch: 0, roomTemp: -1 })
+  })
+
+  it('已经发出后 abort 无效：照常走完回读', async () => {
+    const gate = deferred<{ success: boolean; msg: string }>()
+    const send = vi.fn(() => gate.promise)
+    const { ctl, readBack } = setup({ send })
+    ctl.request({ roomTemp: 24 })
+    const p = ctl.confirm()
+    await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(1))
+    ctl.abort()
+    expect(ctl.getState()).toMatchObject({ status: 'sending', step: 'send' })
+    gate.resolve({ success: true, msg: '' })
+    expect(await p).toMatchObject({ status: 'success', verified: true })
+    expect(readBack).toHaveBeenCalledTimes(2)
+  })
+
+  it('idle 时 abort 无副作用', () => {
+    const { ctl, logs } = setup()
+    ctl.abort()
+    expect(ctl.getState()).toBe(INITIAL)
+    expect(logs).toHaveLength(0)
   })
 })
 
@@ -222,13 +285,9 @@ describe('控制器：重复点击', () => {
     const { ctl, readBack } = setup({ send })
     ctl.request({ roomTemp: 24 })
     const p1 = ctl.confirm()
-    const p2 = ctl.confirm()
-    const p3 = ctl.confirm()
-    expect(p2).toBe(p1)
-    expect(p3).toBe(p1)
+    expect(ctl.confirm()).toBe(p1)
+    expect(ctl.confirm()).toBe(p1)
     await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(1))
-    expect(ctl.getState()).toMatchObject({ status: 'sending', step: 'send' })
-    // sending 期间 request / cancel / reset 都无效
     ctl.request({ roomSwitch: 0 }); ctl.cancel(); ctl.reset()
     expect(ctl.getState()).toMatchObject({ status: 'sending' })
     gate.resolve({ success: true, msg: '' })
@@ -236,65 +295,115 @@ describe('控制器：重复点击', () => {
     expect(ctl.getState().status).toBe('success')
     expect(send).toHaveBeenCalledTimes(1)
     expect(readBack).toHaveBeenCalledTimes(2)
-    // 结束后再点确认也不会再发
     await ctl.confirm()
     expect(send).toHaveBeenCalledTimes(1)
   })
 
   it('下发前读取期间重复点击也只读一次', async () => {
     const gate = deferred<Snap>()
-    const readBack = vi.fn().mockReturnValueOnce(gate.promise).mockResolvedValue({ roomTemp: 24, roomSwitch: 1 })
+    const readBack = vi.fn().mockReturnValueOnce(gate.promise).mockResolvedValue(AFTER)
     const { ctl, send } = setup({ readBack })
     ctl.request({ roomTemp: 24 })
     const p = ctl.confirm(); ctl.confirm(); ctl.confirm()
     expect(readBack).toHaveBeenCalledTimes(1)
-    gate.resolve({ roomTemp: 22, roomSwitch: 1 })
+    gate.resolve(BEFORE)
     await p
     expect(send).toHaveBeenCalledTimes(1)
     expect(readBack).toHaveBeenCalledTimes(2)
   })
 })
 
+describe('控制器：结果未知（unknown）', () => {
+  it.each([
+    ['timeout', '未收到控制屏应答，下发结果未知'],
+    ['network', '网络中断，下发结果未知'],
+  ] as const)('%s 且回读逐字段一致 → success（via=readback，已核对）', async (kind, msg) => {
+    const send = vi.fn(async () => { throw new ApiError(kind, msg) })
+    const { ctl, readBack, logs } = setup({ send })
+    ctl.request({ roomTemp: 24 })
+    expect(await ctl.confirm()).toMatchObject({ status: 'success', via: 'readback', verified: true, after: AFTER, mismatches: [] })
+    expect(send).toHaveBeenCalledTimes(1)
+    expect(readBack).toHaveBeenCalledTimes(2)
+    expect(logs.at(-1)).toMatchObject({ event: 'success', codes: ['UNKNOWN', 'VERIFIED'], errorKind: kind })
+  })
+
+  it('超时且回读不一致 → unknown，提示结果未确认，带不一致字段；不重试', async () => {
+    const send = vi.fn(async () => { throw new ApiError('timeout', '未收到控制屏应答，下发结果未知') })
+    const readBack = vi.fn(async () => BEFORE)
+    const { ctl } = setup({ send, readBack })
+    ctl.request({ roomTemp: 24, roomSwitch: 1 })
+    const end = await ctl.confirm()
+    expect(end).toMatchObject({ status: 'unknown', error: TEXT.unconfirmed, cause: '未收到控制屏应答，下发结果未知', mismatches: [{ field: 'roomTemp', kind: 'differ' }] })
+    expect(TEXT.unconfirmed).toBe('结果未确认，请刷新查看')
+    await new Promise((r) => setTimeout(r, 20))
+    await ctl.confirm()
+    expect(send).toHaveBeenCalledTimes(1)
+    expect(readBack).toHaveBeenCalledTimes(2)
+    ctl.reset()
+    expect(ctl.getState()).toEqual({ status: 'idle', errors: [] })
+  })
+
+  it('超时且下发后回读失败 → unknown，所有下发字段记为没读到', async () => {
+    let n = 0
+    const send = vi.fn(async () => { throw new ApiError('timeout', 'x') })
+    const { ctl } = setup({ send, readBack: vi.fn(async () => { if (n++) throw new Error('读失败'); return BEFORE }) })
+    ctl.request({ roomTemp: 24, systemSwitch: 1 })
+    expect(await ctl.confirm()).toMatchObject({
+      status: 'unknown', error: TEXT.unconfirmed, after: null, afterError: `${TEXT.readAfterFailedUnknown}：读失败`,
+      mismatches: [{ field: 'systemSwitch', kind: 'missing' }, { field: 'roomTemp', kind: 'missing' }],
+    })
+    expect(send).toHaveBeenCalledTimes(1)
+  })
+
+  it.each([
+    ['服务端 500', new ApiError('server', '内部错误', { status: 500, code: 13 }), 'unknown'],
+    ['控制屏 503', new ApiError('unavailable', '控制屏消息发送失败', { status: 503, code: 14 }), 'unknown'],
+    ['后端返回取消 code 1', new ApiError('aborted', '请求已取消', { status: 499, code: 1 }), 'unknown'],
+    ['发出后被取消（无状态 aborted）', new ApiError('aborted', '请求已取消'), 'unknown'],
+    ['普通异常', new Error('boom'), 'unknown'],
+    ['后端参数错误 code 3', new ApiError('bad_request', '参数错误', { status: 400, code: 3 }), 'rejected'],
+    ['网关无权限', new ApiError('forbidden', '无权限', { status: 403 }), 'rejected'],
+    ['令牌失效', new ApiError('unauthenticated', '登录已过期', { status: 401, code: 16 }), 'rejected'],
+    ['控制屏 success=false', new ApiError('ctrl', '该软件类型不支持此控制'), 'rejected'],
+    ['前端写防护（无状态）', new ApiError('write_blocked', '下发已关闭'), 'not-sent'],
+    ['写消息校验不过（无状态）', new ApiError('bad_request', '写消息缺少字段'), 'not-sent'],
+  ] as const)('%s → %3$s', async (_n, err, outcome) => {
+    expect(outcomeOf(err)).toBe(outcome)
+    const send = vi.fn(async () => { throw err })
+    const readBack = vi.fn(async () => BEFORE) // 回读不一致
+    const { ctl } = setup({ send, readBack })
+    ctl.request({ roomSwitch: 0 })
+    const end = await ctl.confirm()
+    if (outcome === 'unknown') expect(end).toMatchObject({ status: 'unknown' })
+    else expect(end).toMatchObject({ status: 'failure', outcome })
+    expect(send).toHaveBeenCalledTimes(1)
+    expect(readBack).toHaveBeenCalledTimes(outcome === 'not-sent' ? 1 : 2)
+  })
+})
+
 describe('控制器：失败不重试', () => {
-  it('控制屏拒绝（success=false）→ failure/rejected；只发一次，回读一次核对', async () => {
+  it('控制屏拒绝 → failure/rejected；只发一次，回读一次', async () => {
     const send = vi.fn(async () => { throw new ApiError('ctrl', '该软件类型不支持此控制') })
     const { ctl, readBack } = setup({ send })
     ctl.request({ roomTemp: 24 })
-    const end = await ctl.confirm()
-    expect(end).toMatchObject({ status: 'failure', outcome: 'rejected', error: `${TEXT.failure}：该软件类型不支持此控制`, before: { roomTemp: 22 }, after: { roomTemp: 24 } })
+    expect(await ctl.confirm()).toMatchObject({ status: 'failure', outcome: 'rejected', error: `${TEXT.failure}：该软件类型不支持此控制`, before: BEFORE, after: AFTER })
     expect(send).toHaveBeenCalledTimes(1)
     expect(readBack).toHaveBeenCalledTimes(2)
-    // 等一会儿也不会自己重发
     await new Promise((r) => setTimeout(r, 20))
-    expect(send).toHaveBeenCalledTimes(1)
-    // 失败后 confirm 无效，只能 reset 后重新走确认
     await ctl.confirm()
     expect(send).toHaveBeenCalledTimes(1)
     ctl.reset()
     expect(ctl.getState()).toEqual({ status: 'idle', errors: [] })
   })
 
-  it.each([
-    ['timeout', '未收到控制屏应答，下发结果未知'],
-    ['network', '网络中断，下发结果未知'],
-  ] as const)('%s → outcome=unknown，回读用来核对', async (kind, msg) => {
-    const send = vi.fn(async () => { throw new ApiError(kind, msg) })
-    const { ctl, readBack } = setup({ send })
-    ctl.request({ roomSwitch: 1 })
-    expect(await ctl.confirm()).toMatchObject({ status: 'failure', outcome: 'unknown', error: `${TEXT.failure}：${msg}`, after: { roomTemp: 24 } })
-    expect(send).toHaveBeenCalledTimes(1)
-    expect(readBack).toHaveBeenCalledTimes(2)
-  })
-
-  it.each(['write_blocked', 'bad_request'] as const)('%s → outcome=not-sent，不做下发后回读', async (kind) => {
-    const send = vi.fn(async () => { throw new ApiError(kind, '下发已关闭（writeMode=off）') })
+  it('写防护拦截 → failure/not-sent，不做下发后回读', async () => {
+    const send = vi.fn(async () => { throw new ApiError('write_blocked', '下发已关闭（writeMode=off）') })
     const { ctl, readBack } = setup({ send })
     ctl.request({ roomSwitch: 1 })
     const end = await ctl.confirm()
     expect(end).toMatchObject({ status: 'failure', outcome: 'not-sent' })
     expect((end as { after?: unknown }).after).toBeUndefined()
     expect(readBack).toHaveBeenCalledTimes(1)
-    expect(send).toHaveBeenCalledTimes(1)
   })
 
   it('下发前读取失败：不下发，failure/not-sent', async () => {
@@ -305,49 +414,9 @@ describe('控制器：失败不重试', () => {
     expect(send).not.toHaveBeenCalled()
     expect(readBack).toHaveBeenCalledTimes(1)
   })
-
-  it.each([
-    ['服务端 500', new ApiError('server', '内部错误', { status: 500, code: 13 }), 'unknown'],
-    ['控制屏 503', new ApiError('unavailable', '控制屏消息发送失败', { status: 503, code: 14 }), 'unknown'],
-    ['后端返回取消 code 1', new ApiError('aborted', '请求已取消', { status: 499, code: 1 }), 'unknown'],
-    ['后端参数错误 code 3', new ApiError('bad_request', '参数错误', { status: 400, code: 3 }), 'rejected'],
-    ['网关无权限', new ApiError('forbidden', '无权限', { status: 403 }), 'rejected'],
-    ['令牌失效', new ApiError('unauthenticated', '登录已过期', { status: 401, code: 16 }), 'rejected'],
-    ['发出后被取消（无状态 aborted）', new ApiError('aborted', '请求已取消'), 'unknown'],
-    ['前端写防护（无状态）', new ApiError('write_blocked', '下发已关闭'), 'not-sent'],
-  ] as const)('%s → %s；只要不是 not-sent 就回读', async (_n, err, outcome) => {
-    expect(outcomeOf(err)).toBe(outcome)
-    const send = vi.fn(async () => { throw err })
-    const { ctl, readBack } = setup({ send })
-    ctl.request({ roomSwitch: 1 })
-    expect(await ctl.confirm()).toMatchObject({ status: 'failure', outcome })
-    expect(send).toHaveBeenCalledTimes(1)
-    expect(readBack).toHaveBeenCalledTimes(outcome === 'not-sent' ? 1 : 2)
-  })
-
-  it('普通异常按结果未知处理', async () => {
-    const { ctl } = setup({ send: vi.fn(async () => { throw new Error('boom') }) })
-    ctl.request({ roomSwitch: 1 })
-    expect(await ctl.confirm()).toMatchObject({ status: 'failure', outcome: 'unknown' })
-  })
 })
 
 describe('控制器：其他', () => {
-  it('dispose 后结果不再更新状态、不再通知', async () => {
-    const gate = deferred<{ success: boolean; msg: string }>()
-    const { ctl } = setup({ send: vi.fn(() => gate.promise) })
-    const fn = vi.fn()
-    ctl.subscribe(fn)
-    ctl.request({ roomSwitch: 1 })
-    const p = ctl.confirm()
-    const calls = fn.mock.calls.length
-    ctl.dispose()
-    gate.resolve({ success: true, msg: '' })
-    await p
-    expect(ctl.getState().status).toBe('sending')
-    expect(fn.mock.calls.length).toBe(calls)
-  })
-
   it('日志抛错不影响下发', async () => {
     const { ctl, send } = setup({ log: () => { throw new Error('log down') } })
     ctl.request({ roomSwitch: 1 })
