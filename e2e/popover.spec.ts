@@ -95,44 +95,78 @@ test.describe('项目切换菜单', () => {
     })
   }
 
-  test('键盘 Tab 聚焦触发器时有焦点环，鼠标点击没有', async ({ page, login }) => {
-    await open(page, login)
+  // 触发器焦点环的状态表（与 Layout.tsx ProjectSwitch 注释里的表一一对应）。每格都先用键盘 Tab 到触发器，
+  // 让“之前用过键盘”成立（这是 Chromium 把脚本还焦点算作 :focus-visible 的前提），再按打开方式 × 关闭方式操作，
+  // 检查关闭后的外圈、“直接按键”与“Tab 回来”。外圈一律断言计算样式 outline-style，不只断言聚焦
+  const CLOSE = {
+    鼠标点选项: { focus: 'trigger', ring: false },
+    鼠标再点触发器: { focus: 'trigger', ring: false },
+    回车选中: { focus: 'trigger', ring: true },
+    Esc: { focus: 'trigger', ring: true },
+    Tab: { focus: 'trigger', ring: true },
+    'Shift+Tab': { focus: 'trigger', ring: true },
+    点外部: { focus: 'elsewhere', ring: false },
+  } as const
+  const ringOf = (page: Page) => trigger(page).evaluate((n) => ({ fv: n.matches(':focus-visible'), outline: getComputedStyle(n).outlineStyle }))
+  const expectRing = async (page: Page, on: boolean) => {
+    await expect(trigger(page)).toBeFocused()
+    const r = await ringOf(page)
+    if (on) expect(r).toEqual({ fv: true, outline: expect.not.stringMatching(/^none$/) })
+    else expect(r.outline).toBe('none')
+  }
+  const tabToTrigger = async (page: Page) => {
     // 侧栏里触发器前面的最后一个链接
     await page.locator('.sidebar .nav-item', { hasText: '统一控制' }).focus()
     await page.keyboard.press('Tab')
-    await expect(trigger(page)).toBeFocused()
-    expect(await trigger(page).evaluate((n) => n.matches(':focus-visible'))).toBe(true)
-    expect(await trigger(page).evaluate((n) => getComputedStyle(n).outlineStyle)).not.toBe('none')
-    await page.locator('h1').first().click()
-    await page.getByText('当前项目', { exact: true }).click()
     await tick(page)
-    await page.keyboard.press('Escape') // 键盘接管：回到触发器且有焦点环（同原生按钮）
-    await tick(page)
-    await expect(trigger(page)).toBeFocused()
-    // 先用键盘操作过，再用鼠标打开并点选：焦点回到触发器但没有焦点环
-    await page.getByText('当前项目', { exact: true }).click()
-    await tick(page)
-    await menuOptions(page).filter({ hasText: '朝阳壹号院 B栋' }).click()
-    await tick(page)
-    await expect(currentName(page)).toHaveText('朝阳壹号院 B栋')
-    await expect(trigger(page)).toBeFocused()
-    const ring = () => trigger(page).evaluate((n) => getComputedStyle(n).outlineStyle)
-    expect(await ring()).toBe('none')
-    // 再在触发器上按键（键盘接管）：焦点环回来
-    await page.keyboard.press('ArrowDown')
-    await tick(page)
-    await page.keyboard.press('Escape')
-    await tick(page)
-    await expect(trigger(page)).toBeFocused()
-    expect(await ring()).not.toBe('none')
-    // 鼠标点触发器打开、再点触发器关闭：同样没有焦点环
-    await page.getByText('当前项目', { exact: true }).click()
-    await tick(page)
-    await page.getByText('当前项目', { exact: true }).click()
-    await tick(page)
-    await expect(menu(page)).toHaveCount(0)
-    expect(await ring()).toBe('none')
-  })
+  }
+  for (const how of ['鼠标', '键盘'] as const) {
+    for (const [close, want] of Object.entries(CLOSE)) {
+      test(`焦点环：${how}打开 → ${close}关闭`, async ({ page, login }) => {
+        await open(page, login)
+        await tabToTrigger(page)
+        await expectRing(page, true)
+        if (how === '鼠标') await page.getByText('当前项目', { exact: true }).click()
+        else await page.keyboard.press('Enter')
+        await tick(page)
+        await expect(menu(page)).toBeVisible()
+        switch (close) {
+          case '鼠标点选项': await menuOptions(page).filter({ hasText: '朝阳壹号院 B栋' }).click(); break
+          case '鼠标再点触发器': await page.getByText('当前项目', { exact: true }).click(); break
+          case '回车选中':
+            await page.keyboard.press(how === '鼠标' ? 'ArrowDown' : 'ArrowUp') // 鼠标打开：先高亮当前项；键盘打开：已在当前项
+            await page.keyboard.press('ArrowDown')
+            await page.keyboard.press('Enter')
+            break
+          case '点外部': await page.locator('h1').first().click(); break
+          case 'Esc': await page.keyboard.press('Escape'); break
+          default: await page.keyboard.press(close)
+        }
+        await tick(page)
+        await expect(menu(page)).toHaveCount(0)
+        if (close === '鼠标点选项' || close === '回车选中') await expect(currentName(page)).toHaveText('朝阳壹号院 B栋')
+        if (want.focus === 'trigger') {
+          await expectRing(page, want.ring)
+          // 直接按键（非修饰键，对触发器无副作用）：键盘接管，外圈出现
+          await page.keyboard.press('Shift') // 单按修饰键不算
+          await expectRing(page, want.ring)
+          await page.keyboard.press('x')
+          await tick(page)
+          await expectRing(page, true)
+        } else {
+          await expect(trigger(page)).not.toBeFocused()
+        }
+        // Tab 回来：外圈一定出现
+        await tabToTrigger(page)
+        await expectRing(page, true)
+        // Shift+Tab 回来同样
+        await page.keyboard.press('Tab')
+        await page.keyboard.press('Shift+Tab')
+        await tick(page)
+        await expectRing(page, true)
+      })
+    }
+  }
 
   for (const height of [560, 420]) {
     test(`矮窗口（高 ${height}）：菜单整个在屏内，能滚到最后一项`, async ({ page, login }) => {

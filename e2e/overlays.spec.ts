@@ -25,19 +25,22 @@ async function toastAnimationsDone(page: Page) {
     ),
   )
   let timer: ReturnType<typeof setTimeout> | undefined
-  const timeout = new Promise<never>((_, reject) => {
-    timer = setTimeout(async () => {
-      const state = await page
-        .evaluate(() => [...document.querySelectorAll('.toast')].flatMap((t) => t.getAnimations().map((a) => `${a instanceof CSSAnimation ? a.animationName : 'animation'}:${a.playState}@${Math.round(Number(a.currentTime))}ms`)))
-        .catch((e: unknown) => [`读取失败：${String(e)}`])
-      reject(new Error(`toast 动画 2 秒内没有结束：${state.join(', ') || '（无动画）'}`))
-    }, 2000)
-  })
+  const timeout = new Promise<'timeout'>((resolve) => { timer = setTimeout(() => resolve('timeout'), 2000) })
   try {
-    await Promise.race([done, timeout])
+    if ((await Promise.race([done, timeout])) !== 'timeout') return
   } finally {
     clearTimeout(timer)
   }
+  // 到点即判失败；还没结束的等待不再关心（避免之后页面关闭时报未处理的拒绝）。诊断信息另设 500ms 上限，页面无响应时也不拖住
+  done.catch(() => undefined)
+  let diagTimer: ReturnType<typeof setTimeout> | undefined
+  const state = await Promise.race([
+    page.evaluate(() => [...document.querySelectorAll('.toast')].flatMap((t) => t.getAnimations().map((a) => `${a instanceof CSSAnimation ? a.animationName : 'animation'}:${a.playState}@${Math.round(Number(a.currentTime))}ms`))),
+    new Promise<string[]>((resolve) => { diagTimer = setTimeout(() => resolve(['（读取动画状态超时）']), 500) }),
+  ])
+    .catch((e: unknown) => [`读取失败：${String(e)}`])
+    .finally(() => clearTimeout(diagTimer))
+  throw new Error(`toast 动画 2 秒内没有结束：${state.join(', ') || '（无动画）'}`)
 }
 
 /** 同 fixtures 的 shot()，但只截可视区；settle 为 false 时不推进时钟（toast 会在 2.6 秒后消失） */
