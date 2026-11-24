@@ -3,7 +3,7 @@
 import { describe, expect, it } from 'vitest'
 import { decodeReply, encodeMessage, type CtrlReply } from '../ctrl'
 import * as pb from '../gen/ctrl200_pb.js'
-import { describeFields, isVerifiableField, matchAllRoomsSwitch, matchRoomSet, verdictOf, VERIFIABLE_FIELDS } from '../writeLockVerify'
+import { describeFields, isNoChange, isVerifiableField, matchAllRoomsSwitch, matchRoomSet, verdictOf, VERIFIABLE_FIELDS } from '../writeLockVerify'
 
 const room = (o: Partial<CtrlReply<200>['data'][number]> = {}) => ({
   id: 406658286, name: '房间11', temperature: 22, humidity: 60, dewPoint: 13.9, setTemp: 24.5, setHumi: 0, windSpeed: 3, eco: 0, switch: 1, mode: 0, endModes: [], isConnected: true, ...o,
@@ -68,7 +68,8 @@ describe('201 → 200（逐字段）', () => {
 })
 
 describe('206 → 200', () => {
-  const all = (want: number, r: CtrlReply<200>) => matchAllRoomsSwitch({ msg: 206, target: { switch: want } }, r)
+  // 目标集合取回包里的全部房间（确认时读到的就是这些）
+  const all = (want: number, r: CtrlReply<200>) => matchAllRoomsSwitch({ msg: 206, target: { switch: want }, roomIds: (r.data ?? []).map((x) => x.id) }, r)
   it('所有房间开关都等于目标值 → 已生效；有不等的 → 未变化；缺省 = 0 直接比对', () => {
     const off = wire({ id: 1, switch: 0, isConnected: true }, { id: 2, switch: 0, isConnected: true })
     expect(all(0, off)).toEqual({ verdict: 'applied', fields: { switch: 'applied' } })
@@ -92,6 +93,23 @@ describe('206 目标房间集合（roomIds）', () => {
     expect(all(1, r, [1])).toMatchObject({ verdict: 'applied' })
     expect(all(1, r, [1, 3])).toMatchObject({ verdict: 'unchanged' })
     expect(all(1, r, [1, 2, 3])).toMatchObject({ verdict: 'unchanged' }) // 未变化优先于无法核对（B）
+  })
+  it('没有可信目标集合（缺失或为空）→ 无法核对：即使回包里剩下的房间全部一致也不判已生效', () => {
+    const r = reply(room({ id: 1, switch: 1 }))
+    expect(all(1, r)).toEqual({ verdict: 'unverifiable', fields: { switch: 'unverifiable' } })
+    expect(all(1, r, [])).toEqual({ verdict: 'unverifiable', fields: { switch: 'unverifiable' } })
+  })
+})
+
+describe('「不改」判定（isNoChange）', () => {
+  it('标量 -1 = 不改；203 的 systemMode 0（OPERATION_MODE_NONE）= 不改，其余消息 / 字段的 0 是真实目标值', () => {
+    expect(isNoChange(201, 'temperature', -1)).toBe(true)
+    expect(isNoChange(203, 'systemMode', 0)).toBe(true)
+    expect(isNoChange(203, 'systemMode', -1)).toBe(true)
+    expect(isNoChange(203, 'systemMode', 1)).toBe(false)
+    expect(isNoChange(203, 'roomSwitch', 0)).toBe(false)
+    expect(isNoChange(201, 'systemMode', 0)).toBe(false)
+    expect(isNoChange(201, 'switch', 0)).toBe(false)
   })
 })
 

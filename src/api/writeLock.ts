@@ -67,6 +67,7 @@
 // 没注入 resolveProject 会按不可见跳过）。localStorage 写入失败时 console.warn，降级为只在内存里锁。
 import { isApiError } from './errors'
 import { getSession, subscribeSession } from './session'
+import { isNoChange } from './writeLockVerify'
 
 /** 一次核对的最长时间 */
 export const VERIFY_TIMEOUT_MS = 15_000
@@ -76,6 +77,10 @@ export const MIN_TTL_MS = 30_000
 /** 自动核对未变化 / 无法核对时的退避再核对间隔 */
 export const RETRY_DELAYS_MS = [5_000, 20_000, 60_000] as const
 export const STORAGE_PREFIX = 'hjc-write-lock:'
+/** 206 目标房间集合的上限（超过的在发送前由 checkSentRecord 拒绝，不会发出后才降级为内存锁） */
+export const ROOM_IDS_MAX = 512
+/** 一条持久化记录的最大长度（ROOM_IDS_MAX 个安全整数也放得下） */
+const STORED_MAX_CHARS = 16_000
 /** 别的账号发起、本账号核对不了（或不该看到细节）时的提示 */
 export const OTHER_ACCOUNT_TEXT = '上一账号的下发结果未知，请稍后再试或联系有权限的账号'
 
@@ -101,10 +106,9 @@ export type LockOwner = 'current' | 'previous-session' | 'other-account'
 export interface LockTarget { id: string; controlScreenId?: string; dtuId?: string }
 
 export type Scalar = string | number | boolean | null
-/** markSent 时要持久化的核对数据：消息号、设备 id、目标字段与值 */
 /**
  * markSent 时要持久化的核对数据：消息号、设备 id、目标字段与值；roomIds 为 206（全部房间开关）确认后预检读到的目标房间 id 集合，
- * 核对时逐个检查这些房间（回包里缺了的按无法核对）
+ * 核对时逐个检查这些房间（回包里缺了的按无法核对）。206 必须给（最多 ROOM_IDS_MAX 个），发送前用 checkSentRecord 检查
  */
 export interface SentRecord { msg: number; deviceId: number | null; target: { [field: string]: Scalar }; roomIds?: number[] }
 /** localStorage 里的一条记录 */
@@ -283,13 +287,25 @@ function validTarget(t: unknown): t is { [k: string]: Scalar } {
   const ks = Object.keys(t)
   return ks.length > 0 && ks.length <= 16 && ks.every((k) => FIELD_RE.test(k) && !CRED_RE.test(k) && scalar((t as Record<string, unknown>)[k]))
 }
-const validRoomIds = (v: unknown) => v === undefined || (Array.isArray(v) && v.length > 0 && v.length <= 64 && v.every((n) => Number.isSafeInteger(n)))
+const validRoomIds = (v: unknown) => v === undefined || (Array.isArray(v) && v.length > 0 && v.length <= ROOM_IDS_MAX && v.every((n) => Number.isSafeInteger(n)))
 const validRecord = (r: SentRecord) => Number.isInteger(r.msg) && r.msg > 0 && r.msg < 100_000 && (r.deviceId === null || Number.isSafeInteger(r.deviceId)) && validTarget(r.target) && validRoomIds(r.roomIds)
 const copyRecord = (r: SentRecord): SentRecord => ({ msg: r.msg, deviceId: r.deviceId, target: { ...r.target }, ...(r.roomIds ? { roomIds: [...r.roomIds] } : {}) })
 
+/**
+ * 发送前检查核对数据（在 requestWrite 之前调用）：返回 null = 可以登记；否则返回给用户看的原因，调用方应 release(token)、
+ * 提示该原因、不发送。206 必须带非空的目标房间集合，且不超过 ROOM_IDS_MAX 个；其余按落盘的结构校验
+ */
+export function checkSentRecord(r: SentRecord): string | null {
+  if (r.msg === 206) {
+    if (!Array.isArray(r.roomIds) || !r.roomIds.length) return '没有读到目标房间，无法核对下发结果，未下发'
+    if (r.roomIds.length > ROOM_IDS_MAX) return `目标房间超过 ${ROOM_IDS_MAX} 个，无法记录核对数据，未下发`
+  }
+  return validRecord(r) ? null : '核对数据不合规，未下发'
+}
+
 /** 结构校验（含时间合理性）：不合规、到期、sentAt 晚于现在返回 null */
 export function parseStored(raw: string | null, now = Date.now()): StoredLock | null {
-  if (!raw || raw.length > 4_000) return null
+  if (!raw || raw.length > STORED_MAX_CHARS) return null
   let o: unknown
   try { o = JSON.parse(raw) } catch { return null }
   if (!o || typeof o !== 'object' || Array.isArray(o)) return null
@@ -335,21 +351,18 @@ function drop(e: Entry) {
   emit()
 }
 
-/** 到有效期：放锁、通知订阅者、发强制重读事件 */
-/** 按消息类型识别「不改」：标量 -1；203 的 systemMode 是枚举，0（OPERATION_MODE_NONE）= 不改 */
-const isUnchanged = (msg: number, field: string, v: Scalar) => v === -1 || (msg === 203 && field === 'systemMode' && v === 0)
-
 /** 回读失败时的逐字段结果：核对数据里每个改了的字段都是结果未知（没有核对数据时为空） */
 function unknownFields(e: Entry): Record<string, FieldResult> | undefined {
   if (!e.record) return undefined
   const out: Record<string, FieldResult> = {}
-  for (const [k, v] of Object.entries(e.record.target)) if (!isUnchanged(e.record.msg, k, v)) out[k] = 'unknown'
+  for (const [k, v] of Object.entries(e.record.target)) if (!isNoChange(e.record.msg, k, v)) out[k] = 'unknown'
   return out
 }
 
 /** 按当前时间判断是否已过有效期（不依赖到期定时器是否已执行） */
 const isExpired = (e: Entry) => e.sentAt !== undefined && Date.now() >= e.sentAt + ttlMs
 
+/** 到有效期：放锁、通知订阅者、发强制重读事件 */
 function expire(e: Entry) {
   if (!isLive(e)) return
   drop(e)
@@ -486,8 +499,11 @@ export function markSent(token: LockToken, sent: Promise<unknown>, record?: Sent
   if (!e || e.sent) return
   e.sent = sent
   e.sentAt = Date.now()
-  if (record && validRecord(record)) e.record = copyRecord(record)
-  else if (record) console.warn('[writeLock] 核对数据不合规，不落盘')
+  if (record && validRecord(record)) {
+    e.record = copyRecord(record)
+    // 206 漏传目标房间集合（接入应先用 checkSentRecord 拒绝）：照常落盘与锁住，核对一律按无法核对，锁到有效期
+    if (record.msg === 206 && !record.roomIds?.length) console.warn('[writeLock] 206 缺少目标房间集合，核对将按无法核对处理')
+  } else if (record) console.warn('[writeLock] 核对数据不合规，不落盘')
   writeStored(e)
   startExpiry(e)
   sent.then(() => afterSettled(e), () => afterSettled(e))
@@ -646,7 +662,7 @@ async function runVerify(e: Entry, fn: VerifyFn, signal?: AbortSignal): Promise<
   // 未变化 / 无法核对 / 结果未知：锁保持到核对一致或有效期到期（不续期）
   if (result !== 'aborted') {
     e.lastVerify = result
-    // 回读失败、读取途中换号或中止：核对器返回的逐字段结果作废，每个改了的目标字段都记为结果未知
+    // 回读失败或读取途中换号：核对器返回的逐字段结果作废，每个改了的目标字段都记为结果未知（中止不更新上次结论）
     e.lastFields = valid ? fields : unknownFields(e)
     emit()
   }

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 // 下发写锁（writeLock.ts，口径经 Fable 复核，11/24）。不发任何真实请求。覆盖：多键原子互斥；按 #24 writeOnce 的真实顺序接入
-// （先等令牌、再 beforeSend 里 claim、再 fetch）；原写未结算不放锁；unknown 不被后续 settle 覆盖（原写迟到 success 例外）；
+// （先等令牌、再 beforeSend 里 claim、再 fetch）；原写未结算不放锁；unknown 不被后续 settle 覆盖；
 // 核对晚于原写结算、结算后自动核对；核对前确认可见与锁键一致（不可见不读）、503 按屏离线、读取途中换号作废、超时 / 预先中止；
 // 发送前的账号绑定（同号重登换代、续期不换代）；别的账号看不到 label / projectId；有效期（内存锁与恢复锁都到期放开、强制重读事件、
 // 最短 30 秒、不续期）；持久化（markSent 即落盘、ok / fail 删除、刷新恢复为未知、按消息号注册核对器、坏数据与时钟异常作废、
@@ -14,12 +14,13 @@ import { __resetHttpForTests, refreshSession } from '../http'
 import { __resetSessionForTests, signIn, signOut } from '../session'
 import { clearTokens } from '../tokens'
 import * as L from '../writeLock'
+import { matchAllRoomsSwitch } from '../writeLockVerify'
 import { fakeBackend, json } from './helpers'
 
 const {
   __resetWriteLockForTests, acquire, claim, configureWriteLock, currentAccount, isHolder, lockKeysOf, lockOf, lockVersion, markOverdue,
   markSent, onForceReread, release, requireVerify, settle, subscribe, verify, registerVerifier, parseStored, STORAGE_PREFIX,
-  DEFAULT_TTL_MS, MIN_TTL_MS, OTHER_ACCOUNT_TEXT, writeLockTtl, RETRY_DELAYS_MS,
+  DEFAULT_TTL_MS, MIN_TTL_MS, OTHER_ACCOUNT_TEXT, writeLockTtl, RETRY_DELAYS_MS, checkSentRecord, ROOM_IDS_MAX,
 } = L
 type LockToken = L.LockToken
 
@@ -768,6 +769,59 @@ describe('持久化（localStorage）', () => {
     expect(parseStored(localStorage.getItem(STORAGE_PREFIX + KEY))).toMatchObject({ msg: 206, roomIds: [1, 2] })
     expect(parseStored(JSON.stringify({ ...rec({ msg: 206, deviceId: null, target: { switch: 1 } }), roomIds: ['x'] }))).toBeNull()
     expect(parseStored(JSON.stringify({ ...rec({ msg: 206, deviceId: null, target: { switch: 1 } }), roomIds: [] }))).toBeNull()
+  })
+  it('206 目标房间集合最多 512 个：满额照常落盘与恢复，超过的在发送前由 checkSentRecord 拒绝', () => {
+    expect(ROOM_IDS_MAX).toBe(512)
+    const ids = (n: number) => Array.from({ length: n }, (_, i) => 9_007_199_254_740_991 - i)
+    const full: L.SentRecord = { msg: 206, deviceId: null, target: { switch: 1 }, roomIds: ids(ROOM_IDS_MAX) }
+    expect(checkSentRecord(full)).toBeNull()
+    const t = take()
+    markSent(t, new Promise(() => {}), full)
+    expect(parseStored(localStorage.getItem(STORAGE_PREFIX + KEY))?.roomIds).toHaveLength(ROOM_IDS_MAX)
+    expect(checkSentRecord({ ...full, roomIds: ids(ROOM_IDS_MAX + 1) })).toMatch(/超过 512 个.*未下发/)
+    expect(parseStored(JSON.stringify({ ...rec({ msg: 206, deviceId: null, target: { switch: 1 } }), roomIds: ids(ROOM_IDS_MAX + 1) }))).toBeNull()
+  })
+  it('checkSentRecord：206 缺目标房间集合或为空 → 拒绝；201 正常记录通过；不合规记录拒绝', () => {
+    expect(checkSentRecord({ msg: 206, deviceId: null, target: { switch: 1 } })).toMatch(/没有读到目标房间/)
+    expect(checkSentRecord({ msg: 206, deviceId: null, target: { switch: 1 }, roomIds: [] })).toMatch(/没有读到目标房间/)
+    expect(checkSentRecord(REC)).toBeNull()
+    expect(checkSentRecord({ msg: 201, deviceId: 1, target: { access_token: 'A1' } })).toMatch(/不合规/)
+  })
+  it('206 漏传目标房间集合：告警、照常落盘锁住；回包里的房间全部一致也按无法核对，不放锁', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    registerVerifier(206, async (r) => matchAllRoomsSwitch(r, { data: [{ id: 1, switch: 1, isConnected: true }] } as never))
+    const t = take(); claim(t)
+    markSent(t, Promise.resolve(), { msg: 206, deviceId: null, target: { switch: 1 } })
+    settle(t, 'unknown')
+    await flush()
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('206 缺少目标房间集合'))
+    expect(stored()).toHaveLength(1)
+    expect(lockOf(PA)).toMatchObject({ lastVerify: 'unverifiable', lastFields: { switch: 'unverifiable' } })
+    expect(await verify(KEY)).toBe('unverifiable')
+    expect(lockOf(PA)).not.toBeNull()
+  })
+  it('206 目标房间在回包里缺失：剩下的房间一致也不放锁（无法核对）；全部在且一致才放', async () => {
+    let data = [{ id: 1, switch: 1, isConnected: true }]
+    registerVerifier(206, async (r) => matchAllRoomsSwitch(r, { data } as never))
+    const t = take(); claim(t)
+    markSent(t, Promise.resolve(), { msg: 206, deviceId: null, target: { switch: 1 }, roomIds: [1, 2] })
+    settle(t, 'unknown')
+    await flush()
+    expect(lockOf(PA)).toMatchObject({ lastVerify: 'unverifiable' })
+    data = [...data, { id: 2, switch: 1, isConnected: true }]
+    expect(await verify(KEY)).toBe('released')
+    expect(lockOf(PA)).toBeNull()
+  })
+  it('刷新恢复旧版 206 记录（没有 roomIds）：不能据部分回包判一致，锁保持', async () => {
+    put(rec({ msg: 206, deviceId: null, target: { switch: 1 } }))
+    vi.resetModules()
+    const R = await import('../writeLock')
+    R.configureWriteLock({ resolveProject: (id) => visible[id] ?? null })
+    expect(R.lockOf(PA)).toMatchObject({ origin: 'restored' })
+    R.registerVerifier(206, async (r) => matchAllRoomsSwitch(r, { data: [{ id: 1, switch: 1, isConnected: true }] } as never))
+    await flush()
+    expect(R.lockOf(PA)).toMatchObject({ lastVerify: 'unverifiable' })
+    expect(stored()).toHaveLength(1)
   })
   it('核对数据不合规（凭据样的字段、非标量）：不落盘', () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {})
