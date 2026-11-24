@@ -7,6 +7,9 @@
 // - abort()：页面卸载 → 还没发出的全部终止（S12a abort 语义：已发出的照常走完回读），不再开始后面的项目。
 // - 写入口：控制器给出的 {id, code} 先在最新项目列表里找回整个 Project，id 与 code 都对得上才把 Project 交给写入口；
 //   对不上（项目被移除或 code 变了）按本地拦截处理（write_blocked，肯定没发出）。
+// - 写锁（src/api/writeLock.ts，接入见 lock.ts）：每个项目发送前 acquire（同一块控制屏 / DTU / 项目被占 → 不发，提示「上一条下发还在
+//   处理中」）；beforeSend 链里 claim(token) 放在最后；拿到写 Promise 立刻 markSent；结果出来后 settle（成功 ok、明确被拒或没发出 fail、
+//   结果未知 unknown：锁到回读核对一致或有效期到期）。批次截止时间只影响界面上的标注，不放锁。
 import { callCtrl, writeCtrl, type CtrlReply, type WriteQuery } from '@/api/ctrl'
 import { ApiError } from '@/api/errors'
 import type { WriteProject } from '@/api/guard'
@@ -14,6 +17,8 @@ import { TEXT } from './constants'
 import { consoleLogger, type UnifiedLogger } from './log'
 import { createUnifiedController, outcomeOf, type UnifiedController, type UnifiedState } from './machine'
 import { describeQuery, type UnifiedContext, type UnifiedDraft, type UnifiedEcho } from './rules'
+import { acquire, claim, lockOf, markSent, OTHER_ACCOUNT_TEXT, settle } from '@/api/writeLock'
+import { LOCK_BUSY_TEXT, lockTargetOf, recordOf } from './lock'
 
 /** 页面传进来的项目（S6a 的 Project 直接可用） */
 export interface BatchProject {
@@ -23,6 +28,9 @@ export interface BatchProject {
   /** app_code */
   programCode: number
   online: boolean
+  /** 写锁键：控制屏号、DTU 号（S6a 的 Project 带着） */
+  controlScreenId?: string
+  dtuId?: string
 }
 
 /** 回读快照：200 房间温控数据整理成的统一控制相关值（toEcho 直接用它） */
@@ -120,6 +128,7 @@ export const LOGIN_ABNORMAL_TEXT = '登录状态异常，请重新登录后下�
  * 批次截止：从开始下发起 35 秒（方案 S12 验收「35 秒内给出最终结果」）。到截止时：
  * - 还没发出的项目（含正在下发前读取、正在等令牌续期的）→ 未下发（超时），之后 beforeSend 一律拒绝，绝不再发写请求；
  * - 已经发出、还没回应的 → 立即标「结果未确认」，不再等它
+ * 截止只影响界面上的标注：写锁不在这里放，仍按原写结算、回读核对或锁的有效期（见 lock.ts）
  */
 export const BATCH_DEADLINE_MS = 35_000
 export const DEADLINE_NOT_SENT = '超过 35 秒截止时间，未下发（超时）'
@@ -191,9 +200,9 @@ export function createUnifiedBatch(deps: BatchDeps) {
 
   /**
    * 发送前复核（同步）：批次没被终止（页面卸载）、没过截止时间、项目仍在列表里、code 没变、仍在线。
-   * 通过就记下「已发出」
+   * 只做检查，不改状态（「已发出」在 claim 认领成功后才记）
    */
-  const recheck = (e: Entry, wp: WriteProject) => () => {
+  const recheck = (e: Entry, wp: WriteProject) => {
     // 最先看取消信号
     if (ac.signal.aborted) return false
     // 这一项已有定论（截止时冻结）、或已不属于当前批次：一律不发
@@ -203,7 +212,6 @@ export function createUnifiedBatch(deps: BatchDeps) {
     if (deps.getAccount && (account === null || deps.getAccount() !== account)) return false
     const cur = find(wp.id)
     if (!cur || cur.code !== wp.code || cur.online !== true) return false
-    e.sent = true
     return true
   }
   /** 控制器给的 {id, code} → 最新列表里的整个 Project；对不上就本地拦截（没发出） */
@@ -214,9 +222,28 @@ export function createUnifiedBatch(deps: BatchDeps) {
     if (q.roomTemp !== -1 && q.roomSwitch !== 1 && e.before && e.before.rooms > 0 && e.before.roomSwitch === 0) {
       return Promise.reject(new ApiError('write_blocked', ROOMS_OFF_TEXT))
     }
-    const out = send(p, q, { beforeSend: recheck(e, wp), signal: ac.signal })
-    out.then((r) => { if (e.sent) e.reply = r?.success === true ? 'ok' : 'rejected' },
-      (err) => { if (e.sent) e.reply = outcomeOf(err) === 'unknown' ? 'error' : 'rejected' })
+    // 写锁：同一块屏（或 DTU、项目）上一条还没有结论 → 不发
+    const got = acquire(lockTargetOf(p), p.name)
+    if (!got.ok) return Promise.reject(new ApiError('write_blocked', got.busy.owner === 'other-account' ? OTHER_ACCOUNT_TEXT : LOCK_BUSY_TEXT))
+    const token = got.token
+    // beforeSend 链：批次复核在前，claim(token) 必须放在最后（认领成功即视为已发出）
+    const beforeSend = () => {
+      const ok = recheck(e, wp) && claim(token)
+      if (ok) e.sent = true
+      return ok
+    }
+    let out: Promise<CtrlReply<203>>
+    try { out = send(p, q, { beforeSend, signal: ac.signal }) } catch (x) { settle(token, 'fail'); return Promise.reject(x) }
+    markSent(token, out, recordOf(q))
+    out.then((r) => {
+      if (e.sent) e.reply = r?.success === true ? 'ok' : 'rejected'
+      settle(token, r?.success === true ? 'ok' : 'fail')
+    }, (err) => {
+      const o = outcomeOf(err)
+      if (e.sent) e.reply = o === 'unknown' ? 'error' : 'rejected'
+      // 没认领的（beforeSend 没过）settle 直接放锁；认领过的：没发出 / 明确被拒 → fail，其余结果未知 → unknown
+      settle(token, o === 'unknown' ? 'unknown' : 'fail')
+    })
     return out
   }
 
@@ -242,6 +269,9 @@ export function createUnifiedBatch(deps: BatchDeps) {
       for (const id of uniq) {
         const p = find(id)
         if (!p) { errs.push({ name: id, msg: TEXT.noProject }); continue }
+        // 同一块屏上一条下发还没有结论：整体不下发
+        const held = lockOf(lockTargetOf(p))
+        if (held) { errs.push({ name: p.name, msg: held.owner === 'other-account' ? OTHER_ACCOUNT_TEXT : LOCK_BUSY_TEXT }); continue }
         const entry = { p, started: false, sent: false, batch: batchSeq, unsub: () => {} } as Entry
         const ctl = createUnifiedController<UnifiedSnapshot>({
           getContext: () => contextOf(find(id), mock),

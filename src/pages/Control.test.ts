@@ -21,6 +21,7 @@ import { __resetSessionViewForTests } from '../data/session'
 import { __resetMockUnifiedForTests, mockUnifiedRead, mockUnifiedSend } from '../api'
 import Control, { lastResultKey } from './Control'
 import { setCurrentUserId } from '../api/auth'
+import { __resetWriteLockForTests } from '../api/writeLock'
 
 beforeAll(() => {
   const proto = Element.prototype as unknown as Record<string, unknown>
@@ -112,6 +113,7 @@ async function expectTempLocked() {
 }
 
 beforeEach(() => {
+  __resetWriteLockForTests()
   setConfig({ apiBase: '/api', dataSource: 'real', apiEnv: 'test' })
   localStorage.clear(); sessionStorage.clear()
   __resetHttpForTests(); __resetSessionForTests(); __resetSessionViewForTests(); __resetCurrentForTests(); clearTokens()

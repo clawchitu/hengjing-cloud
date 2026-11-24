@@ -1,5 +1,6 @@
 // S12b 批量控制器：逐个项目走 S12a 状态机。下发函数、回读都注入假的，不连任何接口。
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { __resetWriteLockForTests, lockOf } from '@/api/writeLock'
 import { ApiError } from '@/api/errors'
 import { UnifiedCtrlSetQuery_OperatingMode as Mode } from '@/api/gen/ctrl200_pb.js'
 import { createUnifiedBatch, summarizeRooms, unifiedAppCode, type BatchProject, type BatchSender, type UnifiedSnapshot } from '../batch'
@@ -26,6 +27,7 @@ function setup(projects: BatchProject[], opts: { send?: BatchSender; reads?: Rec
   const batch = createUnifiedBatch({ getProjects: () => list, readBack, send, log: () => {}, deadlineMs: opts.deadlineMs, now: opts.realNow ? undefined : () => new Date('2026-11-24T10:00:00') })
   return { batch, readBack, send, wire: w.wire, setList: (l: BatchProject[]) => { list = l } }
 }
+beforeEach(() => { __resetWriteLockForTests(() => ({ user: 'u', gen: 1 })) })
 const gated = () => { let release!: () => void; const gate = new Promise<void>((r) => { release = r }); return { gate, release } }
 
 describe('summarizeRooms（ctrl 200 → 回读快照）', () => {
@@ -247,7 +249,7 @@ describe('start：逐个下发，三种结果，不重试', () => {
     expect(st.status === 'failure' && st.outcome).toBe('not-sent')
   })
 
-  it('旧批次里超时标「未下发」的写请求，不能借下一批的截止时间放行', async () => {
+  it('旧批次里超时标「未下发」的写请求，不能借下一批的截止时间放行；它还没结算时同屏写锁拦住下一批（未下发），结算后放锁', async () => {
     const token = gated()
     const wire: string[] = []
     let n = 0
@@ -261,12 +263,17 @@ describe('start：逐个下发，三种结果，不重试', () => {
     t.batch.prepare(['a'], { roomSwitch: 1 })
     await t.batch.start()
     t.batch.reset()
-    t.batch.prepare(['a'], { roomSwitch: 0 })
+    // 旧批次的写 Promise 没结算前锁不放：第二批在 prepare 就按「上一条下发还在处理中」整体不下发
+    const s2 = t.batch.prepare(['a'], { roomSwitch: 0 })
+    expect(s2.phase).toBe('idle')
+    expect(s2.errors.join()).toContain('上一条下发还在处理中')
     const p2 = t.batch.start()
     token.release()
     await p2
     await new Promise((r) => setTimeout(r, 30))
-    expect(wire).toEqual(['batch2:a'])
+    // 旧批次那条也不会借第二批放行；结算后锁放开
+    expect(wire).toEqual([])
+    expect(lockOf({ id: 'a' })).toBeNull()
   })
 
   it.each([

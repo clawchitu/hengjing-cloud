@@ -2,7 +2,7 @@
 // 逐个项目走 S12a 的状态机（src/features/unified）：二次确认 → 下发前读 → 203 → 下发后读 → 成功 / 失败 / 结果未确认；不重试。
 // 确认弹窗在本组件里用 useConfirm() 取（分工第 7 条）；写入口拿到的是整个 Project（见 batch.ts）。
 // 改动文档：app_code 为 8、12 时房间温度设定不可用（房间开关仍可用）；最近一次执行结果只显示 项目、项目 ID、状态、操作时间。
-import { useState, type ReactNode } from 'react'
+import { useEffect, useState, useSyncExternalStore, type ReactNode } from 'react'
 import { faMagnifyingGlass, faCircleInfo, faLayerGroup, faChevronDown, faChevronUp, faPowerOff, faWandMagicSparkles, faSnowflake, faSun, faDropletSlash, faDroplet, faWind, faRobot, faMinus, faArrowsRotate, faDoorOpen, faTemperatureHalf, faPaperPlane, faTriangleExclamation, faSpinner } from '@fortawesome/free-solid-svg-icons'
 import type { IconDefinition } from '@fortawesome/fontawesome-svg-core'
 import { Icon } from '../components/legacy'
@@ -26,8 +26,9 @@ import { WRITE_RECHECK_TEXT } from '../api/http'
 import { jwtSub, readTokens } from '../api/tokens'
 import { UnifiedCtrlSetQuery_OperatingMode as Mode } from '../api/gen/ctrl200_pb.js'
 import * as api from '../api'
+import { lockOf, lockVersion, onForceReread, subscribe as subscribeLock } from '../api/writeLock'
 import {
-  clampTemp, MODE_OPTIONS, readUnifiedSnapshot, resolveTempRange, TEXT, tempAvailability, unifiedAppCode, useUnifiedBatch,
+  clampTemp, LOCK_BUSY_TEXT, lockTargetOf, rereadHits, MODE_OPTIONS, readUnifiedSnapshot, resolveTempRange, TEXT, tempAvailability, unifiedAppCode, useUnifiedBatch,
   type BatchRow, type RowStatus, type UnifiedDraft, type UnifiedSnapshot,
 } from '../features/unified'
 
@@ -174,10 +175,18 @@ export default function Control() {
     getAccount: () => (mock ? user.username || null : jwtSub(readTokens()?.accessToken) || null),
   })
   const busy = run.phase === 'confirming' || run.phase === 'running'
+  // 写锁：订阅锁的变化；不在下发中时，已选项目里有被占的（同一块屏上一条还没有结论）就提示并置灰下发按钮
+  useSyncExternalStore(subscribeLock, lockVersion, lockVersion)
+  // 锁到期放开时发出「强制重读」：与本页项目有关就重读一次房间状态
+  useEffect(() => onForceReread((ev) => {
+    if (rereadHits(ev, projects)) void queryClient.invalidateQueries({ queryKey: ['unified-snap'] })
+  }), [projects, queryClient])
 
   const online = inGroup.filter((p) => p.online)
   const pickedP = picked.map((id) => projects.find((p) => p.id === id)!).filter(Boolean)
   const shownP = expand ? ps : ps.slice(0, 7)
+  const lockedP = busy ? [] : pickedP.filter((p) => lockOf(lockTargetOf(p)))
+  const lockNote = lockedP.length ? `${LOCK_BUSY_TEXT}（${lockedP.map((p) => p.name).join('、')}），请等结果确认后再下发` : null
 
   // 温度设定：按 app_code（同组相同；已选项目优先，没选时看组内项目）。8、12 及未知类型不可用
   const range = resolveTempRange(null)
@@ -213,7 +222,7 @@ export default function Control() {
   const modeLabel = MODES.find((m) => m.value === mode)!.label
 
   const send = async () => {
-    if (busy) return
+    if (busy || lockNote) return
     if (!picked.length) return toast('请至少选择一个项目', true)
     const s = batch.prepare(picked, draft)
     if (s.phase !== 'confirming') return toast(s.errors[0] ?? TEXT.failure, true)
@@ -330,7 +339,8 @@ export default function Control() {
           <div className="pv-row"><span>温度设定</span><b className={'num ' + (tempOff ? 'w' : '')}>{tempOff ? '不变' : temp.toFixed(1) + '°C'}</b></div>
           <div className="pv-row"><span>执行方式</span><b className="w">立即执行</b></div>
           <div className="pv-warn"><Icon icon={faTriangleExclamation} /> 将覆盖所选项目内用户的本地设置，请谨慎操作。</div>
-          <button className="btn-send" onClick={send} disabled={busy}><Icon icon={run.phase === 'running' ? faSpinner : faPaperPlane} spin={run.phase === 'running'} />{run.phase === 'running' ? '下发中…' : TEXT.confirmOk}</button>
+          {lockNote && <div className="cap-note" role="note"><Icon icon={faCircleInfo} />{lockNote}</div>}
+          <button className="btn-send" onClick={send} disabled={busy || lockNote !== null}><Icon icon={run.phase === 'running' ? faSpinner : faPaperPlane} spin={run.phase === 'running'} />{run.phase === 'running' ? '下发中…' : TEXT.confirmOk}</button>
         </div>
       </div>
 
