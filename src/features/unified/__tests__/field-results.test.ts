@@ -79,4 +79,38 @@ describe('写锁按字段判断（跟总结果无关）', () => {
       expect(L.lockOf('screen:S1')).toBeNull()
     } finally { vi.useRealTimers() }
   })
+
+  it('迟到或失效的核对不改字段状态：超时后才到的一致读数、读数途中换了账号 → 不提交；之后读到不一致仍保持锁', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      let acct = { user: 'u1', gen: 1 }
+      L.__resetWriteLockForTests(() => acct)
+      L.configureWriteLock({ resolveProject: (id) => (id === 'p1' ? { id: 'p1', controlScreenId: 'S1' } : null) })
+      const off = snapOf(0, 24)
+      let mode: 'off' | 'late-on' | 'switch-acct' = 'off'
+      const readBack = vi.fn(async (): Promise<UnifiedSnapshot> => {
+        if (mode === 'late-on') return new Promise((r) => setTimeout(() => r(snapOf(1, 24)), L.VERIFY_TIMEOUT_MS + 1000)) // 不理会中止，超时后才到
+        if (mode === 'switch-acct') { acct = { user: 'u2', gen: 2 }; return snapOf(1, 24) }
+        return off
+      })
+      const b = createUnifiedBatch({ getProjects: () => [P], readBack, send: okSend, log: () => {}, now: () => new Date() })
+      b.prepare(['p1'], { roomSwitch: 1 })
+      expect((await b.start()).rows[0].status).toBe('unapplied')
+      await flush()
+      expect(L.lockOf('screen:S1')?.phase).toBe('unknown')
+      // 1. 超时：读数迟到（一致），这次核对作废，不提交
+      mode = 'late-on'
+      const late = L.verify('screen:S1')
+      await vi.advanceTimersByTimeAsync(L.VERIFY_TIMEOUT_MS + 2000)
+      expect(await late).toBe('failed')
+      // 2. 读数途中换了账号：作废，不提交
+      mode = 'switch-acct'
+      expect(await L.verify('screen:S1')).toBe('account-changed')
+      acct = { user: 'u1', gen: 1 }
+      // 3. 之后读到不一致：字段没被前两次提交为结束，锁仍保持
+      mode = 'off'
+      expect(await L.verify('screen:S1')).toBe('mismatch')
+      expect(L.lockOf('screen:S1')?.phase).toBe('unknown')
+    } finally { vi.useRealTimers() }
+  })
 })

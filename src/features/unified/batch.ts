@@ -193,7 +193,7 @@ export function createUnifiedBatch(deps: BatchDeps) {
     query?: WriteQuery<203>
     open?: Set<EchoField>
     /** 正在进行的核对（锁的 verify 同一时刻只跑一个，正在跑时再调会直接返回） */
-    checking?: Promise<boolean>
+    checking?: Promise<unknown>
     /** 截止时冻结的结果 */
     final?: { status: 'not-sent' | 'unknown' | 'failure'; note: string; notExecuted?: boolean }
   }
@@ -264,11 +264,14 @@ export function createUnifiedBatch(deps: BatchDeps) {
     markSent(token, out, recordOf(q))
     e.query = q
     e.open = new Set(changedFields(q))
-    // 本次的核对函数：只看还没结束的字段，读到一致的记为结束；全部结束才算一致（放锁）
+    // 本次的核对函数：只看还没结束的字段，读到一致的作为候选；写锁确认这次核对仍有效（锁没换、没超时、没取消、账号没变）
+    // 才提交（commit）为结束。候选提交后全部结束才算一致（放锁）。迟到或失效的核对不改字段状态
     requireVerify(token, (signal) => {
       const run = (async () => {
-        if (e.open!.size) closeFields(e, await readBack(p.id, signal))
-        return e.open!.size === 0
+        if (!e.open!.size) return true
+        const snap = await readBack(p.id, signal)
+        const done = closableFields(e, snap)
+        return { same: [...e.open!].every((f) => done.includes(f)), commit: () => { for (const f of done) e.open!.delete(f) } }
       })()
       e.checking = run
       return run
@@ -290,9 +293,10 @@ export function createUnifiedBatch(deps: BatchDeps) {
   }
 
   /** 这次读数里回读一致的字段记为结束（逐字段口径与结果卡片同一套：rules.ts fieldResults；有房间离线的不算一致） */
+  const closableFields = (e: Entry, snap: UnifiedSnapshot | null | undefined): EchoField[] =>
+    !e.query || !e.open || !snap ? [] : fieldResults(e.query, snap).filter((r) => r.status === 'applied' && e.open!.has(r.field)).map((r) => r.field)
   const closeFields = (e: Entry, snap: UnifiedSnapshot | null | undefined) => {
-    if (!e.query || !e.open || !snap) return
-    for (const r of fieldResults(e.query, snap)) if (r.status === 'applied') e.open.delete(r.field)
+    for (const f of closableFields(e, snap)) e.open?.delete(f)
   }
 
   /**

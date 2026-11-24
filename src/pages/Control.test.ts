@@ -385,13 +385,16 @@ describe('下发', () => {
     expect(be.callsTo('/ctrl/unified-ctrl-set')).toHaveLength(1)
   })
 
-  it('部分字段一致：房间开关已开、温度没变 → 未变化，只列温度', async () => {
+  it('部分字段一致：房间开关已开、温度没变 → 总结果未变化；卡片状态列显示计数标题，逐字段明细在「下发核对」，只有温度带不一致说明', async () => {
     let be!: ReturnType<typeof backend>
     be = backend({ '/ctrl/room-temperature-data-get': room200(() => be, [0, 26], [1, 26]), '/ctrl/unified-ctrl-set': () => reply(true) })
     await click(okIn(await prepare()))
-    await screen.findByText('未变化', { selector: '[data-slot=badge]' }, { timeout: 3000 })
+    // Fable 11/25：混合时状态列写计数，不压成一个词；卡片仍是四列
+    const badge = await screen.findByText('1 项未生效，1 项已生效', { selector: '[data-slot=badge]' }, { timeout: 3000 })
+    expectFourCells(badge)
     const notes = await openNotes()
-    expect(notes).toContain('房间温度下发 26.5°C，回读 26°C')
+    expect(notes).toContain('房间开关：已生效')
+    expect(notes).toContain('房间温度：未变化（房间温度下发 26.5°C，回读 26°C）')
     expect(notes).not.toContain('房间开关下发')
   })
 

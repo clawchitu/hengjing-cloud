@@ -397,7 +397,8 @@ export default function Control() {
                 <TableRow key={r.code + r.name}>
                   <TableCell style={{ fontWeight: 500 }}>{r.name}</TableCell>
                   <TableCell className="num muted">{r.code}</TableCell>
-                  <TableCell><Badge variant={STATUS[r.status].variant}>{r.notExecuted ? '失败（未执行）' : STATUS[r.status].label}</Badge></TableCell>
+                  {/* 状态列：有逐字段结果的显示标题（单一结果是那个词，混合是计数，Fable 11/25）；逐字段明细在「下发核对」 */}
+                  <TableCell><Badge variant={STATUS[r.status].variant}>{r.notExecuted ? '失败（未执行）' : r.title ?? STATUS[r.status].label}</Badge></TableCell>
                   <TableCell className="num muted">{r.at}</TableCell>
                 </TableRow>
               ))}
