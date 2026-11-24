@@ -1,7 +1,7 @@
 // 温控下发接入共用写锁（src/api/writeLock.ts）的核对部分：201 / 206 的持久化核对数据，以及用 200 的读数比对
 // （src/api/writeLockVerify.ts 的 matchRoomSet / matchAllRoomsSwitch）。读取走当前数据源（真实接口为 ctrl 200，演示数据为内存）。
 import type { CtrlReply, WriteQuery } from '@/api/ctrl'
-import { registerVerifier, type FieldResult, type MatchDetail, type SentRecord } from '@/api/writeLock'
+import type { FieldResult, MatchDetail, SentRecord, StoredLock } from '@/api/writeLock'
 import { isNoChange, matchAllRoomsSwitch, matchRoomSet, verdictOf } from '@/api/writeLockVerify'
 import { validRoomId } from './model'
 import { roomsAsReply } from './model'
@@ -59,13 +59,8 @@ export const match206 = (p: AllSwitch, raw: Reply200) => matchAllRoomsSwitchChec
 export { roomsAsReply }
 
 /**
- * 注册 201 / 206 的核对器（刷新恢复、写后自动核对都可用）。应用初始化时在 configureWriteLock（统一控制的
- * setupUnifiedWriteLock 已在 AppProvider 里注入 resolveProject）之后、组织数据就绪时调用（src/app/writeLockSetup.ts）。
- * 返回取消注册
+ * 201 / 206 的核对函数（刷新恢复、写后自动核对都用）。由 src/app/writeLockSetup.ts 的 registerThermostatVerifiersOnce 注册，这里不注册。
  */
-export function registerThermostatVerifiers(): () => void {
-  const read = async (projectId: string, signal: AbortSignal) => (await thermostatSource().roomsRaw(projectId, signal)).raw
-  const off201 = registerVerifier(201, async (rec, signal) => matchRoomSetChecked(rec, await read(rec.projectId, signal)))
-  const off206 = registerVerifier(206, async (rec, signal) => matchAllRoomsSwitchChecked(rec, await read(rec.projectId, signal)))
-  return () => { off201(); off206() }
-}
+const readRaw = async (projectId: string, signal: AbortSignal) => (await thermostatSource().roomsRaw(projectId, signal)).raw
+export const verifier201 = async (rec: StoredLock, signal: AbortSignal) => matchRoomSetChecked(rec, await readRaw(rec.projectId, signal))
+export const verifier206 = async (rec: StoredLock, signal: AbortSignal) => matchAllRoomsSwitchChecked(rec, await readRaw(rec.projectId, signal))

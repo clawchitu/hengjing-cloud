@@ -5,7 +5,7 @@ import { QueryClient } from '@tanstack/react-query'
 import { ApiError } from '@/api/errors'
 import * as L from '@/api/writeLock'
 import { createUnifiedBatch, summarizeRooms, type BatchProject, type BatchSender } from '../batch'
-import { LOCK_BUSY_TEXT, match203, recordOf, rereadHits, resolveOrgProject, setupUnifiedWriteLock, verifiable203 } from '../lock'
+import { LOCK_BUSY_TEXT, match203, recordOf, rereadHits, resolveOrgProject, setupUnifiedWriteLock, verifiable203, verifier203 } from '../lock'
 import { orgKeys } from '@/data/org/hooks'
 
 const P = (id: string, screen?: string): BatchProject => ({ id, code: id, name: '项目' + id, programCode: 1, online: true, controlScreenId: screen })
@@ -221,7 +221,9 @@ describe('注册了 203 核对器时', () => {
   it('settle(unknown) 后自动核对：回读不一致保持，一致放锁；改了系统开关的不回读', async () => {
     let cur = { rooms: 2, roomSwitch: 0, roomTemp: 26 }
     const read = vi.fn(async () => cur)
-    setupUnifiedWriteLock(visibleQc(), read, me)
+    const vq = visibleQc()
+    setupUnifiedWriteLock(vq, me)
+    L.registerVerifier(203, verifier203(read))
     const send: BatchSender = async (_p, _q, o) => { if (!o.beforeSend()) throw new ApiError('write_blocked', 'x'); throw new ApiError('timeout', '超时') }
     const b = createUnifiedBatch({ getProjects: () => [{ ...P('v', 'SV') }], readBack: read, send, log: () => {}, now: () => new Date() })
     await runOnce(b, ['v'])
@@ -351,7 +353,9 @@ describe('刷新后补核对（恢复的锁）', () => {
     const { orgKeys: K } = await import('@/data/org/hooks')
     const read = vi.fn(async () => snap)
     const qc = new QC()
-    M.setupUnifiedWriteLock(qc, read, () => ({ authed: true, userKey: 'u1' }))
+    M.setupUnifiedWriteLock(qc, () => ({ authed: true, userKey: 'u1' }))
+    R.registerVerifier(203, M.verifier203(read))
+    M.recheckRestoredLocks(qc)
     expect(R.lockOf('screen:SR')?.origin).toBe('restored')
     return { R, qc, read, K }
   }
