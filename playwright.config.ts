@@ -9,8 +9,8 @@ export default defineConfig({
   retries: 0,
   reporter: [['list'], ['html', { open: 'never' }]],
   // threshold: 0 = 逐像素颜色严格比较（默认 0.2 会放过整片换底色）；
-  // 只用 maxDiffPixels 给极少量抗锯齿像素留余地。基线与比对都在同一镜像里做。
-  expect: { toHaveScreenshot: { threshold: 0, maxDiffPixels: 50, animations: 'disabled', caret: 'hide' } },
+  // maxDiffPixels: 0 = 不允许任何像素差异。基线与比对都在同一镜像里做，渲染逐像素一致。
+  expect: { toHaveScreenshot: { threshold: 0, maxDiffPixels: 0, animations: 'disabled', caret: 'hide' } },
   use: {
     baseURL: 'http://localhost:4173',
     viewport: { width: 1440, height: 900 },
