@@ -73,7 +73,8 @@ export function snapshotProject(p: unknown): WriteProject | null {
   if (!p || typeof p !== 'object') return null
   let id: unknown, code: unknown
   try { ({ id, code } = p as Record<string, unknown>) } catch { return null }
-  if (typeof id !== 'string' || !id.trim() || typeof code !== 'string' || !code.trim()) return null
+  // 首尾有空白也拒绝：id 会原样写进请求体，code 要和名单精确相等
+  if (typeof id !== 'string' || !id || id.trim() !== id || typeof code !== 'string' || !code || code.trim() !== code) return null
   return Object.freeze({ id, code })
 }
 

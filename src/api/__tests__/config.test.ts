@@ -36,6 +36,19 @@ describe('运行时配置', () => {
     expect(resolveConfig([{ writeProjectCodes: [240829001, '', '260911001', null] }]).writeProjectCodes).toEqual(['260911001'])
     expect(resolveConfig([{ writeProjectCodes: 240829001 }]).writeProjectCodes).toEqual([])
     expect(resolveConfig([{ writeProjectCodes: { a: '240829001' } }]).writeProjectCodes).toEqual([])
+    // 显式写成 null / undefined 也算配置了：按空名单，不回落默认值
+    expect(resolveConfig([{ writeProjectCodes: null }]).writeProjectCodes).toEqual([])
+    expect(resolveConfig([{ writeProjectCodes: undefined }]).writeProjectCodes).toEqual([])
+    // 结果冻结，运行中不能往名单里加
+    expect(Object.isFrozen(resolveConfig([]).writeProjectCodes)).toBe(true)
+    expect(Object.isFrozen(resolveConfig([{ writeProjectCodes: ['240829001'] }]).writeProjectCodes)).toBe(true)
+  })
+  it('writeProjectCodes 分层：构建时（VITE_WRITE_PROJECT_CODES）← 运行时，最后一层写了就以它为准', () => {
+    expect(resolveConfig([{ writeProjectCodes: '' }, {}]).writeProjectCodes).toEqual([])
+    expect(resolveConfig([{ writeProjectCodes: '' }, { writeProjectCodes: undefined }]).writeProjectCodes).toEqual([])
+    expect(resolveConfig([{ writeProjectCodes: '240829001' }, { writeProjectCodes: ['260911001'] }]).writeProjectCodes).toEqual(['260911001'])
+    expect(resolveConfig([{}, { writeProjectCodes: [] }]).writeProjectCodes).toEqual([])
+    expect(resolveConfig([{ apiBase: '/api' }, {}]).writeProjectCodes).toEqual(['260911001', '240829001'])
   })
   it('域名判断', () => {
     expect(envOfUrl('https://test.cosyhome.com.cn:9443/v1')).toBe('test')

@@ -237,7 +237,7 @@ export async function writeCtrl<T extends WriteCtrlType>(type: T, project: Write
   const def: CtrlDef = CTRL[type]
   validateWriteQuery(def.query, query)
   const res = await requestWrite<{ body?: string }>(def.write!, [project],
-    ([p]) => ({ project_id: p.id, user_id: opts.userId ?? getCurrentUserId(), body: encodeMessage(def.query, query) }),
+    { user_id: opts.userId ?? getCurrentUserId(), body: encodeMessage(def.query, query) },
     { timeoutMs: getConfig().ctrlTimeoutMs, signal: opts.signal })
   return decodeReply(def.reply, res.body) as CtrlReply<T>
 }
@@ -246,7 +246,7 @@ export async function writeCtrl<T extends WriteCtrlType>(type: T, project: Write
 export async function sendUnifiedCtrls(projects: readonly WriteProject[], query: WriteQuery<203>) {
   validateWriteQuery(pb.UnifiedCtrlSetQuerySchema, query)
   return requestWrite<{ batch_id?: string; total?: number }>('unified-ctrls-send', projects,
-    (allowed) => ({ project_ids: allowed.map((p) => p.id), body: encodeMessage(pb.UnifiedCtrlSetQuerySchema, query) }),
+    { body: encodeMessage(pb.UnifiedCtrlSetQuerySchema, query) },
     { timeoutMs: getConfig().ctrlTimeoutMs })
 }
 

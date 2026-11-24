@@ -218,16 +218,36 @@ describe('写防护按项目 code：201/203/204/206 与批量统一控制', () =
     expect(be.calls).toHaveLength(0)
   })
 
-  it('requestWrite()：请求体由防护通过后的快照生成，code 只读一次', async () => {
+  it('requestWrite()：项目字段由写入口用防护通过后的快照填入，code 只读一次', async () => {
     setConfig({ apiBase: '/api', apiEnv: 'test', writeProjectCodes: [P1.code] })
     const be = fakeBackend({ '/ctrl/project-room-switch-set': () => json({}) })
     let n = 0
     const flaky = { id: P1.id, get code() { return n++ === 0 ? P1.code : 'evil' } }
-    const seen: unknown[] = []
-    await requestWrite('ctrl-206', [flaky], (allowed) => { seen.push(...allowed); return { project_id: allowed[0].id } })
+    await requestWrite('ctrl-206', [flaky], { body: 'x' })
     expect(n).toBe(1)
-    expect(seen).toEqual([P1])
-    expect(be.calls[0].body).toEqual({ project_id: P1.id })
+    expect(be.calls[0].body).toEqual({ body: 'x', project_id: P1.id })
+  })
+
+  it('requestWrite()：调用方自带项目字段（借白名单项目过检、换成别的 id）一律拒绝，不发请求', async () => {
+    setConfig({ apiBase: '/api', apiEnv: 'test' })
+    const be = fakeBackend({ '/ctrl/project-room-switch-set': () => json({}), '/ctrl/unified-ctrls-send': () => json({}) })
+    for (const key of ['project_id', 'project_ids', 'projectId', 'projectIds', 'PROJECT_ID']) {
+      await expect(requestWrite('ctrl-206', [P1], { [key]: 'other-entity-id' })).rejects.toMatchObject({ kind: 'write_blocked' })
+      await expect(requestWrite('unified-ctrls-send', [P1], { [key]: ['other-entity-id'] })).rejects.toMatchObject({ kind: 'write_blocked' })
+    }
+    for (const bad of [null, [], 'x']) await expect(requestWrite('ctrl-206', [P1], bad as never)).rejects.toMatchObject({ kind: 'write_blocked' })
+    expect(be.calls).toHaveLength(0)
+  })
+
+  it('requestWrite()：单项目写消息传多个项目 → 拒绝；批量统一控制填 project_ids', async () => {
+    setConfig({ apiBase: '/api', apiEnv: 'test' })
+    const be = fakeBackend({ '/ctrl/unified-ctrls-send': () => json({}) })
+    for (const op of ['ctrl-201', 'ctrl-203', 'ctrl-204', 'ctrl-206'] as const) {
+      await expect(requestWrite(op, [P1, P2], {})).rejects.toMatchObject({ kind: 'write_blocked' })
+    }
+    expect(be.calls).toHaveLength(0)
+    await requestWrite('unified-ctrls-send', [P1, P2], { body: '' })
+    expect(be.calls[0].body).toEqual({ body: '', project_ids: [P1.id, P2.id] })
   })
 })
 
@@ -323,9 +343,9 @@ describe('写接口只有一个入口', () => {
   it('requestWrite() 自带防护：生产 / writeMode=off 拦截', async () => {
     const be = fakeBackend({})
     setConfig({ apiBase: 'https://api.cosyhome.com.cn/v1' })
-    await expect(requestWrite('ctrl-206', [P1], () => ({}))).rejects.toMatchObject({ kind: 'write_blocked' })
+    await expect(requestWrite('ctrl-206', [P1], {})).rejects.toMatchObject({ kind: 'write_blocked' })
     setConfig({ apiBase: '/api', apiEnv: 'test', writeMode: 'off' })
-    await expect(requestWrite('unified-ctrls-send', [P1], () => ({}))).rejects.toMatchObject({ kind: 'write_blocked' })
+    await expect(requestWrite('unified-ctrls-send', [P1], {})).rejects.toMatchObject({ kind: 'write_blocked' })
     expect(be.calls).toHaveLength(0)
   })
 

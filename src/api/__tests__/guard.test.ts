@@ -63,6 +63,8 @@ describe('写操作防护', () => {
     ['code 缺失', { id: P.id }],
     ['code 空串', { id: P.id, code: '' }],
     ['code 只有空白', { id: P.id, code: '  ' }],
+    ['code 首尾带空白', { id: P.id, code: ' 240829001' }],
+    ['id 首尾带空白', { id: P.id + ' ', code: P.code }],
     ['code 为数字', { id: P.id, code: 240829001 }],
     ['code 为 null', { id: P.id, code: null }],
     ['code 为数组', { id: P.id, code: ['240829001'] }],

@@ -192,13 +192,20 @@ export async function request<T>(path: string, opts: RequestOptions = {}): Promi
 /**
  * 唯一的写入口：路径由写操作决定，发送前过写操作防护（按项目 code 比对白名单）；不自动重试；
  * 超时或断网时结果未知（请求可能已经到达控制屏），提示页面回读确认，不重发。
- * 请求体由 buildBody 用防护通过后的项目快照生成（只用其中的 id），保证发出去的就是校验过的项目。
+ * 目标项目字段由这里用防护通过后的快照填入（只用 id）：批量统一控制填 project_ids，其余写消息填
+ * project_id（只能一个项目）。调用方的 body 不得自带 project_id / project_ids，否则拒绝。
  */
-export async function requestWrite<T>(op: WriteOp, projects: readonly WriteProject[], buildBody: (allowed: readonly WriteProject[]) => unknown, opts: Omit<RequestOptions, 'body' | 'method' | 'auth'> = {}): Promise<T> {
-  const allowed = Object.freeze(assertWriteAllowed(op, projects))
-  const body = buildBody(allowed)
+export async function requestWrite<T>(op: WriteOp, projects: readonly WriteProject[], body: Record<string, unknown>, opts: Omit<RequestOptions, 'body' | 'method' | 'auth'> = {}): Promise<T> {
+  const allowed = assertWriteAllowed(op, projects)
+  if (!body || typeof body !== 'object' || Array.isArray(body)) throw new ApiError('write_blocked', '写请求体格式不对')
+  if (Object.keys(body).some((k) => /^project_?ids?$/i.test(k))) throw new ApiError('write_blocked', '写请求体不能自带项目字段')
+  let target: Record<string, unknown>
+  if (op === 'unified-ctrls-send') target = { project_ids: allowed.map((p) => p.id) }
+  else if (allowed.length === 1) target = { project_id: allowed[0].id }
+  else throw new ApiError('write_blocked', '单项目写消息只能指定一个项目')
+  const payload = { ...body, ...target }
   try {
-    return await authed<T>(WRITE_ROUTES[op], { ...opts, method: 'POST', body })
+    return await authed<T>(WRITE_ROUTES[op], { ...opts, method: 'POST', body: payload })
   } catch (e) {
     if (e instanceof ApiError && (e.kind === 'timeout' || e.kind === 'network')) {
       throw new ApiError(e.kind, e.kind === 'timeout' ? '未收到控制屏应答，下发结果未知' : '网络中断，下发结果未知', { status: e.status, code: e.code, cause: e })
