@@ -6,6 +6,7 @@
 //        ▼
 //   preflight  新发一次 200（hooks.ts 的 useFreshRead：先取消在途 200，绑定会话），用新读数重新校验并组装，与确认时比对
 //        │     读取失败 / 不一致 / 期间离开、切项目、会话变化 → 不写，放锁（'aborted'）
+//        │     核对数据发送前检查（写锁 checkSentRecord：206 必须带目标房间集合、不超上限）不过 → 不写，放锁并提示（'aborted'）
 //        ▼
 //   sending    send(payload, beforeSend) 经统一写入口（requestWrite 的 beforeSend 链末：会话、项目、页面仍在 && claim(token)）
 //        │     → 拿到 Promise 立刻 markSent(token, promise, 核对数据)；requireVerify 登记核对函数（新读 200 + 逐字段比对）
@@ -16,11 +17,11 @@
 //              结果未知 → 按四态展示（逐字段），锁到核对一致或有效期到期（写锁有效期内按 5、20、60 秒自动再核对）。
 //              确定失败：写后新读一次刷新界面。结果未知：等写锁核对
 //
-// 展示隔离：结果按 sessionKey（账号 + 会话代次）存，toast 只在会话与当前项目都没变时弹；新会话看不到旧会话的结果。
+// 展示隔离：结果按 sessionKey（写锁模块的账号 + 会话代次）存，toast 只在会话与当前项目都没变时弹；新会话看不到旧会话的结果。
 import { useSyncExternalStore } from 'react'
 import { isApiError } from '@/api/errors'
 import {
-  acquire, claim, currentAccount, lockKeysOf, lockOf, lockVersion, markOverdue, markSent, release, requireVerify, settle, subscribe as subscribeLock,
+  acquire, checkSentRecord, claim, currentAccount, lockKeysOf, lockOf, lockVersion, markOverdue, markSent, release, requireVerify, settle, subscribe as subscribeLock,
   type FieldResult, type LockInfo, type LockTarget, type MatchResult, type SentRecord,
 } from '@/api/writeLock'
 import { getStoredProjectId } from '@/data/org/current'
@@ -173,10 +174,14 @@ export async function runOp<P, L>(o: OpSpec<P, L>): Promise<RunResult> {
       return ok
     }
     const payload = pre.payload
+    // 核对数据发送前先查（206 必须带非空、不超上限的目标房间集合等）：不合规就不发，放锁并提示原因
+    const sentRecord = o.record(payload)
+    const bad = checkSentRecord(sentRecord)
+    if (bad) { say(`${o.subject}：${bad}`, true); return 'aborted' }
     setStage('sending')
     let sent: Promise<void>
     try { sent = o.send(payload, beforeSend) } catch (e) { sent = Promise.reject(e) }
-    markSent(token, sent, o.record(payload))
+    markSent(token, sent, sentRecord)
     // 写锁用它核对：新读一次 200（界面同步刷新），逐字段比对；全部一致写锁才放开。结论记到本次结果里（只对本会话）
     let firstCheck: (v: FieldResult | null) => void = () => {}
     const checked = new Promise<FieldResult | null>((r) => { firstCheck = r })

@@ -146,6 +146,23 @@ describe('预检', () => {
   })
 })
 
+describe('核对数据发送前检查（checkSentRecord）', () => {
+  it('206 没有目标房间集合 / 超过上限：不发送、放锁、提示原因', async () => {
+    for (const roomIds of [[], undefined, Array.from({ length: L.ROOM_IDS_MAX + 1 }, (_, i) => i + 1)]) {
+      W.__resetWritesForTests()
+      const { s, calls, toasts } = spec({ record: () => ({ msg: 206, deviceId: null, target: { switch: 1 }, ...(roomIds ? { roomIds } : {}) }) })
+      expect(await W.runOp(s)).toBe('aborted')
+      expect(calls).toEqual(['preflight'])
+      expect(L.lockOf(P1)).toBeNull()
+      expect(localStorage.length).toBe(0)
+      expect(toasts[0]).toMatch(/^客厅：.*未下发$/)
+    }
+    const ok = spec({ record: () => ({ msg: 206, deviceId: null, target: { switch: 1 }, roomIds: [1, 2] }), matches: () => true })
+    expect(await W.runOp(ok.s)).toBe('ok')
+    expect(ok.calls).toContain('send')
+  })
+})
+
 describe('发送结果', () => {
   it('确定失败（success=false）：写锁释放；写防护拦截（没发出去）不回读', async () => {
     const f = spec({ send: async (_p, bs) => { bs(); throw new ApiError('ctrl', '控制屏拒绝') } })
