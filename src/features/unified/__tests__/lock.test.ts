@@ -47,6 +47,7 @@ describe('S12b 接入写锁', () => {
   })
 
   it('claim 在 beforeSend 链的最后：批次复核不过时不认领（锁直接放）；认领时锁已在 sent 之前是 held', async () => {
+    L.configureWriteLock({ resolveProject: (id) => (id === 'ok1' ? { id: 'ok1' } : null) }) // #31：success 只算已下发，核对一致才放锁（核对前要能查到项目）
     const spy = vi.spyOn(L, 'claim')
     let phaseAtSend: string | undefined
     const send: BatchSender = async (p, _q, o) => {
@@ -268,6 +269,7 @@ describe('注册了 203 核对器时', () => {
     const off = { rooms: 3, roomSwitch: 0, roomTemp: 24.5, perRoom: { roomSwitch: [0, 0, 0], roomTemp: [21.5, 24.5, 24.5] } }
 
     it('成功且一致 → 已生效，放锁', async () => {
+      L.configureWriteLock({ resolveProject: (id) => (id === 'a1' ? { id: 'a1', controlScreenId: 'Sa1' } : null) }) // #31：核对一致才放锁（核对前要能查到项目）
       const b = batchWith('a1', [off, { rooms: 3, roomSwitch: 1, roomTemp: null, perRoom: { roomSwitch: [1, 1, 1], roomTemp: [21.5, 24.5, 24.5] } }])
       const done = await runOnce(b, ['a1'])
       await flush()
