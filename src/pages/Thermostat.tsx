@@ -16,14 +16,16 @@ import { Switch } from '@/components/ui/switch'
 import { showToast, useConfirm } from '../app/feedback'
 import { useCapabilities, useCurrentProject, type Project } from '../data/org'
 import { isApiError } from '../api/errors'
+import type { WriteQuery } from '../api/ctrl'
 import { PROGRAMS } from '../data/constants'
 import {
-  ALL, buildRoomSet, buildRoomSwitch, busyTarget, canStep, clearResult, describeChanges, describeResult, draftChanges, ecoLabel,
-  editBlock, editDraft, fmtTemp, hasDraftChanges, reconcileDraft, resolveTempRange, runWrite, sameQuery, stepTemp, summarize,
-  switchBlock, tempBlock, thermostatSource, useReadback, useRooms, useRoomStats, useWrites, windLabel,
-  type ChartData, type EditCtx, type EndMode, type RoomDraft, type RoomView, type StatsRange, type TempRange, type WriteResult,
+  ALL, buildRoomSet, buildRoomSwitch, canStep, checkLocked, clearResult, describeChanges, describeResult, draftChanges, ecoLabel,
+  editBlock, editDraft, fmtTemp, hasDraftChanges, lockOf, reconcileDraft, resolveTempRange, runOp, sameQuery, stepTemp, summarize,
+  switchBlock, tempBlock, thermostatSource, useFreshRooms, useRooms, useRoomStats, useWrites, windLabel,
+  type ChartData, type EditCtx, type EndMode, type Lock, type RoomDraft, type RoomView, type StatsRange, type TempRange, type WriteResult,
 } from '../features/thermostat'
 
+type WriteQuery201 = WriteQuery<201>
 const fmt1 = (v: number | null) => (v === null ? '--' : v.toFixed(1))
 const sameNum = (a: number | null, b: number | null) => (a === null || b === null ? a === b : Math.abs(a - b) < 0.005)
 
@@ -31,6 +33,13 @@ const sameNum = (a: number | null, b: number | null) => (a === null || b === nul
 function useLatest<T>(v: T) {
   const ref = useRef(v)
   useLayoutEffect(() => { ref.current = v })
+  return ref
+}
+
+/** 组件是否仍挂载（下发状态机的预检期间离开页面就中止） */
+function usePresent() {
+  const ref = useRef(true)
+  useLayoutEffect(() => { ref.current = true; return () => { ref.current = false } }, [])
   return ref
 }
 
@@ -64,59 +73,81 @@ interface RoomCardProps {
   conflict: ('temp' | 'eco')[]
   onEdit: (patch: { temp?: number; eco?: 0 | 1 }) => void
   onDiscard: () => void
-  /** 本项目正在下发的目标（房间键或 all）；在途期间全部禁用 */
-  busy: string | null
+  /** 本项目的下发锁（任何阶段，含结果未知待核对）；持锁期间全部禁用 */
+  lock: Lock | null
   result: WriteResult | null
-  readback: () => Promise<boolean>
+  freshRooms: (signal?: AbortSignal) => Promise<RoomView[]>
 }
 
-function RoomCard({ room: r, ctx, range, selected, onSelect, draft, conflict, onEdit, onDiscard, busy, result, readback }: RoomCardProps) {
+function RoomCard({ room: r, ctx, range, selected, onSelect, draft, conflict, onEdit, onDiscard, lock, result, freshRooms }: RoomCardProps) {
   // 确认与当前项目都在真正发起下发的这个组件里取：卸载、离开、换项目时确认按取消结算
   const confirm = useConfirm()
   const { project } = useCurrentProject()
   const latest = useLatest({ project, room: r, draft, ctx })
+  const present = usePresent()
 
   const off = !r.on
   const block = editBlock(r, ctx)
   const swBlock = switchBlock(r, ctx)
   const tBlock = tempBlock(r, draft)
-  const mine = busy === r.key
-  const isBusy = busy !== null
+  const mine = !!lock && lock.target === r.key && lock.phase !== 'unknown-locked'
+  const isBusy = lock !== null
   const changes = draftChanges(r, draft)
   const dirty = hasDraftChanges(changes)
   const shownTemp = draft?.temp ?? r.setTemp
   const shownEco = draft?.eco ?? r.eco
   const canEdit = !block && !isBusy
 
-  /** 确认返回后的重新核对失败：不下发，提示重新确认 */
+  /** 确认返回后的同步核对失败：不下发，提示重新确认 */
   const abort = (why: string) => showToast(`${r.name}：${why}，本次未下发，请重新核对后再下发`, true)
+
+  /**
+   * 确认之后交给下发状态机（features/thermostat/writes.ts）：持项目锁 → 新读一次 200 → 用新读数重新组装并与确认时比对 →
+   * 一致才经统一写入口下发 → 写后新读一次 200 回读
+   */
+  async function submit(p: Project, confirmed: { query: WriteQuery201; draft: RoomDraft | null }, okText: string, kind: 'set' | 'switch', v?: boolean) {
+    return runOp({
+      projectId: p.id, target: r.key, subject: r.name, okText, toast: showToast,
+      present: () => present.current && latest.current.project?.id === p.id,
+      preflight: async (signal) => {
+        const list = await freshRooms(signal)
+        const fresh = list.find((x) => x.key === r.key)
+        if (!fresh) return { ok: false, reason: '房间已不在面板列表里' }
+        const cur = latest.current.project
+        if (!cur || cur.id !== p.id) return { ok: false, reason: '当前项目已变化' }
+        const c = { online: cur.online === true, fresh: true }
+        const again = kind === 'set' ? buildRoomSet(fresh, confirmed.draft, c, range) : buildRoomSwitch(fresh, v!, c)
+        if (!again.ok) return { ok: false, reason: again.reason }
+        const changed = !sameQuery(again.query, confirmed.query) || fresh.on !== r.on || fresh.connected !== r.connected
+          || (kind === 'set' && (!sameNum(fresh.setTemp, r.setTemp) || fresh.eco !== r.eco))
+        if (changed) return { ok: false, reason: '确认后重新读取到的面板状态与确认时不一致' }
+        return { ok: true, payload: again.query }
+      },
+      send: (q) => thermostatSource().setRoom(p, q),
+      verify: (signal) => freshRooms(signal),
+    })
+  }
 
   async function send() {
     const p0 = project
-    if (!p0 || busyTarget(p0.id)) return
+    if (!p0 || lockOf(p0.id)) return
     const built = buildRoomSet(r, draft, ctx, range)
     if (!built.ok) { showToast(built.reason, true); return }
     const okText = `${r.name} 已下发：${describeResult(changes)}`
     const ok = await confirm({ title: '下发房间设置', body: <>将向 <b>{p0.name}</b>（<span className="num">{p0.code}</span>）的「{r.name}」下发：{describeChanges(changes)}，确定继续？</>, okText: '确认下发' })
     if (!ok) return
-    // 同步重新核对：最新项目、房间读数、草稿；末端用这份最新读数
     const now = latest.current
     const p = now.project
     if (!p || p.id !== p0.id) return abort('当前项目已变化')
-    if (busyTarget(p.id)) return abort('有下发正在进行')
-    const again = buildRoomSet(now.room, now.draft, now.ctx, range)
-    if (!again.ok) return abort(again.reason)
-    if (!sameQuery(again.query, built.query) || now.room.on !== r.on || now.room.connected !== r.connected
-      || !sameNum(now.room.setTemp, r.setTemp) || now.room.eco !== r.eco) return abort('确认期间面板状态已变化')
-    const query = again.query
-    const out = await runWrite({ projectId: p.id, target: r.key, send: () => thermostatSource().setRoom(p, query), readback, okText, subject: r.name, toast: showToast })
-    // 成功：草稿已生效；失败：回退为面板当前值；结果未知：保留草稿，回读核对后可重试
+    if (lockOf(p.id)) return abort('有下发正在进行')
+    const out = await submit(p, { query: built.query, draft: now.draft }, okText, 'set')
+    // 成功：草稿已生效（回读完成后才丢）；确定失败：回退为面板当前值；结果未知 / 中止：保留草稿
     if (out === 'ok' || out === 'fail') onDiscard()
   }
 
   async function toggle(v: boolean) {
     const p0 = project
-    if (!p0 || busyTarget(p0.id) || dirty) return
+    if (!p0 || lockOf(p0.id) || dirty) return
     const built = buildRoomSwitch(r, v, ctx)
     if (!built.ok) { showToast(built.reason, true); return }
     const ok = await confirm({ title: v ? '开启房间' : '关闭房间', body: <>将向 <b>{p0.name}</b>（<span className="num">{p0.code}</span>）的「{r.name}」下发「{v ? '开启' : '关闭'}」指令，确定继续？</>, okText: '确认下发' })
@@ -124,13 +155,9 @@ function RoomCard({ room: r, ctx, range, selected, onSelect, draft, conflict, on
     const now = latest.current
     const p = now.project
     if (!p || p.id !== p0.id) return abort('当前项目已变化')
-    if (busyTarget(p.id)) return abort('有下发正在进行')
+    if (lockOf(p.id)) return abort('有下发正在进行')
     if (hasDraftChanges(draftChanges(now.room, now.draft))) return abort('房间有未下发的修改')
-    const again = buildRoomSwitch(now.room, v, now.ctx)
-    if (!again.ok) return abort(again.reason)
-    if (!sameQuery(again.query, built.query) || now.room.on !== r.on || now.room.connected !== r.connected) return abort('确认期间面板状态已变化')
-    const query = again.query
-    await runWrite({ projectId: p.id, target: r.key, send: () => thermostatSource().setRoom(p, query), readback, okText: `${r.name} 已${v ? '开启' : '关闭'}`, subject: r.name, toast: showToast })
+    await submit(p, { query: built.query, draft: null }, `${r.name} 已${v ? '开启' : '关闭'}`, 'switch', v)
   }
 
   const step = (dir: 1 | -1) => { if (canEdit && !tBlock && shownTemp !== null) onEdit({ temp: stepTemp(shownTemp, dir, range) }) }
@@ -186,7 +213,9 @@ function RoomCard({ room: r, ctx, range, selected, onSelect, draft, conflict, on
       </div>
       {mine ? (
         <div className="te-bar sending" role="status" onClick={(e) => e.stopPropagation()}>
-          <span>{result?.outcome === 'unknown' ? resultText(result, r) : `正在下发到控制屏${dirty ? `：${describeResult(changes)}` : ''} …`}</span>
+          <span>{lock?.phase === 'preflight' ? '正在重新读取面板，核对确认的内容 …'
+            : lock?.phase === 'verifying' ? (result?.outcome === 'unknown' ? resultText(result, r) : '已下发，正在重新读取面板核对 …')
+            : `正在下发到控制屏${dirty ? `：${describeResult(changes)}` : ''} …`}</span>
           <Button variant="primary" disabled>下发中</Button>
         </div>
       ) : conflict.length ? (
@@ -237,7 +266,7 @@ export default function Thermostat() {
   // 全部开关（206）与「放弃草稿」的确认在本组件发起
   const confirm = useConfirm()
   const rooms = useRooms(project, caps.thermostat)
-  const readback = useReadback(project)
+  const freshRooms = useFreshRooms(project)
   const writes = useWrites(project?.id ?? '')
   const [sel, setSel] = useState('')
   const [range, setRange] = useState<StatsRange>('24小时')
@@ -263,6 +292,7 @@ export default function Thermostat() {
   const rec = reconcileDraft(rawDraft, draftRoom, ctx)
   const draft = rec.draft
   const latest = useLatest({ project, online, list })
+  const present = usePresent()
 
   // 草稿生命周期：回读后不能设置 / 已生效的草稿真正清除（不只是不显示），清除原因提示一次
   useEffect(() => {
@@ -300,8 +330,14 @@ export default function Thermostat() {
   if (list.length === 0) return <Empty project={project} title="未读到房间温控面板">控制屏没有返回房间温控面板数据。</Empty>
 
   const sum = summarize(list)
-  const busy = writes.busy
+  const lock = writes.lock
+  const busy = lock !== null
   const allResult = writes.result(ALL)
+  const lockText = !lock ? '' : lock.phase === 'unknown-locked'
+    ? (writes.mine ? `上次下发（${lock.subject}）结果未知，为避免重复下发，本项目已暂停下发。` : '本项目上一次下发（不是本次登录发起的）结果未知，已暂停下发。')
+      + (lock.checking ? '正在核对 …' : '请点「核对」重新读取面板，读取成功后恢复。')
+    : lock.target === ALL || !writes.mine ? (lock.phase === 'preflight' ? '正在重新读取面板，核对确认的内容 …' : lock.phase === 'sending' ? '正在下发到控制屏 …' : '已下发，正在重新读取面板核对 …')
+      : ''
 
   const onEdit = async (key: string, patch: { temp?: number; eco?: 0 | 1 }) => {
     const room = list.find((x) => x.key === key)
@@ -320,18 +356,32 @@ export default function Thermostat() {
 
   const all = async (v: boolean) => {
     const p0 = project
-    if (busyTarget(p0.id) || !online) return
-    const okText = `已下发：全部${v ? '开启' : '关闭'}（${list.length} 个房间）`
-    const ok = await confirm({ title: v ? '全部开启' : '全部关闭', body: <>将向 <b>{p0.name}</b>（<span className="num">{p0.code}</span>）的 {list.length} 个温控面板下发「{v ? '开启' : '关闭'}」指令，确定继续？</>, okText: '确认下发', danger: !v })
+    if (lockOf(p0.id) || !online) return
+    const keys = list.map((r) => r.key).join(',')
+    const subject = `全部${v ? '开启' : '关闭'}`
+    const okText = `已下发：${subject}（${list.length} 个房间）`
+    const ok = await confirm({ title: subject, body: <>将向 <b>{p0.name}</b>（<span className="num">{p0.code}</span>）的 {list.length} 个温控面板下发「{v ? '开启' : '关闭'}」指令，确定继续？</>, okText: '确认下发', danger: !v })
     if (!ok) return
-    // 同步重新核对：项目没换、仍在线、没有在途下发
     const now = latest.current
     const p = now.project
-    const abort = (why: string) => showToast(`全部${v ? '开启' : '关闭'}：${why}，本次未下发，请重新确认`, true)
+    const abort = (why: string) => showToast(`${subject}：${why}，本次未下发，请重新确认`, true)
     if (!p || p.id !== p0.id) return abort('当前项目已变化')
     if (!now.online) return abort('项目已离线')
-    if (busyTarget(p.id)) return abort('有下发正在进行')
-    await runWrite({ projectId: p.id, target: ALL, send: () => thermostatSource().setAll(p, v), readback, okText, subject: `全部${v ? '开启' : '关闭'}`, toast: showToast })
+    if (lockOf(p.id)) return abort('有下发正在进行')
+    // 同样走状态机：确认后新读一次房间列表，范围（房间数与房间）变了就取消，要求按新列表重新确认
+    await runOp({
+      projectId: p.id, target: ALL, subject, okText, toast: showToast,
+      present: () => present.current && latest.current.project?.id === p.id,
+      preflight: async (signal) => {
+        const fresh = await freshRooms(signal)
+        const cur = latest.current.project
+        if (!cur || cur.id !== p.id || cur.online !== true) return { ok: false, reason: '项目已变化或已离线' }
+        if (fresh.map((r) => r.key).join(',') !== keys) return { ok: false, reason: `房间列表已变化（现为 ${fresh.length} 个）` }
+        return { ok: true, payload: v }
+      },
+      send: (on) => thermostatSource().setAll(p, on),
+      verify: (signal) => freshRooms(signal),
+    })
   }
 
   return (
@@ -342,12 +392,17 @@ export default function Thermostat() {
           <div className="sub">{project.name}<span className="sep">·</span>{list.length} 个房间温控面板<span className="sep">·</span>设定温度与节能模式可在卡片内直接修改</div>
         </div>
         <div className="actions">
-          <Button onClick={() => void all(false)} disabled={!!busy || !online}><Icon icon={faPowerOff} />全部关闭</Button>
-          <Button variant="primary" onClick={() => void all(true)} disabled={!!busy || !online}><Icon icon={faPowerOff} />全部开启</Button>
+          <Button onClick={() => void all(false)} disabled={busy || !online}><Icon icon={faPowerOff} />全部关闭</Button>
+          <Button variant="primary" onClick={() => void all(true)} disabled={busy || !online}><Icon icon={faPowerOff} />全部开启</Button>
         </div>
       </div>
-      {busy === ALL && <div className="te-bar sending" role="status" style={{ margin: '0 0 16px' }}><span>{allResult?.outcome === 'unknown' ? resultText(allResult, null) : '正在下发到控制屏 …'}</span></div>}
-      {allResult && busy !== ALL && (
+      {lockText && (
+        <div className={'te-bar ' + (lock?.phase === 'unknown-locked' ? 'fail' : 'sending')} role={lock?.phase === 'unknown-locked' ? 'alert' : 'status'} style={{ margin: '0 0 16px' }} data-lock={lock?.phase}>
+          <span>{lockText}</span>
+          {lock?.phase === 'unknown-locked' && <Button disabled={lock.checking} onClick={() => void checkLocked(project.id, (signal) => freshRooms(signal))}>核对</Button>}
+        </div>
+      )}
+      {allResult && lock?.target !== ALL && (
         <div className={'te-bar ' + (allResult.outcome === 'ok' ? 'pending' : 'fail')} role={allResult.outcome === 'ok' ? 'status' : 'alert'} style={{ margin: '0 0 16px' }} data-result="all">
           <span>{resultText(allResult, null)}</span>
           <Button onClick={() => clearResult(project.id, ALL)}>知道了</Button>
@@ -364,7 +419,7 @@ export default function Thermostat() {
           <RoomCard key={r.key} room={r} ctx={ctx} range={tempRange} selected={statRoom?.key === r.key} onSelect={() => setSel(r.key)}
             draft={draft?.key === r.key ? draft : null} conflict={draft?.key === r.key ? rec.conflict : []}
             onEdit={(patch) => void onEdit(r.key, patch)} onDiscard={() => setDraft((d) => (d?.key === r.key ? null : d))}
-            busy={busy} result={writes.result(r.key)} readback={readback} />
+            lock={lock} result={writes.result(r.key)} freshRooms={freshRooms} />
         ))}
       </div>
       <Card style={{ marginTop: 20 }}>

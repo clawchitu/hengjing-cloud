@@ -14,13 +14,13 @@ import { decodeReply, encodeMessage } from '../api/ctrl'
 import * as pb from '../api/gen/ctrl200_pb.js'
 import { __resetHttpForTests } from '../api/http'
 import { createQueryClient } from '../api/query'
-import { __resetSessionForTests, signIn } from '../api/session'
+import { __resetSessionForTests, signIn, signOut } from '../api/session'
 import { clearTokens } from '../api/tokens'
 import { fakeBackend, json, type Call } from '../api/__tests__/helpers'
 import { AppProvider } from '../app/store'
 import { __resetCurrentForTests, setStoredProjectId } from '../data/org/current'
 import { __resetSessionViewForTests } from '../data/session'
-import { __resetWritesForTests } from '../features/thermostat'
+import { __resetWritesForTests, LIMITS } from '../features/thermostat'
 import Layout from '../components/Layout'
 import Thermostat from './Thermostat'
 
@@ -61,6 +61,7 @@ function backend(routes: Record<string, Handler> = {}) {
     '/integrated-projects': () => json({ entities: GROUPS }),
     '/distributors': () => json({ distributor_entities: [{ id: 'D1', name: '科希家研发苏州main' }] }),
     '/apps': () => json({}),
+    '/auth/invalidate': () => json({}),
     '/ctrl/room-temperature-data-get': () => reply200(rooms),
     '/ctrl/room-temperature-data-hour-get': () => json({ body: '' }),
     ...routes,
@@ -516,11 +517,13 @@ describe('结果：失败、结果未知与回读', () => {
   })
 
   it('504：结果未知（不说失败），回读进行中 → 已重新读取（只有读到才这么说），保留草稿；重试要再确认', async () => {
-    const be = backend({ '/ctrl/room-temperature-set': () => json({ code: 4, message: 'deadline exceeded' }, 504) })
-    await draftAndSend()
+    let wrote = false
     const slowRead = deferred(() => reply200(rooms))
-    be.fetchMock.mockClear()
-    fakeBackendRoute(be, '/ctrl/room-temperature-data-get', slowRead.handler)
+    const be = backend({
+      '/ctrl/room-temperature-set': () => { wrote = true; return json({ code: 4, message: 'deadline exceeded' }, 504) },
+      '/ctrl/room-temperature-data-get': () => (wrote ? slowRead.handler() : reply200(rooms)),
+    })
+    await draftAndSend()
     await confirmOk()
     await waitFor(() => expect(card('客厅').textContent).toContain('正在重新读取面板当前值'))
     expect(card('客厅').textContent).not.toContain('已重新读取')
@@ -629,14 +632,137 @@ describe('房间开关（201 switch）与全部开关（206）', () => {
   })
 })
 
-/** 在已有假后端上替换一条路由（fakeBackend 每次调用会换掉全局 fetch，这里在原记录上包一层） */
-function fakeBackendRoute(be: ReturnType<typeof backend>, path: string, h: Handler) {
-  const orig = be.fetchMock.getMockImplementation()!
-  be.fetchMock.mockImplementation(async (input: string, init?: RequestInit) => {
-    if (new URL(input, 'http://x').pathname.replace(/^\/api/, '') === path) {
-      be.calls.push({ url: input, method: init?.method ?? 'GET', headers: {}, body: init?.body ? JSON.parse(String(init.body)) : undefined })
-      return h({} as Call, 0)
-    }
-    return orig(input, init)
+/** 某条请求在全部请求里的序号（看先后） */
+const order = (be: ReturnType<typeof backend>, pred: (c: Call) => boolean) => be.calls.map((c, i) => (pred(c) ? i : -1)).filter((i) => i >= 0)
+const is200 = (c: Call) => c.url.endsWith('/ctrl/room-temperature-data-get')
+const is201 = (c: Call) => c.url.endsWith('/ctrl/room-temperature-set')
+
+describe('下发状态机：确认后新读、写后新读、会话、期限', () => {
+  it('确认后不等轮询：先新发一次 200，再用这份读数组装 201（末端等于这次新读数）', async () => {
+    const be = backend({ '/ctrl/room-temperature-set': ok201 })
+    await draftAndSend()
+    const before = be.callsTo('/ctrl/room-temperature-data-get').length
+    // 弹窗打开期间设备数据变了（风速变化不影响 Query），但不触发任何轮询
+    rooms = [{ ...ROOM, windSpeed: 5, endModes: ENDS.map((m) => ({ ...m })) }, OFF_ROOM]
+    await confirmOk()
+    await waitFor(() => expect(writes(be)).toHaveLength(1))
+    const reads = order(be, is200)
+    const w = order(be, is201)[0]
+    expect(be.callsTo('/ctrl/room-temperature-data-get').length).toBeGreaterThan(before)
+    expect(reads.some((i) => i > reads[before - 1] && i < w)).toBe(true) // 确认之后、201 之前有一次新的 200
+    expect(body201(writes(be)[0]).endModes).toEqual(ENDS)
   })
-}
+
+  it('确认后不等轮询：设备的末端 / 开关已变 → 新读到后取消，不写', async () => {
+    for (const next of [{ ...ROOM, endModes: [ENDS[0]] }, { ...ROOM, switch: 0 }, { ...ROOM, isConnected: false }]) {
+      const be = backend({ '/ctrl/room-temperature-set': ok201 })
+      await draftAndSend()
+      rooms = [next, OFF_ROOM]
+      await confirmOk()
+      await flush(80)
+      expect(writes(be)).toHaveLength(0)
+      expect(toasts()).toContain('本次未下发')
+      cleanup(); vi.unstubAllGlobals(); __resetWritesForTests(); toastLog = []; rooms = [ROOM, OFF_ROOM]
+      __resetHttpForTests(); __resetSessionForTests(); __resetSessionViewForTests(); __resetCurrentForTests(); clearTokens()
+    }
+  })
+
+  it('写前启动的轮询在写后才返回旧读数：不算回读；回读是 201 之后新发的 200，界面以它为准', async () => {
+    let phase: 'before' | 'stale' | 'after' = 'before'
+    const stale = deferred(() => reply200([ROOM, OFF_ROOM])) // 旧读数：设定 25.5
+    const slow201 = deferred(ok201)
+    const be = backend({
+      '/ctrl/room-temperature-set': async () => { const r = await slow201.handler(); phase = 'after'; return r },
+      '/ctrl/room-temperature-data-get': () => (phase === 'stale' ? stale.handler() : reply200(phase === 'after' ? [{ ...ROOM, setTemp: 26 }, OFF_ROOM] : rooms)),
+    })
+    await draftAndSend()
+    await confirmOk()
+    await waitFor(() => expect(writes(be)).toHaveLength(1))
+    // 201 在途时启动一次轮询，它会一直挂着、最后返回写前的旧值
+    phase = 'stale'
+    void client.refetchQueries({ type: 'active' }).catch(() => {})
+    await flush()
+    phase = 'after'
+    await slow201.release()
+    await waitFor(() => expect(toasts()).toContain('客厅 已下发'))
+    await waitFor(() => expect(within(card('客厅')).getByLabelText('客厅 设定温度').textContent).toBe('26.0°C'))
+    const w = order(be, is201)[0]
+    expect(order(be, is200).some((i) => i > w)).toBe(true)
+    await stale.release() // 旧轮询这时才返回：已被取消，不覆盖界面
+    await flush(50)
+    expect(within(card('客厅')).getByLabelText('客厅 设定温度').textContent).toBe('26.0°C')
+  })
+
+  it('请求永不返回：到期进入 unknown-locked，整页禁止下发，「核对」读取成功后才解锁', async () => {
+    const be = backend({ '/ctrl/room-temperature-set': () => new Promise<Response>(() => {}) })
+    LIMITS.writeTotalMs = 150
+    await draftAndSend()
+    await confirmOk()
+    const bar = await waitFor(() => { const b = document.querySelector('[data-lock="unknown-locked"]') as HTMLElement; expect(b).toBeTruthy(); return b })
+    expect(bar.textContent).toContain('上次下发（客厅）结果未知')
+    expect((screen.getByRole('button', { name: '全部开启' }) as HTMLButtonElement).disabled).toBe(true)
+    expect(btn(card('主卧'), '主卧 设定温度升高').disabled).toBe(true)
+    expect((within(card('客厅')).getByRole('switch', { name: '客厅 开关' }) as HTMLButtonElement).disabled).toBe(true)
+    // 核对失败：仍锁住
+    rooms = []
+    fakeBackend({ '/ctrl/room-temperature-data-get': () => json({ code: 14, message: 'x' }, 503) })
+    fireEvent.click(within(bar).getByRole('button', { name: '核对' }))
+    await flush(80)
+    expect(document.querySelector('[data-lock="unknown-locked"]')).toBeTruthy()
+    // 核对成功：解锁
+    rooms = [ROOM, OFF_ROOM]
+    fakeBackend({ '/ctrl/room-temperature-data-get': () => reply200(rooms) })
+    fireEvent.click(within(document.querySelector('[data-lock="unknown-locked"]') as HTMLElement).getByRole('button', { name: '核对' }))
+    await waitFor(() => expect(document.querySelector('[data-lock]')).toBeNull())
+    expect((screen.getByRole('button', { name: '全部开启' }) as HTMLButtonElement).disabled).toBe(false)
+    expect(writes(be)).toHaveLength(1)
+  })
+
+  it('写的过程中退出登录：旧操作不回读、不提示；同账号重新登录后看不到旧结果，可以正常下发', async () => {
+    const slow = deferred(ok201)
+    const be = backend({ '/ctrl/room-temperature-set': slow.handler })
+    await draftAndSend()
+    await confirmOk()
+    await waitFor(() => expect(writes(be)).toHaveLength(1))
+    await act(async () => { await signOut() })
+    const readsAtLogout = be.callsTo('/ctrl/room-temperature-data-get').length
+    await slow.release()
+    await flush(80)
+    expect(be.callsTo('/ctrl/room-temperature-data-get').length).toBe(readsAtLogout) // 没用（新）凭据回读
+    expect(toasts()).not.toContain('已下发')
+    await act(async () => { await signIn('u', 'pw', true) })
+    await screen.findByText('客厅')
+    expect(card('客厅').textContent).not.toContain('已下发')
+    expect(document.querySelector('[data-lock]')).toBeNull()
+    expect(btn(card('客厅'), '客厅 设定温度升高').disabled).toBe(false)
+  })
+
+  it('写的过程中换账号、结果未知：项目锁保留，新会话看到「不是本次登录发起的」和核对，看不到旧结果', async () => {
+    const slow = deferred(() => json({ code: 4, message: 'x' }, 504))
+    const be = backend({ '/ctrl/room-temperature-set': slow.handler })
+    await draftAndSend()
+    await confirmOk()
+    await waitFor(() => expect(writes(be)).toHaveLength(1))
+    await act(async () => { await signOut() })
+    await slow.release()
+    await act(async () => { await signIn('u2', 'pw', true) })
+    await screen.findByText('客厅')
+    const bar = document.querySelector('[data-lock="unknown-locked"]') as HTMLElement
+    expect(bar.textContent).toContain('不是本次登录发起的')
+    expect(bar.textContent).not.toContain('客厅')
+    expect(card('客厅').textContent).not.toContain('结果未知')
+    expect(btn(card('客厅'), '客厅 设定温度升高').disabled).toBe(true)
+  })
+
+  it('206：确认后新读到的房间列表变了 → 取消，要求重新确认', async () => {
+    const be = backend({ '/ctrl/project-room-switch-set': ok206 })
+    await openRooms()
+    fireEvent.click(screen.getByRole('button', { name: '全部关闭' }))
+    await dialog()
+    rooms = [ROOM] // 少了一个房间，不触发轮询
+    await confirmOk()
+    await flush(80)
+    expect(writes(be)).toHaveLength(0)
+    expect(toasts()).toContain('房间列表已变化（现为 1 个）')
+  })
+})

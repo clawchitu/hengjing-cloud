@@ -32,21 +32,21 @@ export function useRooms(project: Project | null, enabled = true) {
 }
 
 /**
- * 写操作后的回读：强制重新读一次 200（页面已卸载、查询不活跃时也会真正去读），返回是否读到。
- * 查询客户端是应用级的，页面卸载后这个函数仍可用（在途下发结束时调用）
+ * 新读一次 200（下发状态机的确认后预检、写后回读、核对都用它）：先取消该项目在途的 200（写前启动的轮询不算数），
+ * 再直接发一次新请求（不经查询缓存去重，保证是此刻之后发起的），读到后写回缓存刷新界面。
+ * 查询客户端是应用级的，页面卸载后这个函数仍可用
  */
-export function useReadback(project: Project | null) {
+export function useFreshRooms(project: Project | null) {
   const qc = useQueryClient()
   const id = project?.id ?? ''
-  return useCallback(async (): Promise<boolean> => {
-    if (!id) return false
+  return useCallback(async (signal?: AbortSignal): Promise<RoomView[]> => {
+    if (!id) throw new Error('没有当前项目')
     const src = thermostatSource()
-    try {
-      await qc.fetchQuery({ queryKey: roomsKey(src.kind, id), queryFn: ({ signal }) => src.rooms(id, signal), staleTime: 0 })
-      return true
-    } catch {
-      return false
-    }
+    const key = roomsKey(src.kind, id)
+    await qc.cancelQueries({ queryKey: key, exact: true })
+    const rooms = await src.rooms(id, signal)
+    qc.setQueryData(key, rooms)
+    return rooms
   }, [qc, id])
 }
 
