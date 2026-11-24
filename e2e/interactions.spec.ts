@@ -510,6 +510,7 @@ test.describe('统一控制下发', () => {
 
   test('二次确认 → 逐个下发 → 结果表（项目、项目ID、状态、操作时间）带回显', async ({ page, login }) => {
     await open(page, login, '/control')
+    await expect(page.getByText('暂无执行记录')).toBeVisible()
     await page.getByRole('group', { name: '房间开关' }).getByRole('button', { name: '全部开启' }).click()
     await page.getByRole('checkbox', { name: '保持不变' }).click()
     await page.getByRole('button', { name: '升高温度' }).click()

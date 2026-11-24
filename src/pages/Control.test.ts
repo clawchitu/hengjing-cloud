@@ -13,13 +13,14 @@ import * as pb from '../api/gen/ctrl200_pb.js'
 import { __resetHttpForTests } from '../api/http'
 import { createQueryClient } from '../api/query'
 import { __resetSessionForTests, signIn } from '../api/session'
-import { clearTokens } from '../api/tokens'
+import { clearTokens, writeTokens } from '../api/tokens'
 import { fakeBackend, json, text, type Call } from '../api/__tests__/helpers'
 import { AppProvider } from '../app/store'
 import { __resetCurrentForTests } from '../data/org/current'
 import { __resetSessionViewForTests } from '../data/session'
 import { __resetMockUnifiedForTests, mockUnifiedRead, mockUnifiedSend } from '../api'
-import Control from './Control'
+import Control, { lastResultKey } from './Control'
+import { setCurrentUserId } from '../api/auth'
 
 beforeAll(() => {
   const proto = Element.prototype as unknown as Record<string, unknown>
@@ -218,7 +219,9 @@ describe('下发', () => {
     expect(decodeReply(pb.UnifiedCtrlSetQuerySchema, body.body)).toEqual({ systemSwitch: -1, systemMode: 0, roomSwitch: 1, roomTemp: 26.5 })
     expectFourCells(badge)
     const card = screen.getByRole('region', { name: '最近一次执行结果' })
+    // 卡片里只有标题和四列表格：没有任何说明、没有计数汇总
     expect(card.textContent).not.toMatch(/回读|未自动重试|核对/)
+    expect(card.textContent).toBe('最近一次执行结果' + within(card).getByRole('table').textContent)
     const heads = within(card).getAllByRole('columnheader').map((h) => h.textContent)
     expect(heads).toEqual(['项目', '项目ID', '状态', '操作时间'])
     // 「下发核对」默认收起
@@ -384,6 +387,18 @@ describe('真实数据模式的最近一次结果', () => {
     sessionStorage.setItem('hjc-unified-last:real:dealer-1', ROW('本账号存的'))
     await mount(false)
     expect(await screen.findByText('本账号存的')).toBeTruthy()
+  })
+
+  it('没有 user id 时用令牌的 sub 区分账号；演示模式按演示账号名', () => {
+    const tok = (sub: string) => `x.${btoa(JSON.stringify({ sub, exp: 9e9 })).replace(/=+$/, '')}.y`
+    setCurrentUserId('')
+    writeTokens({ accessToken: tok('sub-1'), refreshToken: 'R1', expiresAt: Date.now() + 3600_000 })
+    expect(lastResultKey(false, 'd')).toBe('real:sub-1')
+    setCurrentUserId('u-9')
+    expect(lastResultKey(false, 'd')).toBe('real:u-9')
+    expect(lastResultKey(true, 'cosyhome')).toBe('mock:cosyhome')
+    setCurrentUserId(''); clearTokens()
+    expect(lastResultKey(false, 'd')).toBeNull()
   })
 
   it('存储被改坏（状态是原型链上的键等）：忽略坏行，不报错', async () => {

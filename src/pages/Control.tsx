@@ -3,9 +3,9 @@
 // 确认弹窗在本组件里用 useConfirm() 取（分工第 7 条）；写入口拿到的是整个 Project（见 batch.ts）。
 // 改动文档：app_code 为 8、12 时房间温度设定不可用（房间开关仍可用）；最近一次执行结果只显示 项目、项目 ID、状态、操作时间。
 import { useState, type ReactNode } from 'react'
-import { faMagnifyingGlass, faCircleInfo, faLayerGroup, faChevronDown, faChevronUp, faPowerOff, faWandMagicSparkles, faSnowflake, faSun, faDropletSlash, faDroplet, faWind, faRobot, faMinus, faArrowsRotate, faDoorOpen, faTemperatureHalf, faPaperPlane, faTriangleExclamation, faCircleCheck, faSpinner, faCircleXmark, faCircleQuestion, faCircleMinus } from '@fortawesome/free-solid-svg-icons'
+import { faMagnifyingGlass, faCircleInfo, faLayerGroup, faChevronDown, faChevronUp, faPowerOff, faWandMagicSparkles, faSnowflake, faSun, faDropletSlash, faDroplet, faWind, faRobot, faMinus, faArrowsRotate, faDoorOpen, faTemperatureHalf, faPaperPlane, faTriangleExclamation, faSpinner } from '@fortawesome/free-solid-svg-icons'
 import type { IconDefinition } from '@fortawesome/fontawesome-svg-core'
-import { Icon, useAsync } from '../components/legacy'
+import { Icon } from '../components/legacy'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardHeader, CardTitle } from '@/components/ui/card'
 import { Slider } from '@/components/ui/slider'
@@ -153,11 +153,9 @@ export default function Control() {
   const [roomSw, setRoomSw] = useState<RoomTri>('不变')
   const [temp, setTemp] = useState(26)
   const [keep, setKeep] = useState(true)
-  // 演示数据只在演示模式下用（getLastRun 里也按 isMockMode 判断）
-  const [lastInit] = useAsync(() => (mock ? api.getLastRun() : Promise.resolve(null)), [mock])
   const lastKey = lastResultKey(mock, user.username)
   const [lastRun, setLastRun] = useState<{ key: string | null; rows: ResultRow[] } | null>(null)
-  const last: ResultRow[] | null = (lastRun && lastRun.key === lastKey ? lastRun.rows : readLast(lastKey)) ?? (mock && lastInit ? lastInit.rows : null)
+  const last: ResultRow[] | null = (lastRun && lastRun.key === lastKey ? lastRun.rows : readLast(lastKey))
   const [showNotes, setShowNotes] = useState(false)
 
   const readSnap = mock ? (id: string) => api.mockUnifiedRead(id) : readUnifiedSnapshot
@@ -233,7 +231,6 @@ export default function Control() {
     else toast([n('success') && `成功 ${n('success')} 个`, n('failure') && `失败 ${n('failure')} 个`, n('unknown') && `结果未确认 ${n('unknown')} 个，请刷新查看`, n('not-sent') && `未下发 ${n('not-sent')} 个`].filter(Boolean).join('，') + '。未自动重试', true)
   }
 
-  const counts = last ? { s: last.filter((r) => r.status === 'success').length, f: last.filter((r) => r.status === 'failure').length, u: last.filter((r) => r.status === 'unknown').length, n: last.filter((r) => r.status === 'not-sent').length } : { s: 0, f: 0, u: 0, n: 0 }
   const opt = <T,>(cur: T, v: T, set: (v: T) => void, label: ReactNode, key: string) =>
     <button key={key} type="button" className={'opt-btn' + (cur === v ? ' on' : '')} aria-pressed={cur === v} disabled={busy} onClick={() => set(v)}>{label}</button>
 
@@ -333,14 +330,6 @@ export default function Control() {
       <Card pad={false} role="region" aria-label="最近一次执行结果">
         <CardHeader pad style={{ marginBottom: 0, paddingBottom: 14 }}>
           <div><CardTitle>最近一次执行结果</CardTitle></div>
-          {run.phase !== 'running' && last && last.length > 0 && (
-            <div className="row" style={{ gap: 16, fontSize: 13.5 }}>
-              <span className="green"><Icon icon={faCircleCheck} /> 成功 <b>{counts.s}</b></span>
-              <span className="red"><Icon icon={faCircleXmark} /> 失败 <b>{counts.f}</b></span>
-              <span className="orange"><Icon icon={faCircleQuestion} /> 结果未确认 <b>{counts.u}</b></span>
-              {counts.n > 0 && <span className="muted"><Icon icon={faCircleMinus} /> 未下发 <b>{counts.n}</b></span>}
-            </div>
-          )}
         </CardHeader>
         {run.phase === 'running' ? (
           <div className="muted" role="status" style={{ padding: '18px 22px 22px', fontSize: 13 }}><Icon icon={faSpinner} spin /> {TEXT.sending}完成后显示全部结果</div>

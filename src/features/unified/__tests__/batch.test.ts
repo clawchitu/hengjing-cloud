@@ -208,6 +208,96 @@ describe('start：逐个下发，三种结果，不重试', () => {
     expect(t.wire).toEqual([])
   })
 
+  it('截止时写入口已调用、还在等令牌续期：截止后才跑 beforeSend → 拒绝，不发写，标「未下发（超时）」', async () => {
+    const token = gated()
+    const wire: string[] = []
+    const verdicts: boolean[] = []
+    const send = vi.fn<BatchSender>(async (_p, _q, o) => {
+      await token.gate
+      const ok = o.beforeSend(); verdicts.push(ok)
+      if (!ok) throw new ApiError('write_blocked', 'x')
+      wire.push('a'); return { success: true, msg: '' }
+    })
+    const t = setup([P('a', '1')], { send, deadlineMs: 40, realNow: true })
+    t.batch.prepare(['a'], { roomSwitch: 1 })
+    const done = await t.batch.start()
+    expect(done.rows[0].status).toBe('not-sent')
+    expect(done.rows[0].note).toMatch(/未下发（超时）/)
+    token.release()
+    await new Promise((r) => setTimeout(r, 30))
+    expect(verdicts).toEqual([false])
+    expect(wire).toEqual([])
+  })
+
+  it('beforeSend 自己核对截止时间：截止已过但截止定时器还没触发时也拒绝', async () => {
+    const token = gated()
+    let t = 0
+    const wire: string[] = []
+    const projects = [P('a', '1')]
+    const send = vi.fn<BatchSender>(async (_p, _q, o) => { await token.gate; if (!o.beforeSend()) throw new ApiError('write_blocked', 'x'); wire.push('a'); return { success: true, msg: '' } })
+    const batch = createUnifiedBatch({ getProjects: () => projects, readBack: async () => ({ rooms: 1, roomSwitch: 0, roomTemp: 26 }), send, log: () => {}, now: () => new Date(t), deadlineMs: 35_000 })
+    batch.prepare(['a'], { roomSwitch: 1 })
+    const p = batch.start()
+    await vi.waitFor(() => expect(send).toHaveBeenCalled())
+    t = 35_000 // 时钟已过截止（真实定时器 35 秒后才会触发）
+    token.release()
+    const done = await p
+    expect(wire).toEqual([])
+    const st = done.rows[0].state
+    expect(st.status === 'failure' && st.outcome).toBe('not-sent')
+  })
+
+  it('旧批次里超时标「未下发」的写请求，不能借下一批的截止时间放行', async () => {
+    const token = gated()
+    const wire: string[] = []
+    let n = 0
+    const send = vi.fn<BatchSender>(async (_p, _q, o) => {
+      const tag = `batch${++n}:a`
+      if (n === 1) await token.gate
+      if (!o.beforeSend()) throw new ApiError('write_blocked', 'x')
+      wire.push(tag); return { success: true, msg: '' }
+    })
+    const t = setup([P('a', '1')], { send, deadlineMs: 40, realNow: true })
+    t.batch.prepare(['a'], { roomSwitch: 1 })
+    await t.batch.start()
+    t.batch.reset()
+    t.batch.prepare(['a'], { roomSwitch: 0 })
+    const p2 = t.batch.start()
+    token.release()
+    await p2
+    await new Promise((r) => setTimeout(r, 30))
+    expect(wire).toEqual(['batch2:a'])
+  })
+
+  it.each([
+    ['成功', { success: true, msg: '' }, 'success'],
+    ['明确拒绝', { success: false, msg: '设备忙' }, 'failure'],
+  ] as const)('截止时 203 已%s、只是下发后回读没完成：按应答记，不误标「结果未确认」', async (_n, reply, status) => {
+    const slow = gated()
+    let reads = 0
+    const t = setup([P('a', '1')], { send: async (_p, _q, o) => { if (!o.beforeSend()) throw new ApiError('write_blocked', 'x'); return reply }, deadlineMs: 60, realNow: true })
+    t.readBack.mockImplementation(async () => { if (reads++ === 1) await slow.gate; return { rooms: 1, roomSwitch: 0, roomTemp: 26 } })
+    t.batch.prepare(['a'], { roomSwitch: 1 })
+    const done = await t.batch.start()
+    expect(done.rows[0].status).toBe(status)
+    expect(done.rows[0].note).toMatch(/回读在 35 秒截止前未完成/)
+    slow.release()
+  })
+
+  it('下发前读到房间都关着、这次又要设温度（没同时开房间）：不发写；同时开房间则照发', async () => {
+    const t = setup([P('a', '1')], { reads: { a: [{ rooms: 2, roomSwitch: 0, roomTemp: 26 }] } })
+    t.batch.prepare(['a'], { roomTemp: 24 })
+    const done = await t.batch.start()
+    expect(t.wire).toEqual([])
+    const st = done.rows[0].state
+    expect(st.status === 'failure' && st.outcome).toBe('not-sent')
+    expect(st.status === 'failure' && st.error).toMatch(/房间都关着/)
+    const t2 = setup([P('a', '1')], { reads: { a: [{ rooms: 2, roomSwitch: 0, roomTemp: 26 }] } })
+    t2.batch.prepare(['a'], { roomSwitch: 1, roomTemp: 24 })
+    await t2.batch.start()
+    expect(t2.wire).toEqual(['a'])
+  })
+
   it('beforeSend：等令牌续期期间项目离线 / 页面卸载 → 不发写', async () => {
     for (const how of ['offline', 'unmount'] as const) {
       const token = gated()
@@ -231,8 +321,7 @@ describe('start：逐个下发，三种结果，不重试', () => {
       expect(wire, how).toEqual([])
       // 写入口拦下：失败（未执行）；页面卸载时则是没开始发就终止
       const st = done.rows[0].state
-      if (how === 'offline') expect(st.status === 'failure' && st.outcome).toBe('not-sent')
-      else expect(['not-sent', 'failure']).toContain(done.rows[0].status)
+      expect(st.status === 'failure' && st.outcome, how).toBe('not-sent')
     }
   })
 

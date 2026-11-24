@@ -12,7 +12,7 @@ import { ApiError } from '@/api/errors'
 import type { WriteProject } from '@/api/guard'
 import { TEXT } from './constants'
 import { consoleLogger, type UnifiedLogger } from './log'
-import { createUnifiedController, type UnifiedController, type UnifiedState } from './machine'
+import { createUnifiedController, outcomeOf, type UnifiedController, type UnifiedState } from './machine'
 import { describeQuery, type UnifiedContext, type UnifiedDraft, type UnifiedEcho } from './rules'
 
 /** 页面传进来的项目（S6a 的 Project 直接可用） */
@@ -96,7 +96,7 @@ export interface BatchDeps {
   log?: UnifiedLogger
   mock?: boolean
   now?: () => Date
-  /** 批次时限（毫秒，默认 35 秒）：超过后不再开始新的项目，已开始的照常走完 */
+  /** 批次截止（毫秒，默认 35 秒）：见 BATCH_DEADLINE_MS */
   deadlineMs?: number
 }
 
@@ -108,6 +108,10 @@ export interface BatchDeps {
 export const BATCH_DEADLINE_MS = 35_000
 export const DEADLINE_NOT_SENT = '超过 35 秒截止时间，未下发（超时）'
 export const DEADLINE_UNKNOWN = '超过 35 秒截止时间仍未收到应答，结果未确认，请刷新查看；未自动重试'
+export const DEADLINE_REPLIED_OK = '控制屏已确认生效；下发后回读在 35 秒截止前未完成，未核对'
+export const DEADLINE_REPLIED_FAIL = '控制屏明确拒绝（未自动重试）；下发后回读在 35 秒截止前未完成'
+/** 下发前读到房间全部关着，这次又要设温度（且没同时开房间）：不发（后端答复⑦） */
+export const ROOMS_OFF_TEXT = '下发前读到房间都关着，不能设定温度，未下发'
 
 export function rowStatus(s: UnifiedState<unknown>, started: boolean): RowStatus {
   switch (s.status) {
@@ -133,8 +137,14 @@ export function createUnifiedBatch(deps: BatchDeps) {
     p: BatchProject; ctl: UnifiedController<UnifiedSnapshot>; started: boolean; at?: string; unsub: () => void
     /** beforeSend 放行过（写请求确实发出了） */
     sent: boolean
+    /** 写请求的应答（截止时据此区分「等应答」和「等回读」） */
+    reply?: 'ok' | 'rejected' | 'error'
+    /** 下发前读到的快照 */
+    before?: UnifiedSnapshot
+    /** 所属批次序号：旧批次里没结束的写请求不能借新批次的截止时间放行 */
+    batch: number
     /** 截止时冻结的结果 */
-    final?: { status: 'not-sent' | 'unknown'; note: string }
+    final?: { status: 'not-sent' | 'unknown' | 'success' | 'failure'; note: string }
   }
   let entries: Entry[] = []
   let state: BatchState = { phase: 'idle', rows: [], errors: [], items: [] }
@@ -142,6 +152,8 @@ export function createUnifiedBatch(deps: BatchDeps) {
   /** 截止时间（毫秒时间戳）；到点后置 expired */
   let deadlineAt = Infinity
   let expired = false
+  /** 批次序号：每次 prepare 加一 */
+  let batchSeq = 0
   let running: Promise<BatchState> | null = null
   const subs = new Set<() => void>()
 
@@ -160,6 +172,8 @@ export function createUnifiedBatch(deps: BatchDeps) {
    * 通过就记下「已发出」
    */
   const recheck = (e: Entry, wp: WriteProject) => () => {
+    // 这一项已有定论（截止时冻结）、或已不属于当前批次：一律不发
+    if (e.final || e.batch !== batchSeq || !entries.includes(e)) return false
     if (stopped || expired || now().getTime() >= deadlineAt) return false
     const cur = find(wp.id)
     if (!cur || cur.code !== wp.code || cur.online !== true) return false
@@ -170,7 +184,14 @@ export function createUnifiedBatch(deps: BatchDeps) {
   const sendWhole = (e: Entry) => (wp: WriteProject, q: WriteQuery<203>) => {
     const p = find(wp.id)
     if (!p || p.code !== wp.code) return Promise.reject(new ApiError('write_blocked', TEXT.projectChanged))
-    return send(p, q, { beforeSend: recheck(e, wp) })
+    // 房间都关着又要设温度（没同时开房间）：不发
+    if (q.roomTemp !== -1 && q.roomSwitch !== 1 && e.before && e.before.rooms > 0 && e.before.roomSwitch === 0) {
+      return Promise.reject(new ApiError('write_blocked', ROOMS_OFF_TEXT))
+    }
+    const out = send(p, q, { beforeSend: recheck(e, wp) })
+    out.then((r) => { if (e.sent) e.reply = r?.success === true ? 'ok' : 'rejected' },
+      (err) => { if (e.sent) e.reply = outcomeOf(err) === 'unknown' ? 'error' : 'rejected' })
+    return out
   }
 
   function clear() {
@@ -186,16 +207,18 @@ export function createUnifiedBatch(deps: BatchDeps) {
       if (state.phase === 'running' || state.phase === 'confirming') return state
       clear()
       stopped = false
+      batchSeq++
       const uniq = [...new Set(ids)]
       if (!uniq.length) { emit({ phase: 'idle', errors: [TEXT.noProject], items: [] }); return state }
       const errs: Array<{ name: string; msg: string }> = []
       for (const id of uniq) {
         const p = find(id)
         if (!p) { errs.push({ name: id, msg: TEXT.noProject }); continue }
-        const entry = { p, started: false, sent: false, unsub: () => {} } as Entry
+        const entry = { p, started: false, sent: false, batch: batchSeq, unsub: () => {} } as Entry
         const ctl = createUnifiedController<UnifiedSnapshot>({
           getContext: () => contextOf(find(id), mock),
-          readBack,
+          // 记下第一次（下发前）读到的快照，供发送前判断房间是否都关着
+          readBack: async (pid, sig) => { const snap = await readBack(pid, sig); if (!entry.before) entry.before = snap; return snap },
           toEcho: (s) => s,
           send: sendWhole(entry),
           log: deps.log ?? consoleLogger,
@@ -246,7 +269,11 @@ export function createUnifiedBatch(deps: BatchDeps) {
           const st = e.ctl.getState().status
           if (st === 'success' || st === 'failure' || st === 'unknown') continue
           if (st === 'idle' && e.started) continue
-          e.final = e.sent ? { status: 'unknown', note: DEADLINE_UNKNOWN } : { status: 'not-sent', note: DEADLINE_NOT_SENT }
+          // 已发出：有应答的按应答（只是回读没做完），没应答的结果未确认；没发出：未下发（超时）
+          e.final = !e.sent ? { status: 'not-sent', note: DEADLINE_NOT_SENT }
+            : e.reply === 'ok' ? { status: 'success', note: DEADLINE_REPLIED_OK }
+            : e.reply === 'rejected' ? { status: 'failure', note: DEADLINE_REPLIED_FAIL }
+            : { status: 'unknown', note: DEADLINE_UNKNOWN }
           e.started = true
           e.at ??= stamp(now())
           e.ctl.abort()
