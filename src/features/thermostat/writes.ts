@@ -11,9 +11,9 @@
 //   └────┬─────┘
 //        │ 发送前同步再核对会话代次、当前项目、页面仍在
 //        ▼
-//   ┌──────────┐ writeCtrl（S4 统一写入口）
+//   ┌──────────┐ writeCtrl（S4 统一写入口）。原 send Promise 的结算单独跟踪（sendPending）
 //   │ sending  │── 确定失败（写防护、503、success=false 等）──┐
-//   └────┬─────┘── 超时 / 断网 / 500 / 解析失败 / 期限到 ────┤（结果未知）
+//   └────┬─────┘── 超时 / 断网 / 500 / 解析失败 / 总期限到 ──┤（结果未知）
 //        │ success=true                                       │
 //        ▼                                                    ▼
 //   ┌──────────┐ 写完成后取消在途 200 再新发一次 200 回读（写前启动的轮询结果不算）
@@ -22,13 +22,21 @@
 //        │ 回读成功 → done（释放锁）
 //        │ 回读失败 / 期限到 / 回调异常，且写可能已生效 → unknown-locked
 //        ▼
-//   ┌───────────────┐ 禁止该项目再次下发；页面显示「上次下发结果未知」和只读的「核对」按钮
-//   │unknown-locked │── 核对（新发一次 200）读取成功 ──► 释放锁
-//   └───────────────┘
+//   ┌───────────────┐ 禁止该项目再次下发；页面显示「上次下发结果未知」（成功但回读失败时为「已成功、状态未核对」）和「核对」
+//   │unknown-locked │── 核对：新发一次 200 读取成功，且原 send 已结算 ──► 释放锁
+//   └───────────────┘   原 send 未结算（sending-pending）：核对可以读、可以展示读数，但不解锁，提示「上一条指令尚未结束」；
+//                       读取途中会话变化：结果丢弃，不解锁；核对失败：保留锁，可再次核对
 //
-// 总期限：preflight ≤ LIMITS.preflightMs；sending + verifying ≤ LIMITS.writeTotalMs。整个流程有 try/finally，任何异常都会落到
-// 「释放锁（还没写）」或「unknown-locked（可能已写）」之一，不会留下悬空的锁。
-// 展示隔离：结果按 sessionKey 存，toast 只在会话与当前项目都没变时弹；新会话看不到旧会话的结果，只看到项目被锁和「核对」。
+// 原 send 一定会结算：http.ts 的 send() 对每次 fetch 设 AbortController，到 ctrlTimeoutMs（默认 12 秒）就 abort 底层请求，
+// 401 续期与重放各自也有同样的超时；最长链约 12（写）+ 12（续期）+ 12（重放）秒，所以写 + 回读总期限取 45 秒
+// （LIMITS.writeTotalMs）。总期限只是兜底：到期按结果未知锁住，原 send 结算前不允许解锁。
+//
+// 已知限制（v1 不做）：锁只在本标签页内存里，刷新或另开标签页后没有。理由：201 / 206 都是设置绝对值（温度 = X、
+// 开关 = 0 / 1），重复下发幂等；刷新后页面重新读 200 展示真实状态；跨标签页的原子互斥需要额外基础设施，超出 v1 范围。
+//
+// 预检、回读、核对的读取都绑定发起时的会话代次与 AbortSignal：返回后写缓存或改锁之前再校验，失效就丢弃（见 hooks.ts 的
+// useFreshRooms）。展示隔离：结果按 sessionKey 存，toast 只在会话与当前项目都没变时弹；新会话看不到旧会话的结果，
+// 只看到项目被锁和「核对」。
 import { useSyncExternalStore } from 'react'
 import { isApiError } from '@/api/errors'
 import { subscribeSession } from '@/api/session'
@@ -40,6 +48,8 @@ export type Outcome = 'ok' | 'fail' | 'unknown'
 export type RunResult = Outcome | 'busy' | 'aborted'
 /** 回读核对：进行中 / 已读到 / 读取失败 */
 export type Readback = 'pending' | 'ok' | 'fail'
+/** 核对的结果：已解锁 / 读到了但原指令还没结束 / 读取失败 / 读取途中会话变化（丢弃） / 没有可核对的锁 */
+export type CheckResult = 'unlocked' | 'send-pending' | 'failed' | 'stale' | 'none'
 
 export interface WriteResult {
   outcome: Outcome
@@ -55,31 +65,47 @@ export interface Lock {
   target: string
   subject: string
   phase: Phase
+  /** 写的结果（sending 之后才有） */
+  outcome?: Outcome
+  /** 原 send Promise 还没结算（请求可能仍在路上） */
+  sendPending: boolean
   /** unknown-locked 时正在核对 */
   checking?: boolean
 }
 
 export const ALL = 'all'
-export const LIMITS = { preflightMs: 15_000, writeTotalMs: 30_000 }
+const DEFAULT_LIMITS = { preflightMs: 15_000, writeTotalMs: 45_000 }
+export const LIMITS = { ...DEFAULT_LIMITS }
 
 // ---------------------------------------------------------------------------
-// 会话代次：账号变化（含变为未登录）就加一。真实接口订阅 api/session；演示数据模式在每次读取时比较
+// 会话代次：账号变化（含变为未登录）就加一。订阅回调里更新并通知；渲染期间读取只计算、不通知
 
 let sessionGen = 0
 let lastUserKey: string | null | undefined
 let unsubSession: (() => void) | null = null
-function noteSession() {
+function syncSession(): boolean {
   const k = getSessionView().userKey
-  if (k !== lastUserKey) { lastUserKey = k; sessionGen += 1; emit() }
+  if (k === lastUserKey) return false
+  lastUserKey = k
+  sessionGen += 1
+  return true
 }
 function watchSession() {
-  if (!unsubSession) unsubSession = subscribeSession(() => noteSession())
+  if (!unsubSession) unsubSession = subscribeSession(() => { if (syncSession()) emit() })
 }
+/** 当前会话标识（只读：不触发订阅者更新，可在渲染期间调用） */
 export function currentSessionKey(): string {
   watchSession()
-  noteSession()
+  syncSession()
   return `${lastUserKey ?? 'anon'}#${sessionGen}`
 }
+
+// ---------------------------------------------------------------------------
+// 当前项目：存储里的选择（切换项目会写入）+ 页面报告的实际解析结果（回退到第一个项目时不写存储）
+
+let resolvedProject: string | undefined
+/** 温控页每次渲染报告实际的当前项目 */
+export function noteCurrentProject(id: string) { resolvedProject = id }
 
 // ---------------------------------------------------------------------------
 // 状态
@@ -99,12 +125,6 @@ export function clearResult(projectId: string, target: string) {
   if (results.delete(rk(currentSessionKey(), projectId, target))) emit()
 }
 
-/** 完成时用户是否仍在原项目（存储里的当前项目；为空表示还没选过，按未切换处理） */
-const stillCurrentProject = (projectId: string) => {
-  const s = getStoredProjectId()
-  return !s || s === projectId
-}
-
 /**
  * 下发失败的分类。确定没有生效的才算「失败」：写防护、参数错误、未登录 / 无权限、控制屏未连接（503，消息没发出去）、
  * 控制屏明确回复 success=false。其余（超时、断网、500、回复无法解析、中止、期限到）指令都可能已到控制屏，一律「结果未知」
@@ -118,7 +138,7 @@ export function classify(e: unknown): { outcome: 'fail' | 'unknown'; text: strin
 }
 
 class Deadline extends Error { constructor(what: string) { super(`${what}超时`) } }
-/** 有界等待：到期 reject（并中止 signal 对应的读取）；原 Promise 不会被取消（写请求可能仍会完成，所以到期后按结果未知处理） */
+/** 有界等待：到期 reject（并中止 signal 对应的读取）；原 Promise 不会被取消 */
 function within<T>(p: Promise<T>, ms: number, what: string, ac?: AbortController): Promise<T> {
   let t: ReturnType<typeof setTimeout>
   const timer = new Promise<never>((_, reject) => { t = setTimeout(() => { ac?.abort(); reject(new Deadline(what)) }, Math.max(0, ms)) })
@@ -137,9 +157,9 @@ export interface OpSpec<P> {
   preflight: (signal: AbortSignal) => Promise<Preflight<P>>
   /** 真正下发（经统一写入口）；resolve 即 success=true */
   send: (payload: P) => Promise<void>
-  /** 写后回读：新发一次 200（不复用写前的请求）；失败 reject */
+  /** 写后回读：新发一次 200（不复用写前的请求）；失败或会话已变化时 reject */
   verify: (signal: AbortSignal) => Promise<unknown>
-  /** 发起的页面还在（没卸载）；预检期间变为 false 就中止 */
+  /** 发起的页面还在（没卸载）；预检期间为 false 就中止 */
   present: () => boolean
   toast: (text: string, err?: boolean) => void
 }
@@ -147,12 +167,14 @@ export interface OpSpec<P> {
 /** 执行一次下发（见文件头的状态图） */
 export async function runOp<P>(o: OpSpec<P>): Promise<RunResult> {
   if (locks.has(o.projectId)) return 'busy'
-  const op: Lock = { opId: ++seq, projectId: o.projectId, sessionKey: currentSessionKey(), target: o.target, subject: o.subject, phase: 'preflight' }
+  const selAtStart = getStoredProjectId()
+  const op: Lock = { opId: ++seq, projectId: o.projectId, sessionKey: currentSessionKey(), target: o.target, subject: o.subject, phase: 'preflight', sendPending: false }
   locks.set(o.projectId, op)
   results.delete(rk(op.sessionKey, o.projectId, o.target))
   emit()
   const sameSession = () => currentSessionKey() === op.sessionKey
-  const visible = () => sameSession() && stillCurrentProject(o.projectId)
+  const sameProject = () => getStoredProjectId() === selAtStart && (resolvedProject === undefined || resolvedProject === o.projectId)
+  const visible = () => sameSession() && sameProject()
   const say = (text: string, err?: boolean) => { if (visible()) { try { o.toast(text, err) } catch { /* 提示失败不影响状态机 */ } } }
   const setPhase = (ph: Phase) => { op.phase = ph; emit() }
   const record = (r: WriteResult) => { results.set(rk(op.sessionKey, o.projectId, o.target), r); emit() }
@@ -169,19 +191,22 @@ export async function runOp<P>(o: OpSpec<P>): Promise<RunResult> {
     } catch (e) {
       pre = { ok: false, reason: `确认后重新读取面板失败（${e instanceof Error ? e.message : '未知错误'}）` }
     }
-    const left = !sameSession() || !stillCurrentProject(o.projectId) || !o.present()
-    if (left) return 'aborted' // 离开、切项目、会话变化：不写，不向别处提示
+    if (!sameSession() || !sameProject() || !o.present()) return 'aborted' // 离开、切项目、会话变化：不写，不向别处提示
     if (!pre.ok) { say(`${o.subject}：${pre.reason}，本次未下发，请重新核对后再下发`, true); return 'aborted' }
 
     // ---- sending（发送前同步再核对）
-    if (!sameSession() || !stillCurrentProject(o.projectId) || !o.present()) return 'aborted'
+    if (!sameSession() || !sameProject() || !o.present()) return 'aborted'
     setPhase('sending')
     mayHaveWritten = true
     const deadlineAt = Date.now() + LIMITS.writeTotalMs
     let outcome: Outcome
     let text: string
+    // 原 send 的结算单独跟踪：期限到了它也可能还在路上
+    op.sendPending = true
+    const sent = o.send(pre.payload)
+    sent.then(() => {}, () => {}).finally(() => { op.sendPending = false; emit() })
     try {
-      await within(o.send(pre.payload), deadlineAt - Date.now(), '等待控制屏应答')
+      await within(sent, deadlineAt - Date.now(), '等待控制屏应答')
       outcome = 'ok'
       text = o.okText
     } catch (e) {
@@ -190,6 +215,7 @@ export async function runOp<P>(o: OpSpec<P>): Promise<RunResult> {
       text = c.text
       if (!c.sent) mayHaveWritten = false
     }
+    op.outcome = outcome
     // 成功：仍在原项目就提示，否则把结果留给原项目；失败 / 未知：提示（若仍可见）并记录
     if (outcome === 'ok') {
       if (visible()) say(text)
@@ -203,23 +229,22 @@ export async function runOp<P>(o: OpSpec<P>): Promise<RunResult> {
 
     // ---- verifying
     setPhase('verifying')
-    if (!sameSession()) {
-      // 会话变了：不用新凭据回读。写已结束（成功 / 确定失败）则释放；结果未知则锁住待核对
-      if (outcome === 'unknown') finalState = 'unknown-locked'
-      return outcome
-    }
+    // 会话变了：不用新凭据回读。写已结束（成功 / 确定失败）则释放；结果未知则锁住待核对
+    const sessionGone = () => { if (outcome === 'unknown') finalState = 'unknown-locked'; return outcome }
+    if (!sameSession()) return sessionGone()
     const vac = new AbortController()
     let read = false
-    // 期限已用完就不再回读（直接按未知处理）
-    if (deadlineAt - Date.now() > 0) {
+    if (deadlineAt - Date.now() > 0) { // 期限已用完就不再回读（直接按未知处理）
       try {
         await within(o.verify(vac.signal), deadlineAt - Date.now(), '回读面板', vac)
         read = true
       } catch { read = false }
     }
+    if (!sameSession()) return sessionGone() // 回读途中会话变化：读数丢弃
     const cur = results.get(rk(op.sessionKey, o.projectId, o.target))
     if (cur) record({ ...cur, readback: read ? 'ok' : 'fail' })
     if (!read && outcome !== 'fail') finalState = 'unknown-locked'
+    if (op.sendPending) finalState = 'unknown-locked' // 原 send 还没结算：无论如何不解锁
     return outcome
   } catch {
     // 回调意外抛错：还没写就释放；可能已写就锁住
@@ -231,21 +256,29 @@ export async function runOp<P>(o: OpSpec<P>): Promise<RunResult> {
   }
 }
 
-/** unknown-locked 的核对：新发一次 200，读取成功才解锁。返回是否解锁 */
-export async function checkLocked(projectId: string, read: (signal: AbortSignal) => Promise<unknown>): Promise<boolean> {
+/**
+ * unknown-locked 的核对：新发一次 200。读取成功、会话没变、且原 send 已结算才解锁；原 send 未结算时只读不解锁。
+ * read 应绑定 signal 与发起时的会话（会话变化时 reject）
+ */
+export async function checkLocked(projectId: string, read: (signal: AbortSignal) => Promise<unknown>): Promise<CheckResult> {
   const l = locks.get(projectId)
-  if (!l || l.phase !== 'unknown-locked' || l.checking) return false
+  if (!l || l.phase !== 'unknown-locked' || l.checking) return 'none'
+  const key = currentSessionKey()
   l.checking = true
   emit()
   const ac = new AbortController()
   try {
-    await within(read(ac.signal), LIMITS.preflightMs, '核对读取', ac)
+    try {
+      await within(read(ac.signal), LIMITS.preflightMs, '核对读取', ac)
+    } catch {
+      return currentSessionKey() !== key ? 'stale' : 'failed'
+    }
+    if (currentSessionKey() !== key) return 'stale'
+    if (l.sendPending) return 'send-pending'
     if (locks.get(projectId)?.opId === l.opId) locks.delete(projectId)
     const r = results.get(rk(l.sessionKey, projectId, l.target))
-    if (r && l.sessionKey === currentSessionKey()) results.set(rk(l.sessionKey, projectId, l.target), { ...r, readback: 'ok' })
-    return true
-  } catch {
-    return false
+    if (r && l.sessionKey === key) results.set(rk(l.sessionKey, projectId, l.target), { ...r, readback: 'ok' })
+    return 'unlocked'
   } finally {
     l.checking = false
     emit()
@@ -260,8 +293,10 @@ export function useWrites(projectId: string): { lock: Lock | null; mine: boolean
   const lock = lockOf(projectId)
   return { lock, mine: !!lock && lock.sessionKey === currentSessionKey(), result: (t) => getResult(projectId, t) }
 }
-function subscribe(fn: () => void) { subs.add(fn); return () => { subs.delete(fn) } }
+function subscribe(fn: () => void) { watchSession(); subs.add(fn); return () => { subs.delete(fn) } }
 const getVersion = () => version
+/** 仅供测试 */
+export const __versionForTests = () => version
 
 /** 仅供测试：清空状态并重新订阅会话（__resetSessionForTests 会清掉订阅） */
 export function __resetWritesForTests() {
@@ -269,7 +304,7 @@ export function __resetWritesForTests() {
   results = new Map()
   unsubSession = null
   lastUserKey = undefined
-  LIMITS.preflightMs = 15_000
-  LIMITS.writeTotalMs = 30_000
+  resolvedProject = undefined
+  Object.assign(LIMITS, DEFAULT_LIMITS)
   emit()
 }

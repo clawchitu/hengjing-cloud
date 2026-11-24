@@ -8,6 +8,7 @@ import { queryKeys } from '@/api/query'
 import type { Project } from '@/data/org'
 import type { RoomView } from './model'
 import { thermostatSource } from './source'
+import { currentSessionKey } from './writes'
 import type { StatsRange } from './stats'
 
 export const ROOMS_POLL_MS = 15_000
@@ -41,10 +42,14 @@ export function useFreshRooms(project: Project | null) {
   const id = project?.id ?? ''
   return useCallback(async (signal?: AbortSignal): Promise<RoomView[]> => {
     if (!id) throw new Error('没有当前项目')
+    // 绑定发起时的会话代次：返回后先校验（会话变了或已中止就丢弃，不写缓存），再写回缓存
+    const session = currentSessionKey()
     const src = thermostatSource()
     const key = roomsKey(src.kind, id)
     await qc.cancelQueries({ queryKey: key, exact: true })
     const rooms = await src.rooms(id, signal)
+    if (signal?.aborted) throw new Error('读取已中止，结果已丢弃')
+    if (currentSessionKey() !== session) throw new Error('读取期间登录状态已变化，结果已丢弃')
     qc.setQueryData(key, rooms)
     return rooms
   }, [qc, id])

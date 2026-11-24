@@ -693,29 +693,149 @@ describe('下发状态机：确认后新读、写后新读、会话、期限', (
     expect(within(card('客厅')).getByLabelText('客厅 设定温度').textContent).toBe('26.0°C')
   })
 
-  it('请求永不返回：到期进入 unknown-locked，整页禁止下发，「核对」读取成功后才解锁', async () => {
-    const be = backend({ '/ctrl/room-temperature-set': () => new Promise<Response>(() => {}) })
+  it('超时 → 核对 → 原写迟到 → 第二次操作：原写未结束前核对只读不解锁；迟到结算后再核对才解锁，之后才能再下发', async () => {
+    const late = deferred(ok201)
+    const be = backend({ '/ctrl/room-temperature-set': late.handler })
     LIMITS.writeTotalMs = 150
     await draftAndSend()
     await confirmOk()
-    const bar = await waitFor(() => { const b = document.querySelector('[data-lock="unknown-locked"]') as HTMLElement; expect(b).toBeTruthy(); return b })
-    expect(bar.textContent).toContain('上次下发（客厅）结果未知')
+    const lockBar = () => document.querySelector('[data-lock="unknown-locked"]') as HTMLElement
+    await waitFor(() => expect(lockBar()).toBeTruthy())
+    expect(lockBar().textContent).toContain('上次下发（客厅）结果未知')
+    expect(lockBar().textContent).toContain('上一条指令尚未结束')
     expect((screen.getByRole('button', { name: '全部开启' }) as HTMLButtonElement).disabled).toBe(true)
     expect(btn(card('主卧'), '主卧 设定温度升高').disabled).toBe(true)
-    expect((within(card('客厅')).getByRole('switch', { name: '客厅 开关' }) as HTMLButtonElement).disabled).toBe(true)
-    // 核对失败：仍锁住
-    rooms = []
-    fakeBackend({ '/ctrl/room-temperature-data-get': () => json({ code: 14, message: 'x' }, 503) })
+    // 核对：能读，但原写还没结束 → 不解锁
+    fireEvent.click(within(lockBar()).getByRole('button', { name: '核对' }))
+    await waitFor(() => expect(toasts()).toContain('上一条指令尚未结束，暂不能恢复下发'))
+    expect(lockBar()).toBeTruthy()
+    // 原写迟到（成功）
+    await late.release()
+    await waitFor(() => expect(lockBar().textContent).not.toContain('上一条指令尚未结束'))
+    fireEvent.click(within(lockBar()).getByRole('button', { name: '核对' }))
+    await waitFor(() => expect(document.querySelector('[data-lock]')).toBeNull())
+    expect(toasts()).toContain('核对完成，已恢复下发')
+    // 第二次操作（客厅还有未下发草稿，开关禁用；用主卧的开关）
+    fireEvent.click(within(card('主卧')).getByRole('switch', { name: '主卧 开关' }))
+    await confirmOk()
+    await waitFor(() => expect(writes(be)).toHaveLength(2))
+  })
+
+  it('http 层超时会中止底层请求（AbortController），原写因此结算：超时后核对即可解锁', async () => {
+    setConfig({ apiBase: '/api', apiEnv: 'test', dataSource: 'real', ctrlTimeoutMs: 100 })
+    let aborted = false
+    const be = backend()
+    const orig = be.fetchMock.getMockImplementation()!
+    be.fetchMock.mockImplementation(async (input: string, init: RequestInit = {}) => {
+      if (input.endsWith('/ctrl/room-temperature-set')) {
+        be.calls.push({ url: input, method: 'POST', headers: {}, body: JSON.parse(String(init.body)) })
+        return new Promise<Response>((_, reject) => init.signal?.addEventListener('abort', () => { aborted = true; reject(new DOMException('aborted', 'AbortError')) }))
+      }
+      return orig(input, init)
+    })
+    let wroteOnce = false
+    const read = be.fetchMock.getMockImplementation()!
+    be.fetchMock.mockImplementation(async (input: string, init?: RequestInit) => {
+      if (input.endsWith('/ctrl/room-temperature-set')) wroteOnce = true
+      // 写后的回读失败，进入 unknown-locked
+      if (wroteOnce && input.endsWith('/ctrl/room-temperature-data-get')) return json({ code: 14, message: 'x' }, 503)
+      return read(input, init)
+    })
+    await draftAndSend()
+    await confirmOk()
+    await waitFor(() => expect(toasts()).toContain('客厅 下发结果未知：未收到控制屏应答'))
+    expect(aborted).toBe(true) // 底层 fetch 确实被 abort
+    const bar = await waitFor(() => { const b = document.querySelector('[data-lock="unknown-locked"]') as HTMLElement; expect(b).toBeTruthy(); return b })
+    expect(bar.textContent).not.toContain('上一条指令尚未结束')
+    wroteOnce = false
     fireEvent.click(within(bar).getByRole('button', { name: '核对' }))
+    await waitFor(() => expect(document.querySelector('[data-lock]')).toBeNull())
+  })
+
+  it('核对读取途中换账号：读数丢弃，不解锁', async () => {
+    let wrote = false
+    const slowRead = deferred(() => reply200(rooms))
+    let mode: 'normal' | 'fail' | 'slow' = 'normal'
+    backend({
+      '/ctrl/room-temperature-set': () => { wrote = true; mode = 'fail'; return json({ code: 4, message: 'x' }, 504) },
+      '/ctrl/room-temperature-data-get': () => (mode === 'fail' && wrote ? json({ code: 14, message: 'x' }, 503) : mode === 'slow' ? slowRead.handler() : reply200(rooms)),
+    })
+    await draftAndSend()
+    await confirmOk()
+    const bar = await waitFor(() => { const b = document.querySelector('[data-lock="unknown-locked"]') as HTMLElement; expect(b).toBeTruthy(); return b })
+    mode = 'slow'
+    fireEvent.click(within(bar).getByRole('button', { name: '核对' }))
+    await flush()
+    await act(async () => { await signOut() })
+    await act(async () => { await signIn('u2', 'pw', true) })
+    mode = 'normal'
+    await screen.findByText('客厅')
+    // 旧会话的读取返回了不同的值：不能写进新会话的缓存
+    rooms = [{ ...ROOM, setTemp: 29 }, OFF_ROOM]
+    await slowRead.release()
     await flush(80)
     expect(document.querySelector('[data-lock="unknown-locked"]')).toBeTruthy()
-    // 核对成功：解锁
-    rooms = [ROOM, OFF_ROOM]
-    fakeBackend({ '/ctrl/room-temperature-data-get': () => reply200(rooms) })
-    fireEvent.click(within(document.querySelector('[data-lock="unknown-locked"]') as HTMLElement).getByRole('button', { name: '核对' }))
+    expect(within(card('客厅')).getByLabelText('客厅 设定温度').textContent).toBe('25.5°C')
+  })
+
+  it('预检读取途中退出登录：读数丢弃、不写', async () => {
+    const slowRead = deferred(() => reply200(rooms))
+    let slow = false
+    const be = backend({
+      '/ctrl/room-temperature-set': ok201,
+      '/ctrl/room-temperature-data-get': () => (slow ? slowRead.handler() : reply200(rooms)),
+    })
+    await draftAndSend()
+    slow = true
+    await confirmOk()
+    await flush()
+    await act(async () => { await signOut() })
+    await slowRead.release()
+    await flush(80)
+    expect(writes(be)).toHaveLength(0)
+    expect(document.querySelector('[data-lock]')).toBeNull()
+  })
+
+  it('锁定后重新挂载，首次读取 503 / 空列表 / 项目离线：空态里也有锁提示和「核对」，核对失败保留锁可再试', async () => {
+    let mode: 'normal' | 'down' | 'empty' = 'normal'
+    let offline = false
+    let wrote = false
+    backend({
+      '/ctrl/projects': () => json({ project_entities: [offline ? { ...P1, online: undefined } : P1, P2, P12, POFF] }),
+      '/ctrl/room-temperature-set': () => { wrote = true; return json({ code: 4, message: 'x' }, 504) },
+      '/ctrl/room-temperature-data-get': () => (wrote && mode !== 'empty' ? json({ code: 14, message: '控制屏消息发送失败' }, 503) : reply200(mode === 'empty' ? [] : rooms)),
+    })
+    await draftAndSend()
+    await confirmOk()
+    await waitFor(() => expect(document.querySelector('[data-lock="unknown-locked"]')).toBeTruthy())
+    const bar = () => document.querySelector('[data-lock="unknown-locked"]') as HTMLElement
+    const remount = async () => {
+      fireEvent.click(rawButton('去首页'))
+      await screen.findByText('首页内容')
+      await act(async () => { client.clear() })
+      fireEvent.click(rawButton('回温控'))
+    }
+    // 项目离线：整页空态
+    offline = true
+    await remount()
+    await screen.findByText(/项目离线，无法读取房间温控面板/)
+    expect(bar()).toBeTruthy()
+    // 503：空态
+    offline = false
+    mode = 'down'
+    await remount()
+    await screen.findByText('控制屏当前不在线，无法读取房间温控面板。', { exact: false })
+    expect(bar()).toBeTruthy()
+    fireEvent.click(within(bar()).getByRole('button', { name: '核对' }))
+    await waitFor(() => expect(toasts()).toContain('核对读取失败，仍暂停下发，可再次核对'))
+    expect(bar()).toBeTruthy()
+    // 空列表：空态
+    mode = 'empty'
+    fireEvent.click(screen.getByRole('button', { name: '重试' }))
+    await screen.findByText('未读到房间温控面板')
+    expect(bar()).toBeTruthy()
+    fireEvent.click(within(bar()).getByRole('button', { name: '核对' }))
     await waitFor(() => expect(document.querySelector('[data-lock]')).toBeNull())
-    expect((screen.getByRole('button', { name: '全部开启' }) as HTMLButtonElement).disabled).toBe(false)
-    expect(writes(be)).toHaveLength(1)
   })
 
   it('写的过程中退出登录：旧操作不回读、不提示；同账号重新登录后看不到旧结果，可以正常下发', async () => {

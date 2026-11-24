@@ -121,17 +121,60 @@ describe('sending', () => {
     expect(W.getResult('P1', 'R1')).toMatchObject({ outcome: 'unknown', readback: 'ok' })
   })
 
-  it('请求永不返回：到总期限进入 unknown-locked；核对读取成功后才解锁，核对失败仍锁住', async () => {
+  it('请求到总期限还没返回：unknown-locked；原 send 未结算时核对只读不解锁，结算（迟到）后再核对才解锁', async () => {
     W.LIMITS.writeTotalMs = 30
-    const { s, calls } = spec({ send: () => new Promise<never>(() => {}) })
+    const g = gate()
+    const { s, calls } = spec({ send: async () => { await g.p } })
     expect(await W.runOp(s)).toBe('unknown')
-    expect(calls).toEqual(['preflight']) // 期限已用完，回读也超时
-    expect(W.lockOf('P1')?.phase).toBe('unknown-locked')
+    expect(calls).toEqual(['preflight']) // 期限已用完，不再回读
+    expect(W.lockOf('P1')).toMatchObject({ phase: 'unknown-locked', sendPending: true })
     expect(await W.runOp(spec().s)).toBe('busy')
-    expect(await W.checkLocked('P1', async () => { throw new Error('读不到') })).toBe(false)
+    expect(await W.checkLocked('P1', async () => { throw new Error('读不到') })).toBe('failed')
+    expect(await W.checkLocked('P1', async () => [])).toBe('send-pending')
     expect(W.lockOf('P1')?.phase).toBe('unknown-locked')
-    expect(await W.checkLocked('P1', async () => [])).toBe(true)
+    g.open() // 原写迟到
+    await tick(); await tick()
+    expect(W.lockOf('P1')?.sendPending).toBe(false)
+    expect(await W.checkLocked('P1', async () => [])).toBe('unlocked')
     expect(W.lockOf('P1')).toBeNull()
+    expect(await W.runOp(spec().s)).toBe('ok') // 第二次操作此时才允许
+  })
+
+  it('核对读取途中会话变化：结果丢弃（stale），不解锁', async () => {
+    W.LIMITS.writeTotalMs = 10
+    const { s } = spec({ send: async () => { throw new ApiError('timeout', 'x') }, verify: async () => { throw new Error('读不到') } })
+    await W.runOp(s)
+    expect(W.lockOf('P1')).toMatchObject({ phase: 'unknown-locked', sendPending: false })
+    expect(await W.checkLocked('P1', async () => { userKey = 'user:B' })).toBe('stale')
+    expect(W.lockOf('P1')?.phase).toBe('unknown-locked')
+  })
+
+  it('回读途中会话变化：读数丢弃；成功的写释放锁、不提示', async () => {
+    const { s, toasts } = spec({ verify: async () => { userKey = 'user:B' } })
+    expect(await W.runOp(s)).toBe('ok')
+    expect(toasts).toEqual(['客厅 已下发']) // 成功提示在回读前已弹（当时会话未变）
+    expect(W.lockOf('P1')).toBeNull()
+    userKey = 'user:A'
+  })
+
+  it('结果未知后回读途中会话变化：读数丢弃，保持锁（unknown-locked）', async () => {
+    const { s } = spec({ send: async () => { throw new ApiError('timeout', 'x') }, verify: async () => { userKey = 'user:B' } })
+    expect(await W.runOp(s)).toBe('unknown')
+    expect(W.lockOf('P1')?.phase).toBe('unknown-locked')
+  })
+
+  it('写 + 回读总期限覆盖「写 12 秒 + 401 续期 12 秒 + 重放 12 秒」的最长链', async () => {
+    W.__resetWritesForTests()
+    const { getConfig } = await import('@/api/config')
+    expect(W.LIMITS.writeTotalMs).toBeGreaterThanOrEqual(3 * getConfig().ctrlTimeoutMs)
+    expect(W.LIMITS.writeTotalMs).toBe(45_000)
+  })
+
+  it('渲染期间读取会话标识不通知订阅者（只读）', () => {
+    const v = W.__versionForTests()
+    userKey = 'user:C'
+    W.currentSessionKey()
+    expect(W.__versionForTests()).toBe(v)
   })
 })
 

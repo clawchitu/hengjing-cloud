@@ -20,7 +20,7 @@ import type { WriteQuery } from '../api/ctrl'
 import { PROGRAMS } from '../data/constants'
 import {
   ALL, buildRoomSet, buildRoomSwitch, canStep, checkLocked, clearResult, describeChanges, describeResult, draftChanges, ecoLabel,
-  editBlock, editDraft, fmtTemp, hasDraftChanges, lockOf, reconcileDraft, resolveTempRange, runOp, sameQuery, stepTemp, summarize,
+  editBlock, editDraft, fmtTemp, hasDraftChanges, lockOf, noteCurrentProject, reconcileDraft, resolveTempRange, runOp, sameQuery, stepTemp, summarize,
   switchBlock, tempBlock, thermostatSource, useFreshRooms, useRooms, useRoomStats, useWrites, windLabel,
   type ChartData, type EditCtx, type EndMode, type Lock, type RoomDraft, type RoomView, type StatsRange, type TempRange, type WriteResult,
 } from '../features/thermostat'
@@ -245,10 +245,40 @@ function RoomCard({ room: r, ctx, range, selected, onSelect, draft, conflict, on
   )
 }
 
-function Empty({ project, title, children }: { project: Project; title: string; children: React.ReactNode }) {
+/**
+ * 项目下发锁的提示条与「核对」入口。独立于房间列表渲染：空列表、首次读取失败、503 空态时也显示并可操作。
+ * hideOwnRoom：自己会话在单个房间上的进行中阶段由房间卡显示，这里不重复
+ */
+function LockBar({ projectId, lock, mine, freshRooms }: { projectId: string; lock: Lock | null; mine: boolean; freshRooms: (signal?: AbortSignal) => Promise<RoomView[]> }) {
+  if (!lock) return null
+  const locked = lock.phase === 'unknown-locked'
+  if (!locked && mine && lock.target !== ALL) return null
+  const head = !locked ? (lock.phase === 'preflight' ? '正在重新读取面板，核对确认的内容 …' : lock.phase === 'sending' ? '正在下发到控制屏 …' : '已下发，正在重新读取面板核对 …')
+    : !mine ? '本项目上一次下发（不是本次登录发起的）结果未知，已暂停下发。'
+    : lock.outcome === 'ok' ? `上次下发（${lock.subject}）已成功，但当前状态未核对，本项目已暂停下发。`
+    : `上次下发（${lock.subject}）结果未知，为避免重复下发，本项目已暂停下发。`
+  const tail = !locked ? '' : lock.checking ? '正在核对 …'
+    : lock.sendPending ? '上一条指令尚未结束（请求可能仍在路上），结束后再核对才能恢复。'
+    : '请点「核对」重新读取面板，读取成功后恢复。'
+  const check = async () => {
+    const r = await checkLocked(projectId, (signal) => freshRooms(signal))
+    if (r === 'unlocked') showToast('核对完成，已恢复下发')
+    else if (r === 'send-pending') showToast('已读取面板当前值，但上一条指令尚未结束，暂不能恢复下发', true)
+    else if (r === 'failed') showToast('核对读取失败，仍暂停下发，可再次核对', true)
+  }
+  return (
+    <div className={'te-bar ' + (locked ? 'fail' : 'sending')} role={locked ? 'alert' : 'status'} style={{ margin: '0 0 16px' }} data-lock={lock.phase}>
+      <span>{head}{tail}</span>
+      {locked && <Button disabled={lock.checking} onClick={() => void check()}>核对</Button>}
+    </div>
+  )
+}
+
+function Empty({ project, title, children, lockBar }: { project: Project; title: string; children: React.ReactNode; lockBar?: React.ReactNode }) {
   return (
     <div className="page">
       <div className="page-head"><div><h1>房间温控面板</h1><div className="sub">{project.name}</div></div></div>
+      {lockBar}
       <Card className="placeholder">
         <div className="ph-ico"><Icon icon={faFan} /></div>
         <h3>{title}</h3>
@@ -292,6 +322,11 @@ export default function Thermostat() {
   const rec = reconcileDraft(rawDraft, draftRoom, ctx)
   const draft = rec.draft
   const latest = useLatest({ project, online, list })
+  // 下发状态机判断「是否仍在原项目」用实际解析出的当前项目（回退到第一个项目时不写存储）
+  useLayoutEffect(() => { if (project) noteCurrentProject(project.id) }, [project])
+  const lock = writes.lock
+  const busy = lock !== null
+  const lockBar = project ? <LockBar projectId={project.id} lock={lock} mine={writes.mine} freshRooms={freshRooms} /> : null
   const present = usePresent()
 
   // 草稿生命周期：回读后不能设置 / 已生效的草稿真正清除（不只是不显示），清除原因提示一次
@@ -316,28 +351,21 @@ export default function Thermostat() {
     </div>
   )
   // 真实接口：项目离线不读控制屏（一定是 503），显示空态而不是旧数据
-  if (real && !online) return <Empty project={project} title="控制屏未连接">项目离线，无法读取房间温控面板。项目恢复在线后自动刷新。</Empty>
+  if (real && !online) return <Empty project={project} lockBar={lockBar} title="控制屏未连接">项目离线，无法读取房间温控面板。项目恢复在线后自动刷新。</Empty>
   if (rooms.isError && !list) {
     const e = rooms.error
-    if (isApiError(e) && e.kind === 'unavailable') return <Empty project={project} title="控制屏未连接">控制屏当前不在线，无法读取房间温控面板。</Empty>
+    if (isApiError(e) && e.kind === 'unavailable') return <Empty project={project} lockBar={lockBar} title="控制屏未连接">控制屏当前不在线，无法读取房间温控面板。<br /><Button style={{ marginTop: 14 }} onClick={() => void rooms.refetch()}>重试</Button></Empty>
     return (
-      <Empty project={project} title="房间温控数据读取失败">
+      <Empty project={project} lockBar={lockBar} title="房间温控数据读取失败">
         {isApiError(e) ? e.message : '读取失败'}<br /><Button style={{ marginTop: 14 }} onClick={() => void rooms.refetch()}>重试</Button>
       </Empty>
     )
   }
-  if (!list) return <div className="page" />
-  if (list.length === 0) return <Empty project={project} title="未读到房间温控面板">控制屏没有返回房间温控面板数据。</Empty>
+  if (!list) return <div className="page">{lockBar}</div>
+  if (list.length === 0) return <Empty project={project} lockBar={lockBar} title="未读到房间温控面板">控制屏没有返回房间温控面板数据。</Empty>
 
   const sum = summarize(list)
-  const lock = writes.lock
-  const busy = lock !== null
   const allResult = writes.result(ALL)
-  const lockText = !lock ? '' : lock.phase === 'unknown-locked'
-    ? (writes.mine ? `上次下发（${lock.subject}）结果未知，为避免重复下发，本项目已暂停下发。` : '本项目上一次下发（不是本次登录发起的）结果未知，已暂停下发。')
-      + (lock.checking ? '正在核对 …' : '请点「核对」重新读取面板，读取成功后恢复。')
-    : lock.target === ALL || !writes.mine ? (lock.phase === 'preflight' ? '正在重新读取面板，核对确认的内容 …' : lock.phase === 'sending' ? '正在下发到控制屏 …' : '已下发，正在重新读取面板核对 …')
-      : ''
 
   const onEdit = async (key: string, patch: { temp?: number; eco?: 0 | 1 }) => {
     const room = list.find((x) => x.key === key)
@@ -396,12 +424,7 @@ export default function Thermostat() {
           <Button variant="primary" onClick={() => void all(true)} disabled={busy || !online}><Icon icon={faPowerOff} />全部开启</Button>
         </div>
       </div>
-      {lockText && (
-        <div className={'te-bar ' + (lock?.phase === 'unknown-locked' ? 'fail' : 'sending')} role={lock?.phase === 'unknown-locked' ? 'alert' : 'status'} style={{ margin: '0 0 16px' }} data-lock={lock?.phase}>
-          <span>{lockText}</span>
-          {lock?.phase === 'unknown-locked' && <Button disabled={lock.checking} onClick={() => void checkLocked(project.id, (signal) => freshRooms(signal))}>核对</Button>}
-        </div>
-      )}
+      {lockBar}
       {allResult && lock?.target !== ALL && (
         <div className={'te-bar ' + (allResult.outcome === 'ok' ? 'pending' : 'fail')} role={allResult.outcome === 'ok' ? 'status' : 'alert'} style={{ margin: '0 0 16px' }} data-result="all">
           <span>{resultText(allResult, null)}</span>
