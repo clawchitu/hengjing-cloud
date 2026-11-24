@@ -211,6 +211,7 @@ export function useResetOnAccountChange() {
   const prev = useRef(userKey)
   useLayoutEffect(() => {
     if (prev.current && prev.current !== userKey) {
+      // removeQueries 本身也会中止进行中的请求（用例验证了 signal 被 abort）；cancelQueries 保险起见先发
       void qc.cancelQueries()
       qc.removeQueries()
     }
