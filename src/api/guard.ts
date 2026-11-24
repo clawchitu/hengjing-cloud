@@ -1,0 +1,82 @@
+// 写操作防护。所有下发类接口（ctrl 201、203、204、206 和批量统一控制）只有一个入口：
+// http.ts 的 requestWrite()，它在发送前调用这里的 assertWriteAllowed()；普通的 request()
+// 遇到写接口路径（先规范化再判断，见 normalizePath）或非规范路径直接拒绝。
+// 规则（方案 3.6，按 S4 要求简化）：
+// - writeMode='off'：全部拦截；
+// - 默认 writeMode='test-only'：只在测试环境放行，生产环境一律拦截；
+// - 生产环境下发必须在运行时配置里显式写 writeMode='on'（须负责人确认）；
+// - writeProjectIds 非空时，只放行名单里的项目（任何环境都生效）。
+// 判断不出环境时 config.ts 按生产处理，所以「不确定」等于「拦截」。
+import { getConfig, type RuntimeConfig } from './config'
+import { ApiError } from './errors'
+
+/** 写接口 → 路径（相对 apiBase） */
+export const WRITE_ROUTES = {
+  'ctrl-201': '/ctrl/room-temperature-set',
+  'ctrl-203': '/ctrl/unified-ctrl-set',
+  'ctrl-204': '/ctrl/running-ctrl-set',
+  'ctrl-206': '/ctrl/project-room-switch-set',
+  'unified-ctrls-send': '/ctrl/unified-ctrls-send',
+} as const
+
+export type WriteOp = keyof typeof WRITE_ROUTES
+export const WRITE_OPS = Object.keys(WRITE_ROUTES) as WriteOp[]
+
+/**
+ * 路径规范化（用于判断是否写接口，按 fetch/URL 的归一规则从严处理）：
+ * 去掉空白和控制字符、反斜杠当斜杠、去掉查询串和锚点、解百分号编码、
+ * 处理 . 和 ..、合并重复斜杠、转小写、去掉开头的 /v1。
+ */
+export function normalizePath(path: string): string {
+  let s = String(path).replace(/[\u0000-\u0020\u007f]/g, '').replace(/\\/g, '/').split(/[?#]/)[0]
+  for (let i = 0; i < 3; i++) {
+    try {
+      const d = decodeURIComponent(s)
+      if (d === s) break
+      s = d.replace(/[\u0000-\u0020\u007f]/g, '').replace(/\\/g, '/').split(/[?#]/)[0]
+    } catch { break }
+  }
+  const out: string[] = []
+  for (const seg of s.toLowerCase().split('/')) {
+    if (!seg || seg === '.') continue
+    if (seg === '..') out.pop()
+    else out.push(seg)
+  }
+  return ('/' + out.join('/')).replace(/^\/v1(?=\/|$)/, '') || '/'
+}
+
+/** 路径里是否有非规范写法（. 或 .. 段、反斜杠、空白或控制字符）；request() 直接拒绝这类路径 */
+export function isNonCanonicalPath(path: string): boolean {
+  const p = String(path).split(/[?#]/)[0]
+  return /[\\\u0000-\u0020\u007f]/.test(p) || /(^|\/)\.{1,2}(\/|$)/.test(p) || /%(2e|5c|2f|0[0-9a-f]|1[0-9a-f]|20)/i.test(p)
+}
+
+const WRITE_PATHS = new Set<string>(Object.values(WRITE_ROUTES))
+
+/**
+ * 是否写接口路径（先 normalizePath）。除了已登记的 5 个，ctrl 下所有 *-set / *-send /
+ * 透传控制消息也按写处理，防止以后新增的下发接口不小心走普通请求；ctrl 段出现在任意层级都算。
+ */
+export function isWritePath(path: string): boolean {
+  const p = normalizePath(path)
+  return WRITE_PATHS.has(p) || /(^|\/)ctrl\/[^/]*(-set|-send|-ctrl-message)$/.test(p) || /(^|\/)ctrl\/(trans|pass)-ctrl-message/.test(p)
+}
+
+export type WriteDecision = { ok: true } | { ok: false; reason: string }
+
+export function checkWrite(op: WriteOp, projectIds: readonly string[], cfg: RuntimeConfig = getConfig()): WriteDecision {
+  if (!WRITE_OPS.includes(op)) return { ok: false, reason: `未登记的写操作：${op}` }
+  if (cfg.writeMode === 'off') return { ok: false, reason: '下发已关闭（writeMode=off）' }
+  if (cfg.apiEnv !== 'test' && cfg.writeMode !== 'on') return { ok: false, reason: '生产环境下发未开启' }
+  if (!projectIds.length) return { ok: false, reason: '未指定项目' }
+  if (cfg.writeProjectIds.length) {
+    const outside = projectIds.filter((id) => !cfg.writeProjectIds.includes(id))
+    if (outside.length) return { ok: false, reason: `项目不在下发名单内：${outside.join('、')}` }
+  }
+  return { ok: true }
+}
+
+export function assertWriteAllowed(op: WriteOp, projectIds: readonly string[], cfg?: RuntimeConfig) {
+  const d = checkWrite(op, projectIds, cfg)
+  if (!d.ok) throw new ApiError('write_blocked', d.reason)
+}

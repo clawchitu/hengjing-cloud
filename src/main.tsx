@@ -12,6 +12,7 @@ import './styles/tailwind.css'
 import './styles/global.css'
 import './styles/pages.css'
 import { AppProvider, useApp } from './app/store'
+import { QueryProvider } from './api/QueryProvider'
 import Layout from './components/Layout'
 import Login from './pages/Login'
 import Home from './pages/Home'
@@ -32,6 +33,7 @@ function Guard({ children }: { children: ReactNode }) {
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
+    <QueryProvider>
     <AppProvider>
       <BrowserRouter>
         <Routes>
@@ -50,5 +52,6 @@ createRoot(document.getElementById('root')!).render(
         </Routes>
       </BrowserRouter>
     </AppProvider>
+    </QueryProvider>
   </StrictMode>,
 )
