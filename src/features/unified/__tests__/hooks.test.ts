@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 // useUnifiedControl 走真实 React 渲染（StrictMode）。全部用注入的假函数，不连任何后端。
-import { StrictMode, createElement, type ReactNode } from 'react'
+import { StrictMode, createElement, useLayoutEffect, type ReactNode } from 'react'
 import { act, renderHook } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { TEXT } from '../constants'
@@ -50,6 +50,34 @@ describe('useUnifiedControl（StrictMode）', () => {
     gate.resolve(1)
     await p
     expect(o.send).not.toHaveBeenCalled()
+  })
+
+  it('卸载时同步取消（layout effect 清理）：同一次卸载提交里、被动 effect 清理之前，取消就已生效', async () => {
+    // 同一组件里后声明的 layout effect 清理在 hook 的清理之后、所有被动 effect 清理之前执行。
+    // 在这个时刻让前读完成：如果取消放在 useEffect 清理里，这里还没取消，前读完成后就会下发
+    const gate = deferred<number>()
+    const logs: string[] = []
+    const send = vi.fn(async () => ({ success: true, msg: '' }))
+    let unmounting = false
+    let abortedAtLayoutCleanup: boolean | null = null
+    const o = opts({ readBack: vi.fn(() => gate.promise), send, log: (e) => logs.push(e.event) })
+    const { result, unmount } = renderHook(() => {
+      const c = useUnifiedControl(o)
+      useLayoutEffect(() => () => {
+        if (!unmounting) return
+        abortedAtLayoutCleanup = logs.includes('aborted')
+        gate.resolve(1)
+      }, [])
+      return c
+    }, { wrapper })
+    act(() => { result.current.request({ roomSwitch: 1 }) })
+    let p!: Promise<unknown>
+    act(() => { p = result.current.confirm() })
+    unmounting = true
+    unmount()
+    await p
+    expect(abortedAtLayoutCleanup).toBe(true)
+    expect(send).not.toHaveBeenCalled()
   })
 
   it('前读完成前切换项目 → 回 idle，不下发', async () => {

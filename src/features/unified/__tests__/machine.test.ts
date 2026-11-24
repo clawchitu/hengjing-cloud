@@ -468,6 +468,37 @@ describe('控制器：结果未知（unknown）', () => {
   })
 })
 
+describe('控制器：下发函数正常返回 success!==true', () => {
+  it.each([
+    [{ success: false, msg: '控制屏忙' }, `${TEXT.failure}：控制屏忙`],
+    [{ success: false, msg: '' }, `${TEXT.failure}：下发失败`],
+    [{ msg: 'x' }, `${TEXT.failure}：x`],
+    [null, `${TEXT.failure}：下发失败`],
+  ])('%j → failure/rejected（不是 unknown，回读一致也不算成功）；只发一次', async (reply, error) => {
+    const send = vi.fn(async () => reply as never)
+    const { ctl, readBack } = setup({ send }) // 回读与目标一致
+    ctl.request({ roomTemp: 24 })
+    expect(await ctl.confirm()).toMatchObject({ status: 'failure', outcome: 'rejected', error })
+    expect(send).toHaveBeenCalledTimes(1)
+    expect(readBack).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('控制器：先更新状态、后写日志', () => {
+  it.each(['cancel', 'abort'] as const)('%s：日志回调里看到的已经是 idle；回调里调 confirm 也不会下发', async (op) => {
+    let ctlRef: ReturnType<typeof setup>['ctl'] | null = null
+    const seen: string[] = []
+    const { ctl, send, readBack } = setup({ log: (e) => { if (e.event === 'cancel' || e.event === 'aborted') { seen.push(ctlRef!.getState().status); void ctlRef!.confirm() } } })
+    ctlRef = ctl
+    ctl.request({ roomSwitch: 1 })
+    ctl[op]()
+    await new Promise((r) => setTimeout(r, 0))
+    expect(seen).toEqual(['idle'])
+    expect(send).not.toHaveBeenCalled()
+    expect(readBack).not.toHaveBeenCalled()
+  })
+})
+
 describe('控制器：失败不重试', () => {
   it('控制屏拒绝 → failure/rejected；只发一次，回读一次', async () => {
     const send = vi.fn(async () => { throw new ApiError('ctrl', '该软件类型不支持此控制') })

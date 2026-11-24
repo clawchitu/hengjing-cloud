@@ -13,7 +13,7 @@
 // - 全程不重试：sending 期间重复 confirm() 返回同一个 Promise；结束后只能 reset() 再走一遍确认。
 // - abort()：页面卸载或切换项目时调用。发送前的流程立即终止；已经发出的下发无法撤回，照常走完回读。
 import { writeCtrl, type CtrlReply, type WriteQuery } from '@/api/ctrl'
-import { isApiError, type ApiErrorKind } from '@/api/errors'
+import { ApiError, isApiError, type ApiErrorKind } from '@/api/errors'
 import { TEXT } from './constants'
 import { consoleLogger, makeEntry, type EntryInput, type UnifiedLogEvent, type UnifiedLogger } from './log'
 import { changedFields, describeQuery, echoMismatches, validateUnified, type EchoMismatch, type Issue, type UnifiedContext, type UnifiedDraft, type UnifiedEcho } from './rules'
@@ -184,9 +184,9 @@ export function createUnifiedController<S>(deps: UnifiedDeps<S>): UnifiedControl
     const fields = changedFields(query)
     const stopped = () => signal.aborted || myGen !== gen
     const abortRun = (code: 'ABORTED' | 'PROJECT_CHANGED', errors: string[]) => {
-      write('aborted', target, { codes: [code], fields })
-      // abort() 已经把状态放回 idle（之后可能又开始了新一轮）：被作废的这一轮不再碰状态
+      // 先更新状态、后写日志。abort() 已经把状态放回 idle（之后可能又开始了新一轮）：被作废的这一轮不再碰状态
       if (myGen === gen) dispatch({ type: 'ABORT', errors })
+      write('aborted', target, { codes: [code], fields })
       return state
     }
 
@@ -216,7 +216,11 @@ export function createUnifiedController<S>(deps: UnifiedDeps<S>): UnifiedControl
     write('send', target, { fields })
     let sendError: unknown = null
     try {
-      await pending
+      const reply = (await pending) as { success?: unknown; msg?: unknown } | null | undefined
+      // 注入的下发函数可能正常返回 success=false（默认的 writeCtrl 会抛错）：同样按控制屏明确拒绝处理
+      if (!reply || reply.success !== true) {
+        sendError = new ApiError('ctrl', (typeof reply?.msg === 'string' && reply.msg) || '下发失败')
+      }
     } catch (e) {
       sendError = e
     }
@@ -284,8 +288,10 @@ export function createUnifiedController<S>(deps: UnifiedDeps<S>): UnifiedControl
     },
     cancel() {
       if (state.status !== 'confirming') return
-      write('cancel', state.target)
+      const t = state.target
+      // 先更新状态、后写日志
       dispatch({ type: 'CANCEL' })
+      write('cancel', t)
     },
     confirm() {
       if (inflight) return inflight
@@ -294,8 +300,8 @@ export function createUnifiedController<S>(deps: UnifiedDeps<S>): UnifiedControl
       // 复核：确认弹窗打开期间项目可能离线、被切换或 app_code 变了
       const stale = recheck(deps.getContext(), target, draft, query)
       if (stale) {
-        write('blocked', target, { codes: stale.changed ? ['PROJECT_CHANGED'] : stale.issues.map((i) => i.code) })
         dispatch({ type: 'ABORT', errors: stale.changed ? [TEXT.projectChanged] : stale.issues.map((i) => i.message) })
+        write('blocked', target, { codes: stale.changed ? ['PROJECT_CHANGED'] : stale.issues.map((i) => i.code) })
         return Promise.resolve(state)
       }
       // 先建好信号、记下世代号，再通知订阅者 / 写日志：回调里调 abort() 能作废本轮
@@ -322,8 +328,9 @@ export function createUnifiedController<S>(deps: UnifiedDeps<S>): UnifiedControl
       ac?.abort()
       ac = null
       inflight = null
-      write('aborted', s.target, { codes: ['ABORTED'] })
+      // 先更新状态、后写日志
       dispatch({ type: 'ABORT', errors: [TEXT.aborted] })
+      write('aborted', s.target, { codes: ['ABORTED'] })
     },
   }
 }
