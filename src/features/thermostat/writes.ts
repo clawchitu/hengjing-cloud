@@ -121,6 +121,8 @@ export interface OpSpec<P, L> {
   target: string
   /** 提示里的主语，如「客厅」「全部开启」 */
   subject: string
+  /** 预检、回读提示里读的对象，默认「面板」（S9 不传，文案不变）；S10 传「新风设置」 */
+  noun?: string
   okText: string
   /** 确认后的预检：新发一次 200，用这份读数重新校验并组装要下发的内容；不一致返回原因 */
   preflight: (signal: AbortSignal) => Promise<Preflight<P>>
@@ -174,9 +176,9 @@ export async function runOp<P, L>(o: OpSpec<P, L>): Promise<RunResult> {
     const pac = new AbortController()
     let pre: Preflight<P>
     try {
-      pre = await within(o.preflight(pac.signal), LIMITS.preflightMs, '确认后重新读取面板', pac)
+      pre = await within(o.preflight(pac.signal), LIMITS.preflightMs, `确认后重新读取${o.noun ?? '面板'}`, pac)
     } catch (e) {
-      pre = { ok: false, reason: `确认后重新读取面板失败（${e instanceof Error ? e.message : '未知错误'}）` }
+      pre = { ok: false, reason: `确认后重新读取${o.noun ?? '面板'}失败（${e instanceof Error ? e.message : '未知错误'}）` }
     }
     if (!sameSession() || !sameProject() || !o.present()) return 'aborted' // 离开、切项目、会话变化：不写，不向别处提示
     if (!pre.ok) { say(`${o.subject}：${pre.reason}，本次未下发，请重新核对后再下发`, true); return 'aborted' }
@@ -310,7 +312,7 @@ export async function runOp<P, L>(o: OpSpec<P, L>): Promise<RunResult> {
       // 确定失败：写后新读一次刷新界面
       const vac = new AbortController()
       let read = false
-      try { await within(o.read(vac.signal), LIMITS.preflightMs, '回读面板', vac); read = true } catch { read = false }
+      try { await within(o.read(vac.signal), LIMITS.preflightMs, `回读${o.noun ?? '面板'}`, vac); read = true } catch { read = false }
       if (sameSession()) patch({ readback: read ? 'ok' : 'fail' })
       return outcome
     }

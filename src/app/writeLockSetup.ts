@@ -2,6 +2,7 @@
 // registerAllVerifiers 由 AppProvider 在原来调 setupUnifiedWriteLock 的位置调用（渲染期、按 QueryClient 只做一次，时机不比原来晚）：
 // 1. configureWriteLock({ resolveProject })（经 setupUnifiedWriteLock，只调一次）；
 // 2. 注册 203（统一控制 S12）核对器；201 / 206（温控 S9）仍在 OrgGate 的组织数据就绪后注册（时机同原来，见 registerThermostatVerifiersOnce），核对函数留在各自的 features 里；
+// 204（新风 S10c）的核对器到 S10c 再加，同样只在本文件注册（和 201 / 206 同一个位置）；P0 只提供比对函数 matchRunningCtrl。
 // 3. 注册后补核对恢复的锁（项目列表 / 集成项目列表加载成功时的触发路径由 setupUnifiedWriteLock 的订阅保留）。
 import { useEffect } from 'react'
 import { useQueryClient, type QueryClient } from '@tanstack/react-query'

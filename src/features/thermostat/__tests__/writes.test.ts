@@ -113,6 +113,16 @@ describe('预检', () => {
       expect(toasts[0]).toMatch(/本次未下发，请重新核对/)
     }
   })
+  it('预检提示的读取对象：默认「面板」（S9 文案不变），传 noun 时用 noun', async () => {
+    const preflight = async () => { throw new ApiError('unavailable', '控制屏未连接') }
+    const a = spec({ preflight })
+    expect(await W.runOp(a.s)).toBe('aborted')
+    expect(a.toasts[0]).toMatch(/确认后重新读取面板失败（控制屏未连接）/)
+    W.__resetWritesForTests()
+    const b = spec({ preflight, noun: '新风设置' } as never)
+    expect(await W.runOp(b.s)).toBe('aborted')
+    expect(b.toasts[0]).toMatch(/确认后重新读取新风设置失败（控制屏未连接）/)
+  })
   it('预检期间离开页面 / 切项目 / 会话变化：中止，不写，不提示，释放写锁', async () => {
     for (const change of [() => { storedProject = 'P2' }, () => { userKey = 'user:B' }]) {
       W.__resetWritesForTests(); storedProject = 'P1'; userKey = 'user:A'
