@@ -16,6 +16,17 @@ export default function Connections() {
   const [gw] = useAsync(() => api.getGateway(projectId), [projectId])
   const [f, setF] = useState<F>('全部')
   const [page, setPage] = useState(1)
+  // 没有设备数据（交付包里连接状态尚未接入真实接口）：不显示检测、在线率等无依据的数字
+  if (rows && rows.length === 0) return (
+    <div className="page">
+      <div className="page-head"><div><h1>设备连接状态</h1><div className="sub">{project.name}</div></div></div>
+      <Card className="placeholder">
+        <div className="ph-ico"><Icon icon={faSatelliteDish} /></div>
+        <h3>暂无设备连接数据</h3>
+        <p>该项目暂时没有可显示的设备连接状态。</p>
+      </Card>
+    </div>
+  )
   if (!rows || !gw) return <div className="page" />
 
   const on = rows.filter((r) => r.state === '在线').length

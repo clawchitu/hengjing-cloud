@@ -95,7 +95,7 @@ export function getSessionView(): SessionView {
   let view: SessionView
   if (mock) {
     const a = src as MockAuth | null
-    const user = profile(a?.username ?? 'cosyhome')
+    const user = profile(a?.username ?? '')
     view = { authed: !!a, authLoading: false, session: null, user, dealerAccount: user.role === 'dealer', userKey: a ? 'mock:' + user.username : null }
   } else {
     const s = src as SessionState
@@ -104,7 +104,7 @@ export function getSessionView(): SessionView {
       authed: s.status === 'authed',
       authLoading: s.status === 'loading',
       session: info,
-      user: info ? userOf(info) : profile('cosyhome'),
+      user: info ? userOf(info) : profile(''),
       dealerAccount: !!info?.dealer,
       userKey: info ? 'user:' + info.user.id : null,
       reason: s.reason,

@@ -114,7 +114,8 @@ export default function Login() {
   const done = () => toast('登录成功，欢迎回来')
 
   const onSubmit = async ({ account, password, remember }: LoginValues) => {
-    if (!isMockMode()) {
+    // 交付包（__HJC_MOCK__ = false）只有真实接口登录，演示账号登录代码在打包时剔除
+    if (!__HJC_MOCK__ || !isMockMode()) {
       try {
         await signIn(account, password, remember)
       } catch (e) {
@@ -145,7 +146,7 @@ export default function Login() {
         <div className="inner">
           <div className="login-brand"><LogoMark size={38} /><div><b>恒境云</b><small>HVAC IoT PLATFORM</small></div></div>
           <div className="login-copy">
-            <span className="status-chip"><span className="dot" />平台运行正常 · 已接入 1,284 台设备</span>
+            {__HJC_MOCK__ && <span className="status-chip"><span className="dot" />平台运行正常 · 已接入 1,284 台设备</span>}
             <h2>恒温 · 恒湿 · 恒氧<br />让每一个项目的环境都在掌控之中</h2>
             <p>多项目环境监控与统一控制平台，覆盖室内空气、温控面板、新风除湿、电能计量与机组运行全链路数据。</p>
             <div className="feat">
@@ -154,7 +155,8 @@ export default function Login() {
               <div><Icon icon={faShieldHalved} /><b>分级权限</b><small>经销商 / 管理员</small></div>
             </div>
           </div>
-          <div className="login-foot">© 2025 恒境云科技 · 沪ICP备2025000000号</div>
+          {/* 交付包不放占位的备案号；正式备案号由对方提供后再加 */}
+          <div className="login-foot">{__HJC_MOCK__ ? '© 2025 恒境云科技 · 沪ICP备2025000000号' : '© 恒境云'}</div>
         </div>
       </div>
       <div className="login-right">
@@ -182,10 +184,10 @@ export default function Login() {
               <FormField control={form.control} name="remember" render={({ field }) => (
                 <label><Checkbox name={field.name} ref={field.ref} checked={field.value} onCheckedChange={(v) => field.onChange(v === true)} onBlur={field.onBlur} />记住我</label>
               )} />
-              <a className="cyan" onClick={() => toast('已向绑定手机发送重置链接')} style={{ cursor: 'pointer' }}>忘记密码?</a>
+              <a className="cyan" onClick={() => toast(__HJC_MOCK__ ? '已向绑定手机发送重置链接' : '请联系管理员重置密码')} style={{ cursor: 'pointer' }}>忘记密码?</a>
             </div>
             <button className="btn-login" disabled={busy}>{busy ? '登录中…' : '登 录'}</button>
-            <div className="login-ver">平台版本 <b>v3.6.2</b> · 技术支持 400-820-1234</div>
+            {__HJC_MOCK__ && <div className="login-ver">平台版本 <b>v3.6.2</b> · 技术支持 400-820-1234</div>}
           </form>
         </Form>
       </div>

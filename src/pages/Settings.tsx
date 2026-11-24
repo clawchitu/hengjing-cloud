@@ -14,7 +14,7 @@ export default function Settings() {
   ]
   return (
     <div className="page">
-      <div className="page-head"><div><h1>系统设置</h1><div className="sub">通知与平台偏好（演示数据，仅保存在本地会话）</div></div></div>
+      <div className="page-head"><div><h1>系统设置</h1><div className="sub">{__HJC_MOCK__ ? '通知与平台偏好（演示数据，仅保存在本地会话）' : '通知与平台偏好（仅保存在本地会话）'}</div></div></div>
       <Card style={{ maxWidth: 720 }}>
         <CardTitle style={{ marginBottom: 10 }}>通知设置</CardTitle>
         {rows.map(([k, t, d]) => (

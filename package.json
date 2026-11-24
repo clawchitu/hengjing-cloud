@@ -9,6 +9,7 @@
     "typecheck": "tsc -b",
     "test": "vitest run",
     "build": "tsc -b && vite build",
+    "build:delivery": "tsc -b && vite build --mode delivery",
     "preview": "vite preview",
     "e2e": "docker run --rm --platform linux/amd64 --ipc=host -v \"$PWD\":/work -v /work/node_modules -w /work -e CI=1 mcr.microsoft.com/playwright:v1.65.1-noble sh -c \"npm ci --no-audit --no-fund && npx playwright test\"",
     "e2e:update": "docker run --rm --platform linux/amd64 --ipc=host -v \"$PWD\":/work -v /work/node_modules -w /work -e CI=1 mcr.microsoft.com/playwright:v1.65.1-noble sh -c \"npm ci --no-audit --no-fund && npx playwright test --update-snapshots\"",

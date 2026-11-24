@@ -56,8 +56,11 @@ export function envOfUrl(url: string): ApiEnv {
 
 type Input = Partial<Omit<RuntimeConfig, 'apiEnv' | 'writeProjectCodes'>> & { apiEnv?: string; writeProjectCodes?: unknown }
 
-/** 合并各层配置并推导 apiEnv。导出供测试使用 */
-export function resolveConfig(layers: Input[], devProxyTarget = ''): RuntimeConfig {
+/**
+ * 合并各层配置并推导 apiEnv。导出供测试使用。
+ * mockAllowed 默认取构建期常量 __HJC_MOCK__（见 src/build-flags.d.ts）；为 false（生产交付包）时 dataSource 一律为 'real'，config.js 里写 'mock' 也无效。
+ */
+export function resolveConfig(layers: Input[], devProxyTarget = '', mockAllowed = __HJC_MOCK__): RuntimeConfig {
   const m: Input = Object.assign({}, ...layers.filter(Boolean))
   const apiBase = String(m.apiBase || '/api').replace(/\/+$/, '')
   let apiEnv: ApiEnv
@@ -70,7 +73,7 @@ export function resolveConfig(layers: Input[], devProxyTarget = ''): RuntimeConf
   return {
     apiBase,
     apiEnv,
-    dataSource: m.dataSource === 'real' ? 'real' : 'mock',
+    dataSource: !mockAllowed || m.dataSource === 'real' ? 'real' : 'mock',
     writeMode,
     writeProjectCodes: parseCodes(layers),
     requestTimeoutMs: Number(m.requestTimeoutMs) > 0 ? Number(m.requestTimeoutMs) : 10_000,
@@ -107,4 +110,5 @@ export function setConfig(patch: Input | null): RuntimeConfig {
   return getConfig()
 }
 
-export const isMockMode = () => getConfig().dataSource === 'mock'
+/** 演示数据模式。交付包里恒为 false；需要在打包时剔除的演示代码另用 __HJC_MOCK__ 直接判断（函数调用不会被常量折叠） */
+export const isMockMode = () => __HJC_MOCK__ && getConfig().dataSource === 'mock'
