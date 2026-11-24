@@ -194,16 +194,41 @@ export async function request<T>(path: string, opts: RequestOptions = {}): Promi
  * 超时或断网时结果未知（请求可能已经到达控制屏），提示页面回读确认，不重发。
  * 目标项目字段由这里用防护通过后的快照填入（只用 id）：批量统一控制填 project_ids，其余写消息填
  * project_id（只能一个项目）。调用方的 body 不得自带 project_id / project_ids，否则拒绝。
+ * body 只接受普通对象（原型是 Object.prototype 或 null）；字段值是函数（含 toJSON）、getter/setter、
+ * Symbol 键一律拒绝，不做清洗。通过后按已校验的描述符拷贝成新对象，再填入快照里的 id。
  */
+function plainWriteBody(body: unknown): Record<string, unknown> {
+  const bad = (why: string) => new ApiError('write_blocked', `写请求体格式不对：${why}`)
+  if (!body || typeof body !== 'object' || Array.isArray(body)) throw bad('不是普通对象')
+  const out: Record<string, unknown> = {}
+  try {
+    const proto = Object.getPrototypeOf(body)
+    if (proto !== Object.prototype && proto !== null) throw bad('不是普通对象')
+    // 键和描述符各只取一次，拷贝只用这次校验过的值（防 Proxy 前后返回不同内容）
+    for (const key of Reflect.ownKeys(body)) {
+      if (typeof key !== 'string') throw bad('含 Symbol 键')
+      const d = Object.getOwnPropertyDescriptor(body, key)
+      if (!d) continue
+      if (!('value' in d) || d.get || d.set) throw bad(`字段 ${key} 是访问器`)
+      if (typeof d.value === 'function') throw bad(`字段 ${key} 是函数`)
+      if (/^project_?ids?$/i.test(key)) throw new ApiError('write_blocked', '写请求体不能自带项目字段')
+      if (d.enumerable) out[key] = d.value
+    }
+  } catch (e) {
+    if (e instanceof ApiError) throw e
+    throw bad('无法读取')
+  }
+  return out
+}
+
 export async function requestWrite<T>(op: WriteOp, projects: readonly WriteProject[], body: Record<string, unknown>, opts: Omit<RequestOptions, 'body' | 'method' | 'auth'> = {}): Promise<T> {
   const allowed = assertWriteAllowed(op, projects)
-  if (!body || typeof body !== 'object' || Array.isArray(body)) throw new ApiError('write_blocked', '写请求体格式不对')
-  if (Object.keys(body).some((k) => /^project_?ids?$/i.test(k))) throw new ApiError('write_blocked', '写请求体不能自带项目字段')
+  const copy = plainWriteBody(body)
   let target: Record<string, unknown>
   if (op === 'unified-ctrls-send') target = { project_ids: allowed.map((p) => p.id) }
   else if (allowed.length === 1) target = { project_id: allowed[0].id }
   else throw new ApiError('write_blocked', '单项目写消息只能指定一个项目')
-  const payload = { ...body, ...target }
+  const payload = { ...copy, ...target }
   try {
     return await authed<T>(WRITE_ROUTES[op], { ...opts, method: 'POST', body: payload })
   } catch (e) {

@@ -239,6 +239,44 @@ describe('写防护按项目 code：201/203/204/206 与批量统一控制', () =
     expect(be.calls).toHaveLength(0)
   })
 
+  it('requestWrite()：body 不是普通对象、带函数字段（含 toJSON）、访问器、Symbol 键 → 拒绝，不发请求（单项目与批量）', async () => {
+    setConfig({ apiBase: '/api', apiEnv: 'test' })
+    const be = fakeBackend({ '/ctrl/project-room-switch-set': () => json({}), '/ctrl/unified-ctrls-send': () => json({}) })
+    const evil = () => ({ project_id: 'other-entity-id', project_ids: ['other-entity-id'] })
+    class Body { body = '' }
+    const bads: unknown[] = [
+      { toJSON: evil },
+      { body: '', toJSON: evil },
+      Object.assign(Object.create(null), { toJSON: evil }),
+      Object.create({ toJSON: evil }),
+      { body: '', get user_id() { return 'u' } },
+      Object.defineProperty({}, 'toJSON', { value: evil, enumerable: false }),
+      { body: '', [Symbol('x')]: 1 },
+      new Body(),
+      new Map(),
+      new Date(),
+      new Proxy({}, { getPrototypeOf: () => { throw new Error('x') } }),
+    ]
+    for (const bad of bads) {
+      await expect(requestWrite('ctrl-206', [P1], bad as never)).rejects.toMatchObject({ kind: 'write_blocked' })
+      await expect(requestWrite('unified-ctrls-send', [P1, P2], bad as never)).rejects.toMatchObject({ kind: 'write_blocked' })
+    }
+    expect(be.calls).toHaveLength(0)
+  })
+
+  it('requestWrite()：普通对象（含 null 原型）浅拷贝后填入快照 id，不修改调用方对象（单项目与批量）', async () => {
+    setConfig({ apiBase: '/api', apiEnv: 'test' })
+    const be = fakeBackend({ '/ctrl/project-room-switch-set': () => json({}), '/ctrl/unified-ctrls-send': () => json({}) })
+    const b1 = { user_id: 'u1', body: 'x' }
+    await requestWrite('ctrl-206', [P1], b1)
+    expect(be.calls[0].body).toEqual({ user_id: 'u1', body: 'x', project_id: P1.id })
+    expect(b1).toEqual({ user_id: 'u1', body: 'x' })
+    const b2 = Object.assign(Object.create(null) as Record<string, unknown>, { body: 'y' })
+    await requestWrite('unified-ctrls-send', [P1, P2], b2)
+    expect(be.calls[1].body).toEqual({ body: 'y', project_ids: [P1.id, P2.id] })
+    expect(Object.keys(b2)).toEqual(['body'])
+  })
+
   it('requestWrite()：单项目写消息传多个项目 → 拒绝；批量统一控制填 project_ids', async () => {
     setConfig({ apiBase: '/api', apiEnv: 'test' })
     const be = fakeBackend({ '/ctrl/unified-ctrls-send': () => json({}) })
