@@ -163,6 +163,7 @@ const valid = (v: number | null | undefined): v is number => typeof v === 'numbe
 
 /**
  * 逐字段核对：只核对下发了的字段；温度按 0.01 容差比较（float32）。空数组 = 全部一致。
+ * 同一字段可能同时有一条 differ 和一条 missing（逐房间读数里既有不一致、又有没回报的）。
  * after 为 null（回读失败）时每个字段都是 missing
  */
 export function echoMismatches(q: WriteQuery<203>, after: UnifiedEcho | null | undefined): EchoMismatch[] {
@@ -186,9 +187,9 @@ export function echoMismatches(q: WriteQuery<203>, after: UnifiedEcho | null | u
       const gotText = isSw && got !== SWITCH_ON && got !== SWITCH_OFF ? String(got) : describeQuery({ ...NONE, [k]: got })[0]?.value ?? String(got)
       const part = perRoom && bad.length < perRoom.length ? TEXT.echoPart(perRoom.length, bad.length) : ''
       out.push({ field: k, kind: 'differ', message: TEXT.echoDiffer(label, sentText, gotText) + part })
-      continue
     }
-    // 没有任何读数（回读失败、没有房间），或有房间没回报：无法核对
+    // 没有任何读数（回读失败、没有房间），或有房间没回报：无法核对。
+    // 同一字段里有的房间不一致、有的房间没回报：两条都记（不一致照常列出，整体按无法核对算）
     if (!vals.length || present.length < vals.length) out.push({ field: k, kind: 'missing', message: TEXT.echoMissing(label) })
   }
   return out
@@ -197,17 +198,18 @@ export function echoMismatches(q: WriteQuery<203>, after: UnifiedEcho | null | u
 /**
  * 回读结论（控制屏已应答 success=true 之后）：
  * - applied：下发的字段全部读到且一致（已生效）
- * - unchanged：有字段读到了、但和下发的不一样（未变化）
- * - unverifiable：没有不一致的，但有字段没回报 / 接口读不到（无法核对）
- * - unknown：没有不一致的，但有房间离线（读数不可信，结果未知）
+ * - unchanged：下发的字段全部读到，但有字段和下发的不一样（未变化）
+ * - unverifiable：有字段核对不了（没有房间条目、200 回包为空 {}、设备没回报、200 里根本没有这项读数如系统开关 / 运行模式）→ 无法核对
+ * - unknown：有房间离线（读数不可信，结果未知）
  */
 export type EchoVerdict = 'applied' | 'unchanged' | 'unverifiable' | 'unknown'
 /**
- * 优先级：读到的值有不一致 → 未变化（确定没全部生效，比「无法核对」信息更多）；否则有离线房间 → 结果未知；
- * 否则有字段读不到 → 无法核对；全部一致 → 已生效
+ * 下发核对口径（Fable 11/24）：一次下发里既有能核对的字段、又有不能核对的字段时，能核对的部分照常逐字段判（mismatches 里照常
+ * 列出 differ），整体结果按最不确定的那个算：结果未知（有房间离线）> 无法核对 > 未变化 > 已生效。
+ * 回读请求本身失败不走这里（状态机直接判「结果未知」，不并进无法核对）
  */
 export function echoVerdict(ms: readonly EchoMismatch[], after?: UnifiedEcho | null): EchoVerdict {
-  if (ms.some((m) => m.kind === 'differ')) return 'unchanged'
   if (after?.offline) return 'unknown'
-  return ms.length ? 'unverifiable' : 'applied'
+  if (ms.some((m) => m.kind === 'missing' || m.kind === 'unreadable')) return 'unverifiable'
+  return ms.length ? 'unchanged' : 'applied'
 }

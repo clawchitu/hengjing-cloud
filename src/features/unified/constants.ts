@@ -70,10 +70,10 @@ export const TEXT = {
   /** 下发结果口径（Fable 11/24 裁定）：控制屏 success=true 只算「已下发」，以回读为准 */
   verifying: '已下发，正在核对…',
   success: '已生效',
-  unapplied: '已下发，设备状态尚未变化，请稍后刷新确认',
+  unapplied: '指令已下发，设备状态暂未变化',
   sentUnknown: '已下发，结果未知',
   roomsOffline: '下发后回读时有房间离线，读数不可信，请稍后刷新确认',
-  unverifiable: '已下发，设备未回报开关状态，无法确认是否生效',
+  unverifiable: '该项暂无回读，无法确认',
   failure: '下发失败',
   retryHint: '未自动重试，请核对设备状态后再决定是否重新下发',
   // 校验

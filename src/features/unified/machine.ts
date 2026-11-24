@@ -1,8 +1,8 @@
 // 统一控制下发流程的显式状态机：
 //
 //   idle ──request(校验通过)──▶ confirming ──confirm──▶ sending ──▶ success（已生效：下发后回读逐字段一致）
-//    ▲  ◀──request(校验不过，带 errors)  │   │            ├──▶ unapplied（未变化：success=true，但读到的值和下发的不一样）
-//    │  ◀──cancel / abort──────────────┘   │            ├──▶ unverifiable（无法核对：success=true，没有不一致的，但有字段没回报 / 读不到）
+//    ▲  ◀──request(校验不过，带 errors)  │   │            ├──▶ unapplied（未变化：success=true，字段都读到了，但有和下发的不一样的）
+//    │  ◀──cancel / abort──────────────┘   │            ├──▶ unverifiable（无法核对：success=true，有字段没回报 / 读不到；混合时按最不确定的算）
 //    │                                      │            ├──▶ failure（没发出 / 明确被拒）
 //    │  ◀──abort 或发送前复核不过──────────────┘            └──▶ unknown（结果未知：应答未知且回读没核对一致，或 success=true 但回读失败）
 //    └────────────────reset───────────── success / unapplied / unverifiable / failure / unknown
@@ -41,9 +41,9 @@ export type UnifiedState<S = unknown> =
   | ({ status: 'sending'; step: SendingStep; before?: S } & Base)
   /** 已生效：回读逐字段一致。via='reply'：Reply success=true；via='readback'：应答结果未知，但回读逐字段一致 */
   | ({ status: 'success'; via: 'reply' | 'readback'; before: S; after: S } & Base)
-  /** 未变化：Reply success=true，但读到的值和下发的不一样（mismatches 里至少一条 differ） */
+  /** 未变化：Reply success=true，下发的字段都读到了，但有和下发的不一样的（mismatches 全是 differ，至少一条） */
   | ({ status: 'unapplied'; before: S; after: S; mismatches: EchoMismatch[] } & Base)
-  /** 无法核对：Reply success=true，没有不一致的，但有字段设备没回报或回读接口读不到 */
+  /** 无法核对：Reply success=true，有字段设备没回报或回读接口读不到；能核对的字段照常判，mismatches 里可能同时有 differ */
   | ({ status: 'unverifiable'; before: S; after: S; mismatches: EchoMismatch[] } & Base)
   | ({ status: 'failure'; outcome: FailureOutcome; error: string; before?: S; after?: S | null; afterError?: string } & Base)
   /**
@@ -272,7 +272,7 @@ export function createUnifiedController<S>(deps: UnifiedDeps<S>): UnifiedControl
     const echo = echoOf(after)
     const mismatches = echoMismatches(query, echo)
     const verdict = after === null ? null : echoVerdict(mismatches, echo)
-    const byKind = (...kinds: EchoMismatch['kind'][]) => mismatches.filter((m) => kinds.includes(m.kind)).map((m) => m.field)
+    const byKind = (...kinds: EchoMismatch['kind'][]) => [...new Set(mismatches.filter((m) => kinds.includes(m.kind)).map((m) => m.field))]
 
     if (outcome === null) {
       // Reply success=true 只算「已下发」，以回读为准
@@ -293,7 +293,7 @@ export function createUnifiedController<S>(deps: UnifiedDeps<S>): UnifiedControl
         write('unapplied', target, { codes: ['REPLY_OK', 'ECHO_MISMATCH'], fields: byKind('differ') })
         dispatch({ type: 'UNAPPLIED', before, after, mismatches })
       } else {
-        write('unverifiable', target, { codes: ['REPLY_OK', 'NOT_VERIFIED'], fields: byKind('missing', 'unreadable') })
+        write('unverifiable', target, { codes: ['REPLY_OK', 'NOT_VERIFIED'], fields: byKind('missing', 'unreadable', 'differ') })
         dispatch({ type: 'UNVERIFIABLE', before, after, mismatches })
       }
       return state
@@ -311,7 +311,7 @@ export function createUnifiedController<S>(deps: UnifiedDeps<S>): UnifiedControl
       return state
     }
     const afterError = readErr === null ? undefined : `${TEXT.readAfterFailedUnknown}：${errText(readErr)}`
-    write('unknown', target, { codes: ['UNKNOWN', readErr ? 'READ_FAILED' : verdict === 'unchanged' ? 'ECHO_MISMATCH' : 'NOT_VERIFIED'], error: sendError, fields: mismatches.map((m) => m.field) })
+    write('unknown', target, { codes: ['UNKNOWN', readErr ? 'READ_FAILED' : verdict === 'unchanged' ? 'ECHO_MISMATCH' : 'NOT_VERIFIED'], error: sendError, fields: byKind('missing', 'unreadable', 'differ') })
     dispatch({ type: 'UNKNOWN', replied: false, cause: errText(sendError), before, after, afterError, mismatches })
     return state
   }

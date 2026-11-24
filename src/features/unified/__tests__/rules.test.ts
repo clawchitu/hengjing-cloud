@@ -128,22 +128,29 @@ describe('echoMismatches（逐字段核对）', () => {
       { field: 'roomSwitch', kind: 'missing', message: TEXT.echoMissing(TEXT.roomSwitch) },
     ])
   })
-  it('逐房间核对：有读到不一致 → differ（标出几个房间）；读到的都一致但有房间没回报 → missing；全部一致 → 空', () => {
+  it('逐房间核对：有读到不一致 → differ（标出几个房间）；有房间没回报 → 另记 missing；全部一致 → 空', () => {
     const q2 = { systemSwitch: -1, systemMode: 0, roomSwitch: 1, roomTemp: -1 }
     expect(echoMismatches(q2, { roomSwitch: null, perRoom: { roomSwitch: [1, 0, null] } })).toEqual([
       { field: 'roomSwitch', kind: 'differ', message: TEXT.echoDiffer(TEXT.roomSwitch, TEXT.on, TEXT.off) + TEXT.echoPart(3, 1) },
+      { field: 'roomSwitch', kind: 'missing', message: TEXT.echoMissing(TEXT.roomSwitch) },
     ])
     expect(echoMismatches(q2, { roomSwitch: null, perRoom: { roomSwitch: [1, null] } })).toEqual([{ field: 'roomSwitch', kind: 'missing', message: TEXT.echoMissing(TEXT.roomSwitch) }])
     expect(echoMismatches(q2, { roomSwitch: null, perRoom: { roomSwitch: [] } })).toEqual([{ field: 'roomSwitch', kind: 'missing', message: TEXT.echoMissing(TEXT.roomSwitch) }])
     expect(echoMismatches(q2, { roomSwitch: 1, perRoom: { roomSwitch: [1, 1] } })).toEqual([])
+    // 同一字段既有不一致、又有没回报：两条都记
+    expect(echoMismatches(q2, { roomSwitch: null, perRoom: { roomSwitch: [0, null] } }).map((m) => m.kind)).toEqual(['differ', 'missing'])
   })
-  it('echoVerdict：有 differ → unchanged；只有 missing / unreadable → unverifiable；空 → applied', () => {
+  it('echoVerdict：只有 differ → unchanged；有 missing / unreadable → unverifiable；空 → applied', () => {
     expect(echoVerdict([])).toBe('applied')
-    expect(echoVerdict([{ field: 'roomSwitch', kind: 'missing', message: '' }, { field: 'roomTemp', kind: 'differ', message: '' }])).toBe('unchanged')
+    expect(echoVerdict([{ field: 'roomTemp', kind: 'differ', message: '' }])).toBe('unchanged')
+    // 混合：整体按最不确定的算（Fable 11/24）
+    expect(echoVerdict([{ field: 'roomSwitch', kind: 'missing', message: '' }, { field: 'roomTemp', kind: 'differ', message: '' }])).toBe('unverifiable')
+    expect(echoVerdict([{ field: 'systemSwitch', kind: 'unreadable', message: '' }, { field: 'roomSwitch', kind: 'differ', message: '' }])).toBe('unverifiable')
     expect(echoVerdict([{ field: 'systemSwitch', kind: 'unreadable', message: '' }])).toBe('unverifiable')
     // 有离线房间、没有不一致 → 结果未知
     expect(echoVerdict([], { roomSwitch: 1, offline: 1 })).toBe('unknown')
-    expect(echoVerdict([{ field: 'roomSwitch', kind: 'differ', message: '' }], { offline: 1 })).toBe('unchanged')
+    // 有离线房间又有不一致：结果未知比未变化更不确定
+    expect(echoVerdict([{ field: 'roomSwitch', kind: 'differ', message: '' }], { offline: 1 })).toBe('unknown')
   })
   it('回读为空：所有下发字段都算没读到', () => {
     expect(echoMismatches(q, null).map((m) => [m.field, m.kind])).toEqual([['systemSwitch', 'missing'], ['systemMode', 'missing'], ['roomTemp', 'missing']])
