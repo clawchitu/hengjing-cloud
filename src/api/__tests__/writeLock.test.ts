@@ -19,7 +19,7 @@ import { fakeBackend, json } from './helpers'
 const {
   __resetWriteLockForTests, acquire, claim, configureWriteLock, currentAccount, isHolder, lockKeysOf, lockOf, lockVersion, markOverdue,
   markSent, onForceReread, release, requireVerify, settle, subscribe, verify, registerVerifier, parseStored, STORAGE_PREFIX,
-  DEFAULT_TTL_MS, MIN_TTL_MS, OTHER_ACCOUNT_TEXT, writeLockTtl,
+  DEFAULT_TTL_MS, MIN_TTL_MS, OTHER_ACCOUNT_TEXT, writeLockTtl, RETRY_DELAYS_MS,
 } = L
 type LockToken = L.LockToken
 
@@ -51,8 +51,9 @@ function writeOnce(beforeSend: () => boolean, net: () => Promise<void>, opts: { 
   })()
 }
 /** 调用方的标准写法：acquire → requestWrite(beforeSend: claim) → markSent → settle */
-async function drive(t: LockToken, p: Promise<void>, record: L.SentRecord = REC) {
+async function drive(t: LockToken, p: Promise<void>, record: L.SentRecord = REC, check?: (s: AbortSignal) => Promise<L.MatchResult>) {
   markSent(t, p, record)
+  if (check) requireVerify(t, check)
   try { await p; settle(t, 'ok'); return 'ok' } catch (e) {
     const unknown = e instanceof ApiError && (e.kind === 'timeout' || e.kind === 'network' || e.kind === 'server')
     settle(t, unknown ? 'unknown' : 'fail')
@@ -60,7 +61,7 @@ async function drive(t: LockToken, p: Promise<void>, record: L.SentRecord = REC)
   }
 }
 /** 走到 unknown：已认领、发出（Promise 由 g 控制）、定为结果未知 */
-function toUnknown(fn?: (s: AbortSignal) => Promise<boolean>, g = gate()) {
+function toUnknown(fn?: L.VerifyFn, g = gate()) {
   const t = take()
   claim(t)
   markSent(t, g.p, REC)
@@ -68,7 +69,7 @@ function toUnknown(fn?: (s: AbortSignal) => Promise<boolean>, g = gate()) {
   if (fn) requireVerify(t, fn)
   return { t, g }
 }
-async function unknownSettled(fn?: (s: AbortSignal) => Promise<boolean>) {
+async function unknownSettled(fn?: L.VerifyFn) {
   const { t, g } = toUnknown(undefined)
   g.fail(); await flush()
   if (fn) requireVerify(t, fn)
@@ -114,11 +115,17 @@ describe('锁键：多键原子互斥', () => {
 })
 
 describe('接入时序（按 #24 writeOnce：先等令牌、再 beforeSend、再 fetch）', () => {
-  it('能发出：beforeSend 里 claim 通过、fetch 一次；成功后释放、记录删除', async () => {
+  it('能发出：beforeSend 里 claim 通过、fetch 一次；success 只算已下发，核对一致后才释放、删记录', async () => {
     const t = take()
     const net = vi.fn(async () => { expect(stored()).toEqual([STORAGE_PREFIX + KEY]) }) // 发出时记录已在
-    expect(await drive(t, writeOnce(() => claim(t), net))).toBe('ok')
+    let same = false
+    expect(await drive(t, writeOnce(() => claim(t), net), REC, async () => same)).toBe('ok')
     expect(net).toHaveBeenCalledTimes(1)
+    await flush()
+    expect(lockOf(PA)).toMatchObject({ phase: 'unknown', outcome: 'ok', lastVerify: 'mismatch' }) // 已下发、设备未变化
+    expect(stored()).toHaveLength(1)
+    same = true
+    expect(await verify(KEY)).toBe('released')
     expect(lockOf(PA)).toBeNull()
     expect(stored()).toEqual([])
   })
@@ -142,11 +149,13 @@ describe('接入时序（按 #24 writeOnce：先等令牌、再 beforeSend、再
     const g = gate()
     const p = syncSender(() => claim(t)).then(() => g.p)
     markSent(t, p, REC)
+    requireVerify(t, async () => true)
     expect(lockOf(PA)?.phase).toBe('sent')
     settle(t, 'ok')
-    expect(lockOf(PA)).not.toBeNull() // 原写还没结算
+    expect(lockOf(PA)).toMatchObject({ phase: 'unknown', outcome: 'ok', sendSettled: false }) // 原写还没结算
+    expect(await verify(KEY)).toBe('send-pending')
     g.open(); await flush()
-    expect(lockOf(PA)).toBeNull()
+    expect(lockOf(PA)).toBeNull() // 结算后自动核对，一致才放
   })
   it('beforeSend 没调用（发送前失败）/ 返回 false / 抛错：都不留锁、不留记录（不 settle 也会在 Promise 结算时释放）', async () => {
     const run = (before: (t: LockToken) => () => boolean, o: { failBeforeSend?: boolean } = {}) => {
@@ -185,20 +194,34 @@ describe('接入时序（按 #24 writeOnce：先等令牌、再 beforeSend、再
 })
 
 describe('原写未结算不放锁；unknown 不被覆盖', () => {
-  it('settle ok / fail 早于原写结算：保持，结算后释放；期间 release 被拒', async () => {
-    for (const outcome of ['ok', 'fail'] as const) {
-      const g = gate()
-      const t = take()
-      claim(t)
-      markSent(t, g.p, REC)
-      settle(t, outcome)
-      await flush()
-      expect(lockOf(PA)).toMatchObject({ phase: 'sent', sendSettled: false, outcome })
-      expect(release(t)).toBe(false)
-      if (outcome === 'ok') g.open(); else g.fail()
-      await flush()
-      expect(lockOf(PA)).toBeNull()
-    }
+  it('settle fail 早于原写结算：保持，结算后释放；期间 release 被拒', async () => {
+    const g = gate()
+    const t = take()
+    claim(t)
+    markSent(t, g.p, REC)
+    settle(t, 'fail')
+    await flush()
+    expect(lockOf(PA)).toMatchObject({ phase: 'sent', sendSettled: false, outcome: 'fail' })
+    expect(release(t)).toBe(false)
+    g.fail()
+    await flush()
+    expect(lockOf(PA)).toBeNull()
+  })
+  it('settle ok（success 只算已下发）：进入待核对；原写结算后也不放，核对不一致保持、release 被拒，核对一致才放', async () => {
+    const g = gate()
+    const t = take()
+    claim(t)
+    markSent(t, g.p, REC)
+    let same: L.MatchResult = false
+    requireVerify(t, async () => same)
+    settle(t, 'ok')
+    g.open(); await flush()
+    expect(lockOf(PA)).toMatchObject({ phase: 'unknown', outcome: 'ok', sendSettled: true, lastVerify: 'mismatch' })
+    expect(release(t)).toBe(false)
+    settle(t, 'fail') // 只认第一次 settle
+    expect(lockOf(PA)?.phase).toBe('unknown')
+    same = true
+    expect(await verify(KEY)).toBe('released')
   })
   it('unknown 后再手动 settle ok / fail：不变，仍锁', () => {
     const { t } = toUnknown(async () => false)
@@ -206,11 +229,48 @@ describe('原写未结算不放锁；unknown 不被覆盖', () => {
     expect(lockOf(PA)?.phase).toBe('unknown')
     expect(release(t)).toBe(false)
   })
-  it('例外：登记的原写 Promise 迟到 resolve（success=true）→ 放锁、删记录', async () => {
-    const { g } = toUnknown(async () => false)
+  it('原写 Promise 迟到 resolve（success=true）不再放锁：只标记已结算、自动核对一次；不一致仍锁', async () => {
+    const fn = vi.fn(async () => false)
+    const { g } = toUnknown(fn)
     g.open(); await flush()
+    expect(fn).toHaveBeenCalledTimes(1)
+    expect(lockOf(PA)).toMatchObject({ phase: 'unknown', sendSettled: true, lastVerify: 'mismatch' })
+    expect(stored()).toHaveLength(1)
+  })
+  it('无法核对（读数里没有目标字段）：与不一致分开记录；锁保持到有效期到期、不提前放、不续期，到期强制重读', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
+    const events: unknown[] = []
+    onForceReread((e) => events.push(e))
+    const t = take()
+    claim(t)
+    markSent(t, Promise.resolve(), REC)
+    requireVerify(t, async () => 'unverifiable')
+    settle(t, 'ok')
+    await vi.advanceTimersByTimeAsync(0)
+    const exp0 = lockOf(PA)?.expiresAt
+    expect(lockOf(PA)).toMatchObject({ phase: 'unknown', lastVerify: 'unverifiable' })
+    await vi.advanceTimersByTimeAsync(DEFAULT_TTL_MS - 1000)
+    expect(await verify(KEY)).toBe('unverifiable')
+    expect(lockOf(PA)?.expiresAt).toBe(exp0)
+    expect(release(t)).toBe(false)
+    await vi.advanceTimersByTimeAsync(1001)
     expect(lockOf(PA)).toBeNull()
-    expect(stored()).toEqual([])
+    expect(events).toHaveLength(1)
+  })
+  it('核对结果记在锁上：未变化 / 结果未知（读失败）/ 屏离线 / 无法核对', async () => {
+    let r: () => Promise<L.MatchResult> = async () => false
+    const t = await unknownSettled(() => r())
+    void t
+    expect(await verify(KEY)).toBe('mismatch')
+    expect(lockOf(PA)?.lastVerify).toBe('mismatch')
+    r = async () => { throw new Error('x') }
+    expect(await verify(KEY)).toBe('failed')
+    expect(lockOf(PA)?.lastVerify).toBe('failed')
+    r = async () => { throw new ApiError('unavailable', 'x') }
+    expect(await verify(KEY)).toBe('offline')
+    r = async () => 'unverifiable'
+    expect(await verify(KEY)).toBe('unverifiable')
+    expect(lockOf(PA)?.lastVerify).toBe('unverifiable')
   })
   it('真实顺序：先 markSent，调用方 await 后在 catch 里 settle(unknown)（原写已先结算）→ 自动核对一次', async () => {
     const fn = vi.fn(async () => true)
@@ -293,6 +353,9 @@ describe('核对', () => {
     vi.useRealTimers()
     expect(await verify(KEY)).toBe('released')
   })
+})
+
+describe('候选结果提交（#33）与无效核对', () => {
   it('超时：核对函数一收到中止就同步返回候选结果（先于超时错误胜出）→ 作废，不提交、不放锁', async () => {
     const t = await unknownSettled()
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
@@ -304,6 +367,39 @@ describe('核对', () => {
     expect(commit).not.toHaveBeenCalled()
     expect(lockOf(PA)).toMatchObject({ verifying: false, phase: 'unknown' })
     vi.useRealTimers()
+  })
+  it('有效核对先提交再按结论放锁；不一致也提交（只提交一致的那部分由调用方决定）；读取途中换号不提交', async () => {
+    const commit = vi.fn()
+    let same = false
+    const t = await unknownSettled(async () => ({ same, commit }))
+    expect(await verify(KEY)).toBe('mismatch')
+    expect(commit).toHaveBeenCalledTimes(1)
+    requireVerify(t, async () => { acct = { user: 'u2', gen: 9 }; return { same: true, commit } })
+    expect(await verify(KEY)).toBe('account-changed')
+    expect(commit).toHaveBeenCalledTimes(1)
+    acct = { user: 'u1', gen: 1 }
+    same = true
+    requireVerify(t, async () => ({ same, commit }))
+    expect(await verify(KEY)).toBe('released')
+    expect(commit).toHaveBeenCalledTimes(2)
+  })
+  it('读取途中换号：核对器返回的逐字段结果作废，改了的字段全部记为结果未知；别的账号看不到 lastFields', async () => {
+    const t = await unknownSettled(async () => { acct = { user: 'u2', gen: 9 }; return { verdict: 'applied', fields: { temperature: 'applied' } } })
+    void t
+    expect(await verify(KEY)).toBe('account-changed')
+    acct = { user: 'u1', gen: 1 }
+    expect(lockOf(PA)?.lastFields).toEqual({ temperature: 'unknown' })
+    acct = { user: 'u2', gen: 9 }
+    expect(lockOf(PA)).toMatchObject({ owner: 'other-account', label: '', projectId: '' })
+    expect(lockOf(PA)?.lastFields).toBeUndefined()
+  })
+  it('回读失败时只把「改了的字段」记为结果未知：203 的 systemMode 0 = 不改', async () => {
+    const t = take(); claim(t)
+    markSent(t, Promise.resolve(), { msg: 203, deviceId: null, target: { systemSwitch: -1, systemMode: 0, roomSwitch: 1, roomTemp: -1 } })
+    requireVerify(t, async () => { throw new Error('网络错误') })
+    settle(t, 'unknown')
+    await flush()
+    expect(lockOf(PA)?.lastFields).toEqual({ roomSwitch: 'unknown' })
   })
 })
 
@@ -372,6 +468,218 @@ describe('核对不绑定账号；发起者信息防泄露', () => {
     expect(notes.length).toBeGreaterThan(0)
     off()
     setConfig(null)
+  })
+})
+
+describe('逐字段结果（lastFields）', () => {
+  it('核对函数返回逐字段结论：只有全部一致才放锁；混合时锁保持，lastVerify 为整体、lastFields 逐字段', async () => {
+    let r: L.MatchResult = { verdict: 'unchanged', fields: { temperature: 'unchanged', humidity: 'unverifiable' } }
+    await unknownSettled(async () => r)
+    expect(await verify(KEY)).toBe('mismatch')
+    expect(lockOf(PA)).toMatchObject({ lastVerify: 'mismatch', lastFields: { temperature: 'unchanged', humidity: 'unverifiable' } })
+    r = { verdict: 'unverifiable', fields: { temperature: 'applied', humidity: 'unverifiable' } }
+    expect(await verify(KEY)).toBe('unverifiable')
+    expect(lockOf(PA)?.lastFields).toEqual({ temperature: 'applied', humidity: 'unverifiable' })
+    r = { verdict: 'unknown', fields: { temperature: 'unknown' } }
+    expect(await verify(KEY)).toBe('failed') // 结果未知（面板离线）
+    expect(lockOf(PA)?.lastFields).toEqual({ temperature: 'unknown' })
+    r = { verdict: 'applied', fields: { temperature: 'applied' } }
+    expect(await verify(KEY)).toBe('released')
+  })
+  it('回读失败：每个目标字段都记为结果未知', async () => {
+    await unknownSettled(async () => { throw new Error('网络错误') })
+    expect(await verify(KEY)).toBe('failed')
+    expect(lockOf(PA)?.lastFields).toEqual({ temperature: 'unknown' }) // REC 只改了温度
+  })
+})
+
+describe('自动重新核对（退避）', () => {
+  const fake = () => vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
+  /** 已认领、登记、定为已下发，原写立即结算；返回核对次数计数 */
+  async function sentOk(fn: () => Promise<L.MatchResult>) {
+    const t = take()
+    claim(t)
+    markSent(t, Promise.resolve(), REC)
+    requireVerify(t, fn)
+    settle(t, 'ok')
+    await vi.advanceTimersByTimeAsync(0)
+    return t
+  }
+  it('未变化：结算后核对一次，再按 5 秒、20 秒、60 秒退避核对，共 4 次；之后不再自动核对，到期放锁', async () => {
+    fake()
+    expect(RETRY_DELAYS_MS).toEqual([5_000, 20_000, 60_000])
+    const fn = vi.fn(async () => false as L.MatchResult)
+    await sentOk(fn)
+    expect(fn).toHaveBeenCalledTimes(1)
+    await vi.advanceTimersByTimeAsync(4_999)
+    expect(fn).toHaveBeenCalledTimes(1)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(fn).toHaveBeenCalledTimes(2)
+    await vi.advanceTimersByTimeAsync(20_000)
+    expect(fn).toHaveBeenCalledTimes(3)
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(fn).toHaveBeenCalledTimes(4)
+    expect(lockOf(PA)?.lastVerify).toBe('mismatch')
+    await vi.advanceTimersByTimeAsync(DEFAULT_TTL_MS)
+    expect(fn).toHaveBeenCalledTimes(4)
+    expect(lockOf(PA)).toBeNull()
+  })
+  it('无法核对也退避；某次核对一致即放锁、不再排后续', async () => {
+    fake()
+    let n = 0
+    const fn = vi.fn(async (): Promise<L.MatchResult> => (++n >= 3 ? true : 'unverifiable'))
+    await sentOk(fn)
+    await vi.advanceTimersByTimeAsync(5_000)
+    expect(lockOf(PA)?.lastVerify).toBe('unverifiable')
+    await vi.advanceTimersByTimeAsync(20_000)
+    expect(lockOf(PA)).toBeNull()
+    await vi.advanceTimersByTimeAsync(120_000)
+    expect(fn).toHaveBeenCalledTimes(3)
+  })
+  it('只退避 3 次：有效期再长也不再自动核对', async () => {
+    fake()
+    configureWriteLock({ ttlMs: 10 * 60_000 })
+    const fn = vi.fn(async () => false as L.MatchResult)
+    await sentOk(fn)
+    await vi.advanceTimersByTimeAsync(9 * 60_000)
+    expect(fn).toHaveBeenCalledTimes(4)
+  })
+  it('不超过有效期：有效期 30 秒时只排得下 5 秒、20 秒两次（第三次不排，只剩到期定时器）', async () => {
+    fake()
+    configureWriteLock({ ttlMs: 30_000 })
+    const fn = vi.fn(async () => false as L.MatchResult)
+    await sentOk(fn)
+    await vi.advanceTimersByTimeAsync(29_000)
+    expect(fn).toHaveBeenCalledTimes(3)
+    expect(vi.getTimerCount()).toBe(1)
+    await vi.advanceTimersByTimeAsync(2_000)
+    expect(lockOf(PA)).toBeNull()
+    await vi.advanceTimersByTimeAsync(100_000)
+    expect(fn).toHaveBeenCalledTimes(3)
+  })
+  it('读取失败 / 屏离线也按同样节奏退避（共 4 次）', async () => {
+    fake()
+    let n = 0
+    const fn = vi.fn(async (): Promise<L.MatchResult> => { n += 1; if (n % 2) throw new Error('x'); throw new ApiError('unavailable', 'x') })
+    await sentOk(fn)
+    await vi.advanceTimersByTimeAsync(90_000)
+    expect(fn).toHaveBeenCalledTimes(4)
+    expect(lockOf(PA)?.lastVerify).toBe('offline')
+  })
+  it('首次「不可见」（组织数据还没就绪）→ 退避后可见且一致 → 放锁', async () => {
+    fake()
+    const fn = vi.fn(async () => true as L.MatchResult)
+    visible = {}
+    await sentOk(fn)
+    expect(fn).not.toHaveBeenCalled()
+    visible = { pa: PA }
+    await vi.advanceTimersByTimeAsync(5_000)
+    expect(fn).toHaveBeenCalledTimes(1)
+    expect(lockOf(PA)).toBeNull()
+  })
+  it('退避到点时手动核对还在进行：等它的结果，仍不一致就继续剩余退避', async () => {
+    fake()
+    let release: (v: L.MatchResult) => void = () => {}
+    let calls = 0
+    const fn = vi.fn((): Promise<L.MatchResult> => { calls += 1; return calls === 2 ? new Promise((r) => { release = r }) : Promise.resolve(false) })
+    await sentOk(fn) // 第 1 次：不一致，排 5 秒
+    await vi.advanceTimersByTimeAsync(4_000)
+    const manual = verify(KEY) // 第 2 次：手动核对，挂着
+    await vi.advanceTimersByTimeAsync(1_000) // 5 秒到点：遇到进行中，不另发
+    expect(fn).toHaveBeenCalledTimes(2)
+    release(false)
+    expect(await manual).toBe('mismatch')
+    await vi.advanceTimersByTimeAsync(20_000) // 继续剩余退避：20 秒后再核对
+    expect(fn).toHaveBeenCalledTimes(3)
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(fn).toHaveBeenCalledTimes(4)
+  })
+  it('时钟已跨过到期、到期定时器还没执行：退避回调到点直接 expire（放锁一次、强制重读一次），不再核对', async () => {
+    fake()
+    const events: unknown[] = []
+    onForceReread((e) => events.push(e))
+    const fn = vi.fn(async () => false as L.MatchResult)
+    await sentOk(fn)
+    vi.setSystemTime(Date.now() + DEFAULT_TTL_MS) // 系统时间跳过到期，定时器都还没跑
+    await vi.advanceTimersByTimeAsync(5_000) // 退避回调先到点
+    expect(fn).toHaveBeenCalledTimes(1)
+    expect(lockOf(PA)).toBeNull()
+    expect(events).toHaveLength(1)
+    await vi.advanceTimersByTimeAsync(DEFAULT_TTL_MS) // 原来的到期定时器再到点：不重复
+    expect(events).toHaveLength(1)
+  })
+  it('已过有效期：手动核对不发起（expired）；读取途中过了有效期：不接受结果，只 expire 一次', async () => {
+    fake()
+    const events: unknown[] = []
+    onForceReread((e) => events.push(e))
+    const fn = vi.fn(async () => false as L.MatchResult)
+    await sentOk(fn)
+    vi.setSystemTime(Date.now() + DEFAULT_TTL_MS)
+    expect(await verify(KEY)).toBe('expired')
+    expect(fn).toHaveBeenCalledTimes(1)
+    expect(events).toHaveLength(1)
+    // 读取途中过期
+    __resetWriteLockForTests(() => acct)
+    configureWriteLock({ resolveProject: (id) => visible[id] ?? null })
+    onForceReread((e) => events.push(e))
+    let done: (v: L.MatchResult) => void = () => {}
+    const t = take(); claim(t); markSent(t, Promise.resolve(), REC)
+    requireVerify(t, () => new Promise<L.MatchResult>((r) => { done = r }))
+    settle(t, 'ok')
+    await vi.advanceTimersByTimeAsync(0)
+    vi.setSystemTime(Date.now() + DEFAULT_TTL_MS)
+    done(true) // 一致，但已过期：不按一致放锁，按到期处理
+    await vi.advanceTimersByTimeAsync(0)
+    expect(lockOf(PA)).toBeNull()
+    expect(events).toHaveLength(2)
+  })
+  it('退避等待中的手动核对被中止 / 读取途中换号：不断链，下一次照常重试（重新检查账号与可见性）；最终到期放锁', async () => {
+    fake()
+    let release: (v: L.MatchResult) => void = () => {}
+    let calls = 0
+    const fn = vi.fn((): Promise<L.MatchResult> => {
+      calls += 1
+      if (calls === 2) return new Promise((r) => { release = r }) // 手动核对：挂着，随后被中止
+      if (calls === 3) { acct = { user: 'u1', gen: 7 }; return Promise.resolve(true) } // 读取途中换代：作废
+      return Promise.resolve(false)
+    })
+    await sentOk(fn) // 第 1 次：不一致，排 5 秒
+    await vi.advanceTimersByTimeAsync(4_000)
+    const ac = new AbortController()
+    const manual = verify(KEY, ac.signal)
+    await vi.advanceTimersByTimeAsync(1_000) // 5 秒到点：等手动核对
+    ac.abort(); release(true)
+    expect(await manual).toBe('aborted')
+    await vi.advanceTimersByTimeAsync(20_000) // 不断链：20 秒后第 3 次（换代 → 作废）
+    expect(fn).toHaveBeenCalledTimes(3)
+    expect(lockOf(PA)).not.toBeNull()
+    await vi.advanceTimersByTimeAsync(60_000) // 第 4 次：仍不一致
+    expect(fn).toHaveBeenCalledTimes(4)
+    await vi.advanceTimersByTimeAsync(DEFAULT_TTL_MS) // 最终到期
+    expect(lockOf(PA)).toBeNull()
+  })
+  it('放锁（手动核对一致）后排着的退避不再执行', async () => {
+    fake()
+    let same = false
+    const fn = vi.fn(async () => same as L.MatchResult)
+    await sentOk(fn)
+    same = true
+    expect(await verify(KEY)).toBe('released')
+    expect(vi.getTimerCount()).toBe(0) // 退避与到期定时器都已清掉
+    await vi.advanceTimersByTimeAsync(100_000)
+    expect(fn).toHaveBeenCalledTimes(2)
+  })
+  it('刷新恢复的锁：注册核对器后同样退避', async () => {
+    fake()
+    put(rec())
+    vi.resetModules()
+    const R = await import('../writeLock')
+    R.configureWriteLock({ resolveProject: (id) => visible[id] ?? null })
+    const fn = vi.fn(async () => false)
+    R.registerVerifier(201, fn)
+    await vi.advanceTimersByTimeAsync(0)
+    await vi.advanceTimersByTimeAsync(25_000)
+    expect(fn).toHaveBeenCalledTimes(3)
   })
 })
 
@@ -453,6 +761,13 @@ describe('持久化（localStorage）', () => {
     expect(raw).not.toContain('客厅')
     expect(raw).not.toMatch(/token|Bearer|password/i)
     expect(parseStored(raw)).toMatchObject({ keys: lockKeysOf(PA), projectId: 'pa', msg: 201, deviceId: 406658286, userId: 'u1' })
+  })
+  it('206 的目标房间集合随记录落盘，刷新后可用；坏的 roomIds 作废', async () => {
+    const t = take()
+    markSent(t, new Promise(() => {}), { msg: 206, deviceId: null, target: { switch: 1 }, roomIds: [1, 2] })
+    expect(parseStored(localStorage.getItem(STORAGE_PREFIX + KEY))).toMatchObject({ msg: 206, roomIds: [1, 2] })
+    expect(parseStored(JSON.stringify({ ...rec({ msg: 206, deviceId: null, target: { switch: 1 } }), roomIds: ['x'] }))).toBeNull()
+    expect(parseStored(JSON.stringify({ ...rec({ msg: 206, deviceId: null, target: { switch: 1 } }), roomIds: [] }))).toBeNull()
   })
   it('核对数据不合规（凭据样的字段、非标量）：不落盘', () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {})
