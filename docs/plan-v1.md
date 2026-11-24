@@ -231,7 +231,7 @@ src/api/
 
 - 运行时配置加 `writeMode`：`off`（全部拦截）/ `allowlist`（只放行 `writeProjectIds` 里的项目）/ `on`。
 - 本地开发和 hvac-demo 都连测试环境，`writeMode=allowlist`，名单为两个测试项目 260911001 和 240829001（后端已确认可做下发测试，Q2）；下发前在群里说一声，下发前后各读一次核对，日志和截图写进 PR。
-- 指向生产须负责人确认；指向生产后默认 `allowlist`，改成 `on` 也须负责人确认。交付给对方的包默认 `on`。
+- 指向生产须负责人确认；指向生产后默认 `allowlist`，改成 `on` 也须负责人确认。交付给对方的包默认 `writeMode: 'off'` 且 `writeProjectCodes` 为空（生产环境禁止一切下发），负责人另行确认后才开放（负责人 11/24 指示，见 `docs/部署说明.md`）。
 - CI 里的测试一律用拦截的假响应，不连任何真实后端。
 - 每个写操作沿用现有的二次确认弹窗，弹窗里写明项目名和将下发的值。
 
@@ -353,12 +353,12 @@ CI（GitHub Actions，每个 PR 触发）：`oxlint` → `tsc -b` → `vitest` �
 ### 7.2 给对方后端的交付物（部署到 int.cosyhome.com.cn）
 
 1. `hengjing-cloud-<版本>-<commit>.zip`：`dist/` 静态文件，内含 `config.js`。
-2. `docs/deploy.md` 构建与部署说明：
-   - 构建：Node 版本、`npm ci && npm run build`、可选环境变量（`VITE_API_BASE`、`VITE_BASE`）。
+2. `docs/部署说明.md` 构建与部署说明（`docs/deploy.md` 只讲 hvac-demo / hvac-mock 测试站）；包由 `scripts/build-prod.sh` 生成：
+   - 构建：Node 版本、`npm ci && npm run build`、`scripts/build-prod.sh` 的 `API_BASE`、`OUT_DIR`。
    - 配置：`config.js` 里的 `apiBase`、`writeMode`。
    - nginx 示例：SPA 回退（`try_files … /index.html`）、`/assets/` 长缓存、`index.html` 与 `config.js` 不缓存、`/api/` 反向代理到后端 `/v1/`。
    - 如果不做反向代理而让浏览器直连 `control.cosyhome.com.cn`，后端需要为 `int.cosyhome.com.cn` 开 CORS（目前预检返回 403）。
-   - 默认部署在域名根路径；放子路径需带 `VITE_BASE` 重新构建。
+   - 默认部署在域名根路径；放子路径目前不支持（`vite.config.ts` 未设 `base`），需要时再加。
 3. 用到的接口清单（路由 + 用到的字段），方便后端评估改动影响。
 4. 版本信息：页面底部和 `version.json` 带 commit 与构建时间，便于报问题时对版本。
 5. 源码仓库访问权是否一并交付，由负责人决定（Q14）。

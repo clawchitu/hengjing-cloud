@@ -28,3 +28,4 @@ compare/build/
 compare/
 playwright-report/
 test-results/
+release/
