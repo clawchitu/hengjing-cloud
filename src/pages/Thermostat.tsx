@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { faPowerOff, faLeaf, faFan } from '@fortawesome/free-solid-svg-icons'
-import { Card, Chart, Icon, Seg, Toggle, axis, tooltip, useAsync } from '../components/ui'
+import { Card, Chart, Icon, Seg, Toggle, axis, tooltip, useAsync } from '../components/legacy'
 import { useStats, type Range } from './Sensors'
 import { useApp } from '../app/store'
 import * as api from '../api'
@@ -84,13 +84,13 @@ export default function Thermostat() {
           <button className="btn primary" onClick={() => all(true)}><Icon icon={faPowerOff} />全部开启</button>
         </div>
       </div>
-      <div className="grid g4" style={{ marginBottom: 16 }}>
+      <div className="hj-grid g4" style={{ marginBottom: 16 }}>
         <Card className="kpi"><div className="k-label">温控面板</div><div className="k-val">{rooms.length}</div><div className="k-foot">全部在线</div></Card>
         <Card className="kpi"><div className="k-label">已开启房间</div><div className="k-val green">{on.length}</div><div className="k-foot">{rooms.length - on.length} 间关闭</div></Card>
         <Card className="kpi"><div className="k-label">节能模式</div><div className="k-val" style={{ color: 'var(--amber)' }}>{eco.length}</div><div className="k-foot">间房间处于节能模式</div></Card>
         <Card className="kpi"><div className="k-label">平均室温 / 湿度</div><div className="k-val">{avgT.toFixed(1)}°<small style={{ fontSize: 17 }}>/ {Math.round(avgH)}%</small></div><div className="k-foot">平均露点 {avgD.toFixed(1)}°C</div></Card>
       </div>
-      <div className="grid g2">
+      <div className="hj-grid g2">
         {rooms.map((r) => (
           <RoomCard key={r.id} r={r} selected={sel === r.id} onSelect={() => setSel(r.id)}
             onToggle={async (v) => { await setPower([r.id], v); toast(`${r.name} 已${v ? '开启' : '关闭'}`) }} />

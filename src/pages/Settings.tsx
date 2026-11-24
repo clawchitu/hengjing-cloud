@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Card, Toggle } from '../components/ui'
+import { Card, Toggle } from '../components/legacy'
 import { useApp } from '../app/store'
 
 export default function Settings() {

@@ -1,0 +1,125 @@
+/*
+ * Tailwind 4 + shadcn/ui 入口（S1）。在 main.tsx 里先于 global.css 引入，用来固定层叠顺序。
+ *
+ * - 只引 theme 与 utilities 两层，不引 preflight（全量重置会改动行高、标题字重、small 字号等，见 docs/plan-s1-s3.md 第 5 节 B 类）。
+ * - global.css / pages.css 的手写规则不在任何 @layer 里，永远压过这里的工具类；旧界面因此不受影响。
+ * - 视觉参数全部来自 global.css 的 :root。这里只做 --color-* / --radius-* 等映射，不在 :root 定义任何 shadcn 同名变量
+ *   （旧 --muted 是文字灰、旧 --radius 是卡片圆角，与 shadcn 含义不同）。
+ * - 不声明 dark 变体，不写 dark: 类（旧 .pill.dark 会误触发）。
+ */
+@layer theme, base, components, utilities;
+
+@import 'tailwindcss/theme.css' layer(theme);
+@import 'tailwindcss/utilities.css' layer(utilities) source(none);
+@import 'tw-animate-css';
+
+/* 只扫 src，避开 docs/、ref/ */
+@source '../**/*.{ts,tsx}';
+
+@theme inline {
+  /* shadcn 语义色 */
+  --color-background: var(--bg);
+  --color-foreground: var(--text);
+  --color-card: var(--card);
+  --color-card-foreground: var(--text);
+  --color-card-border: #e9eef4;
+  --color-popover: var(--card);
+  --color-popover-foreground: var(--text);
+  --color-primary: var(--primary);
+  --color-primary-foreground: #fff;
+  --color-secondary: var(--primary-soft);
+  --color-secondary-foreground: var(--primary);
+  --color-accent: var(--primary-soft);
+  --color-accent-foreground: var(--primary);
+  --color-muted: var(--bg);
+  --color-muted-foreground: var(--muted);
+  --color-border: var(--line);
+  --color-input: var(--line);
+  --color-ring: var(--primary-2);
+  --color-destructive: var(--red);
+
+  /* 扩展色（shadcn 没有） */
+  --color-navy: var(--navy);
+  --color-navy-2: var(--navy-2);
+  --color-navy-3: var(--navy-3);
+  --color-navy-active: var(--navy-active);
+  --color-primary-2: var(--primary-2);
+  --color-primary-soft: var(--primary-soft);
+  --color-primary-line: var(--primary-line);
+  --color-line-2: var(--line-2);
+  --color-text-2: var(--text-2);
+  --color-faint: var(--faint);
+  --color-green: var(--green);
+  --color-green-2: var(--green-2);
+  --color-orange: var(--orange);
+  --color-amber: var(--amber);
+  --color-amber-2: var(--amber-2);
+  --color-red-2: var(--red-2);
+  --color-indigo: var(--indigo);
+  --color-sky: var(--sky);
+
+  /* 状态色 soft 版（S2 Badge 用），值在 global.css :root */
+  --color-green-soft: var(--green-soft);
+  --color-green-soft-foreground: var(--green);
+  --color-amber-soft: var(--amber-soft);
+  --color-amber-soft-foreground: var(--amber-soft-fg);
+  --color-orange-soft: var(--orange-soft);
+  --color-orange-soft-foreground: var(--orange-soft-fg);
+  --color-red-soft: var(--red-soft);
+  --color-red-soft-foreground: var(--red-2);
+  --color-blue-soft: var(--blue-soft);
+  --color-blue-soft-foreground: var(--blue-soft-fg);
+  --color-purple-soft: var(--purple-soft);
+  --color-purple-soft-foreground: var(--purple-soft-fg);
+  --color-gray-soft: var(--gray-soft);
+  --color-gray-soft-foreground: var(--faint);
+
+  /* 圆角：写死像素，不用 shadcn 的 calc(var(--radius) - 2px)（旧 --radius 是卡片圆角 14px） */
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 10px;
+  --radius-xl: var(--radius);
+  --radius-2xl: 16px;
+
+  /* 字体 */
+  --font-sans: var(--font);
+  --font-num: 'Barlow', var(--font);
+
+  /* 阴影 */
+  --shadow-card: var(--shadow);
+  --shadow-pop: 0 12px 32px rgba(15, 23, 42, 0.14);
+  --shadow-modal: 0 20px 60px rgba(2, 6, 23, 0.3);
+}
+
+/*
+ * 代替 preflight 的小范围重置：只作用于 shadcn 组件元素自身（[data-slot]），:where() 让权重为 0。
+ * 不照抄 shadcn 的 `* { @apply border-border outline-ring/50 }`，它会改掉所有原生控件的焦点环颜色。
+ */
+@layer base {
+  :where([data-slot]),
+  :where([data-slot])::before,
+  :where([data-slot])::after {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+    border: 0 solid var(--line);
+  }
+  :where(button, input, select, textarea)[data-slot] {
+    font: inherit;
+    color: inherit;
+    background: transparent;
+    border-radius: 0;
+    letter-spacing: inherit;
+  }
+  :where(h1, h2, h3, h4, h5, h6)[data-slot] {
+    font-size: inherit;
+    font-weight: inherit;
+  }
+  /* 表格：同 preflight，否则 shadcn Table 会出现单元格间隙、行边框失效（border-spacing 在 collapse 下不起作用，写 0 兜底） */
+  :where(table)[data-slot] {
+    text-indent: 0;
+    border-color: inherit;
+    border-collapse: collapse;
+    border-spacing: 0;
+  }
+}

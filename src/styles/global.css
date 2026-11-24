@@ -28,15 +28,30 @@
   --radius: 14px;
   --shadow: 0 1px 2px rgba(15, 23, 42, 0.04), 0 2px 8px rgba(15, 23, 42, 0.03);
   --sb-w: 232px;
+  /* 状态色 soft 版（取自 .pill.*，供 S2 Badge 经 tailwind.css 的 --color-*-soft 使用） */
+  --amber-soft: #fffbeb;
+  --amber-soft-fg: #d97706;
+  --orange-soft: #fff7ed;
+  --orange-soft-fg: #ea580c;
+  --red-soft: #fff1f2;
+  --blue-soft: #eff6ff;
+  --blue-soft-fg: #2563eb;
+  --purple-soft: #f5f3ff;
+  --purple-soft-fg: #7c3aed;
+  --gray-soft: #f1f5f9;
   --font: 'Barlow', 'Noto Sans SC', -apple-system, 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif;
 }
 
-* { box-sizing: border-box; }
-html, body, #root { margin: 0; padding: 0; min-height: 100%; }
-body { font-family: var(--font); font-size: 14px; color: var(--text); background: var(--bg); -webkit-font-smoothing: antialiased; min-width: 1280px; }
-button, input, select, textarea { font-family: inherit; font-size: inherit; color: inherit; }
-button { cursor: pointer; }
-a { color: inherit; text-decoration: none; }
+/* 元素级重置放进 @layer base（层序在 tailwind.css 声明）：否则这些未分层规则会压掉 shadcn 组件上的
+   text-white、text-sm 等工具类。手写的类选择器规则仍不分层，照旧优先。 */
+@layer base {
+  * { box-sizing: border-box; }
+  html, body, #root { margin: 0; padding: 0; min-height: 100%; }
+  body { font-family: var(--font); font-size: 14px; color: var(--text); background: var(--bg); -webkit-font-smoothing: antialiased; min-width: 1280px; }
+  button, input, select, textarea { font-family: inherit; font-size: inherit; color: inherit; }
+  button { cursor: pointer; }
+  a { color: inherit; text-decoration: none; }
+}
 .num { font-family: 'Barlow', var(--font); font-variant-numeric: tabular-nums; }
 
 /* ------------------------------------------------------------ shell */
@@ -103,7 +118,8 @@ a { color: inherit; text-decoration: none; }
 .card-title { font-size: 15.5px; font-weight: 700; margin: 0; display: flex; align-items: center; gap: 8px; }
 .card-sub { color: var(--muted); font-size: 12px; margin-top: 4px; }
 .card-head { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 16px; gap: 12px; }
-.grid { display: grid; gap: 16px; }
+/* 原名 .grid：与 Tailwind 的 grid 工具类同名，会给 shadcn 组件强加 16px 间距，故改名 */
+.hj-grid { display: grid; gap: 16px; }
 .row { display: flex; align-items: center; gap: 8px; }
 .muted { color: var(--muted); }
 .faint { color: var(--faint); }

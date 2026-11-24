@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactNode } from 'react'
 import { faFan, faDroplet, faTemperatureLow, faPaperPlane, faRotate, faSignal, faFilter, faLock, faGears } from '@fortawesome/free-solid-svg-icons'
-import { Card, Icon, Toggle, useAsync, useClock } from '../components/ui'
+import { Card, Icon, Toggle, useAsync, useClock } from '../components/legacy'
 import { useApp } from '../app/store'
 import * as api from '../api'
 import { DEW_MODES, isStandalone, type FreshAir as FA } from '../api'
