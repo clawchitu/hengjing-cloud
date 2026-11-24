@@ -26,6 +26,7 @@ const STATES: [string, string][] = [
   ['PRJ-10242', 'mixed-sensors'],
   ['PRJ-10243', 'no-pm-co2'],
   ['PRJ-10252', 'standalone12'],
+  ['PRJ-30057', 'standalone12-mode6'],
   ['PRJ-10244', 'offline'],
 ]
 for (const [id, tag] of STATES) {
@@ -34,6 +35,8 @@ for (const [id, tag] of STATES) {
       await login('dealer', id)
       await page.goto(`/${p}`)
       await shot(page, `state-${tag}-${p}`)
+      if (tag === 'offline') await expect(page.locator('.offline-banner')).toBeVisible()
+      if (tag === 'standalone12' && p === 'thermostat') await expect(page.getByText('该项目无房间温控面板')).toBeVisible()
     })
   }
 }
