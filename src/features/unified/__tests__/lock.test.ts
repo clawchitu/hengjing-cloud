@@ -78,34 +78,36 @@ describe('S12b 接入写锁', () => {
 
   it('结果未知持锁：批次截止只改标注不放锁；原 Promise 迟到成功只算已下发 → 按结果未知交给锁核对，核对一致才放', async () => {
     L.configureWriteLock({ resolveProject: (id) => (id === 'u' ? { id: 'u', controlScreenId: 'S9' } : null) })
-    const verifier = vi.fn(async () => true)
-    L.registerVerifier(203, verifier)
+    // 核对按字段走本次登记的核对函数（用批次的回读），不再用注册的整条核对器
+    const readBack = vi.fn(async () => snap)
     let finish!: (v: { success: boolean; msg: string }) => void
     const send: BatchSender = (_p, _q, o) => { if (!o.beforeSend()) return Promise.reject(new ApiError('write_blocked', 'x')); return new Promise((r) => { finish = r }) }
-    const b = createUnifiedBatch({ getProjects: () => [P('u', 'S9')], readBack: async () => snap, send, log: () => {}, deadlineMs: 20 })
+    const b = createUnifiedBatch({ getProjects: () => [P('u', 'S9')], readBack, send, log: () => {}, deadlineMs: 20 })
     b.prepare(['u'], { roomSwitch: 1 })
     const done = await b.start()
     expect(done.rows[0].status).toBe('unknown') // 截止：结果未知
     expect(L.lockOf({ id: 'u', controlScreenId: 'S9' })?.phase).toBe('sent') // 锁仍在
+    const reads = readBack.mock.calls.length
     finish({ success: true, msg: '' })
     await flush()
-    expect(verifier).toHaveBeenCalled()
+    expect(readBack.mock.calls.length).toBeGreaterThan(reads)
     expect(L.lockOf({ id: 'u', controlScreenId: 'S9' })).toBeNull()
   })
 
   it('截止后才到的 success=true、核对器回读不一致：锁按结果未知保持，不提前放', async () => {
     L.configureWriteLock({ resolveProject: (id) => (id === 'v' ? { id: 'v', controlScreenId: 'SV2' } : null) })
-    const verifier = vi.fn(async () => false)
-    L.registerVerifier(203, verifier)
+    // 回读一直是关着：核对不一致
+    const readBack = vi.fn(async () => ({ rooms: 2, roomSwitch: 0, roomTemp: 26 }))
     let finish!: (v: { success: boolean; msg: string }) => void
     const send: BatchSender = (_p, _q, o) => { if (!o.beforeSend()) return Promise.reject(new ApiError('write_blocked', 'x')); return new Promise((r) => { finish = r }) }
-    const b = createUnifiedBatch({ getProjects: () => [P('v', 'SV2')], readBack: async () => snap, send, log: () => {}, deadlineMs: 20 })
+    const b = createUnifiedBatch({ getProjects: () => [P('v', 'SV2')], readBack, send, log: () => {}, deadlineMs: 20 })
     b.prepare(['v'], { roomSwitch: 1 })
     await b.start()
     b.reset() // 页面拿到结果后立即 reset（取消订阅）
+    const reads = readBack.mock.calls.length
     finish({ success: true, msg: '' })
     await flush()
-    expect(verifier).toHaveBeenCalled()
+    expect(readBack.mock.calls.length).toBeGreaterThan(reads)
     expect(L.lockOf('screen:SV2')?.phase).toBe('unknown')
   })
 
@@ -220,7 +222,7 @@ describe('注册了 203 核对器时', () => {
     const read = vi.fn(async () => cur)
     setupUnifiedWriteLock(visibleQc(), read, me)
     const send: BatchSender = async (_p, _q, o) => { if (!o.beforeSend()) throw new ApiError('write_blocked', 'x'); throw new ApiError('timeout', '超时') }
-    const b = createUnifiedBatch({ getProjects: () => [{ ...P('v', 'SV') }], readBack: async () => snap, send, log: () => {}, now: () => new Date() })
+    const b = createUnifiedBatch({ getProjects: () => [{ ...P('v', 'SV') }], readBack: read, send, log: () => {}, now: () => new Date() })
     await runOnce(b, ['v'])
     await flush()
     expect(read).toHaveBeenCalled()
@@ -241,19 +243,19 @@ describe('注册了 203 核对器时', () => {
 
   it('结果未知后状态机下发后回读一致：batch 再调一次 verify，核对一致放锁', async () => {
     L.configureWriteLock({ resolveProject: (id) => (id === 'w' ? { id: 'w', controlScreenId: 'SW' } : null) })
-    const verifier = vi.fn<(r: L.StoredLock, s: AbortSignal) => Promise<boolean>>()
-      .mockResolvedValueOnce(false) // settle(unknown) 后的自动核对：控制屏还没生效
-      .mockResolvedValue(true)
-    L.registerVerifier(203, verifier)
+    const verifySpy = vi.spyOn(L, 'verify')
     const send: BatchSender = async (_p, _q, o) => { if (!o.beforeSend()) throw new ApiError('write_blocked', 'x'); throw new ApiError('timeout', '超时') }
-    // 下发前读关着，下发后读开着：状态机按回读一致判成功
-    const reads = [{ rooms: 2, roomSwitch: 0, roomTemp: 26 }, { rooms: 2, roomSwitch: 1, roomTemp: 26 }]
-    const b = createUnifiedBatch({ getProjects: () => [P('w', 'SW')], readBack: async () => reads.shift() ?? snap, send, log: () => {}, now: () => new Date() })
+    // 下发前读关着；settle(unknown) 后的自动核对也读到关着（控制屏还没生效）；状态机下发后读开着：按回读一致判成功
+    const off = { rooms: 2, roomSwitch: 0, roomTemp: 26 }
+    let n = 0
+    const b = createUnifiedBatch({ getProjects: () => [P('w', 'SW')], readBack: async () => (n++ < 2 ? off : snap), send, log: () => {}, now: () => new Date() })
     const done = await runOnce(b, ['w'])
     await flush()
     expect(done.rows[0].state.status === 'success' && done.rows[0].state.via).toBe('readback')
-    expect(verifier).toHaveBeenCalledTimes(2)
+    // 批次在回读一致后补核对（锁内部 settle(unknown) 后的自动核对不经模块导出，不计在内）
+    expect(verifySpy).toHaveBeenCalled()
     expect(L.lockOf('screen:SW')).toBeNull()
+    verifySpy.mockRestore()
   })
 
   // 下发结果口径（Fable 11/24 裁定）：success=true 只算「已下发」，只有回读一致才放锁；未变化 / 无法核对 / 结果未知都锁着，等核对一致或到期
@@ -276,8 +278,8 @@ describe('注册了 203 核对器时', () => {
     it('成功但读到的值不一致（下发开启、回读关闭）→ 未变化，锁按结果未知保持，到期才放', async () => {
       vi.useFakeTimers({ shouldAdvanceTime: true })
       try {
-        L.registerVerifier(203, async () => false)
-        const b = batchWith('a2', [off, off])
+        // 之后的核对也读到关着：不一致，锁保持
+        const b = batchWith('a2', [off, off, off, off])
         const done = await runOnce(b, ['a2'])
         await flush()
         expect(done.rows[0].status).toBe('unapplied')

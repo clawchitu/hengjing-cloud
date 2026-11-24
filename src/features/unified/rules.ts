@@ -198,18 +198,57 @@ export function echoMismatches(q: WriteQuery<203>, after: UnifiedEcho | null | u
 /**
  * 回读结论（控制屏已应答 success=true 之后）：
  * - applied：下发的字段全部读到且一致（已生效）
- * - unchanged：下发的字段全部读到，但有字段和下发的不一样（未变化）
- * - unverifiable：有字段核对不了（没有房间条目、200 回包为空 {}、设备没回报、200 里根本没有这项读数如系统开关 / 运行模式）→ 无法核对
+ * - unchanged：有字段读到了、但和下发的不一样（未变化）；同时还有核对不了的字段也算未变化（排序 B，Fable 11/25）
+ * - unverifiable：没有不一致的，但有字段核对不了（没有房间条目、200 回包为空 {}、设备没回报、200 里根本没有这项读数如系统开关 / 运行模式）→ 无法核对
  * - unknown：有房间离线（读数不可信，结果未知）
  */
 export type EchoVerdict = 'applied' | 'unchanged' | 'unverifiable' | 'unknown'
 /**
- * 下发核对口径（Fable 11/24）：一次下发里既有能核对的字段、又有不能核对的字段时，能核对的部分照常逐字段判（mismatches 里照常
- * 列出 differ），整体结果按最不确定的那个算：结果未知（有房间离线）> 无法核对 > 未变化 > 已生效。
- * 回读请求本身失败不走这里（状态机直接判「结果未知」，不并进无法核对）
+ * 下发核对口径（Fable 11/24，排序 11/25 改 B）：一次下发里既有能核对的字段、又有不能核对的字段时，能核对的部分照常逐字段判
+ * （mismatches 里照常列出 differ），整体结果按排序取最靠前的：结果未知（有房间离线）> 未变化 > 无法核对 > 已生效。
+ * 与 fieldResults 逐字段结论取最靠前的那个一致。回读请求本身失败不走这里（状态机直接判「结果未知」，不并进无法核对）
  */
 export function echoVerdict(ms: readonly EchoMismatch[], after?: UnifiedEcho | null): EchoVerdict {
   if (after?.offline) return 'unknown'
+  if (ms.some((m) => m.kind === 'differ')) return 'unchanged'
   if (ms.some((m) => m.kind === 'missing' || m.kind === 'unreadable')) return 'unverifiable'
-  return ms.length ? 'unchanged' : 'applied'
+  return 'applied'
+}
+
+/** 单个字段的下发结果（四种之一）：applied 已生效、unchanged 未变化、unverifiable 无法核对、unknown 结果未知 */
+export type FieldStatus = EchoVerdict
+/** 总结果排序（Fable 11/25）：结果未知 > 未变化 > 无法核对 > 已生效；总结果取逐字段里最靠前的 */
+export const FIELD_STATUS_ORDER: readonly FieldStatus[] = ['unknown', 'unchanged', 'unverifiable', 'applied']
+export interface FieldResult { field: EchoField; label: string; status: FieldStatus; messages: string[] }
+
+/**
+ * 逐字段结论（只列下发了的字段）：
+ * - 回读失败（after 为 null，不带说明）或有房间离线（读数不可信）→ 结果未知
+ * - 有 differ → 未变化（同一字段既有不一致、又有没回报的，按排序算未变化）；只有 missing / unreadable → 无法核对；都没有 → 已生效
+ * - replied=false（应答结果未知）：除了回读一致的（已生效），其余都是结果未知
+ */
+export function fieldResults(q: WriteQuery<203>, after: UnifiedEcho | null | undefined, opts: { replied?: boolean } = {}): FieldResult[] {
+  const ms = echoMismatches(q, after)
+  return changedFields(q).map((field) => {
+    const mine = ms.filter((m) => m.field === field)
+    let status: FieldStatus = !after || after.offline ? 'unknown'
+      : mine.some((m) => m.kind === 'differ') ? 'unchanged'
+      : mine.length ? 'unverifiable' : 'applied'
+    if (opts.replied === false && status !== 'applied') status = 'unknown'
+    // 回读请求本身失败：不列逐字段的「设备未回报」（那是回读成功但没读数，不是一回事）
+    return { field, label: FIELD_LABEL[field], status, messages: after ? mine.map((m) => m.message) : [] }
+  })
+}
+
+/** 逐字段结论 → 总结果（排序最靠前的）；没有字段时算已生效 */
+export const overallOf = (rs: ReadonlyArray<{ status: FieldStatus }>): FieldStatus =>
+  FIELD_STATUS_ORDER.find((s) => rs.some((r) => r.status === s)) ?? 'applied'
+
+/**
+ * 结果标题（Fable 11/25）：所有字段同一种结果 → 就是那个词；混合 → 按排序逐项计数，如「1 项未生效，1 项无法核对」，不压成一个词
+ */
+export function resultTitle(rs: ReadonlyArray<{ status: FieldStatus }>): string {
+  const kinds = FIELD_STATUS_ORDER.filter((s) => rs.some((r) => r.status === s))
+  if (kinds.length <= 1) return TEXT.fieldStatus[kinds[0] ?? 'applied']
+  return kinds.map((s) => TEXT.fieldCount(rs.filter((r) => r.status === s).length, s)).join('，')
 }

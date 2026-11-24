@@ -173,11 +173,11 @@ describe('控制器：正常流程', () => {
     expect(logs.at(-1)).toMatchObject({ event: 'unverifiable', codes: ['REPLY_OK', 'NOT_VERIFIED'], fields: ['systemSwitch'] })
   })
 
-  it('部分字段不一致、部分没回报：整体按最不确定的算 → unverifiable，不一致的字段照常列出', async () => {
+  it('部分字段不一致、部分没回报：排序 B → unapplied（未变化），不一致的字段照常列出', async () => {
     const { ctl } = setup({ toEcho: (s) => ({ roomTemp: s.roomTemp, roomSwitch: null }), readBack: vi.fn(async () => BEFORE) })
     ctl.request({ roomTemp: 24, roomSwitch: 1 })
     const end = await ctl.confirm()
-    expect(end.status === 'unverifiable' && end.mismatches.map((m) => [m.field, m.kind])).toEqual([['roomSwitch', 'missing'], ['roomTemp', 'differ']])
+    expect(end.status === 'unapplied' && end.mismatches.map((m) => [m.field, m.kind])).toEqual([['roomSwitch', 'missing'], ['roomTemp', 'differ']])
   })
 
   it('Reply 成功但字段没回报（null）→ unverifiable（无法核对），不能判不一致', async () => {

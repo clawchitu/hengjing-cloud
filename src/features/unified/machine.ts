@@ -1,14 +1,15 @@
 // 统一控制下发流程的显式状态机：
 //
 //   idle ──request(校验通过)──▶ confirming ──confirm──▶ sending ──▶ success（已生效：下发后回读逐字段一致）
-//    ▲  ◀──request(校验不过，带 errors)  │   │            ├──▶ unapplied（未变化：success=true，字段都读到了，但有和下发的不一样的）
-//    │  ◀──cancel / abort──────────────┘   │            ├──▶ unverifiable（无法核对：success=true，有字段没回报 / 读不到；混合时按最不确定的算）
+//    ▲  ◀──request(校验不过，带 errors)  │   │            ├──▶ unapplied（未变化：success=true，有字段读到了但和下发的不一样；混合时按排序算）
+//    │  ◀──cancel / abort──────────────┘   │            ├──▶ unverifiable（无法核对：success=true，没有不一致的，但有字段没回报 / 读不到）
 //    │                                      │            ├──▶ failure（没发出 / 明确被拒）
 //    │  ◀──abort 或发送前复核不过──────────────┘            └──▶ unknown（结果未知：应答未知且回读没核对一致，或 success=true 但回读失败）
 //    └────────────────reset───────────── success / unapplied / unverifiable / failure / unknown
 //
 // 下发结果口径（Fable 11/24 裁定）：控制屏 success=true 只算「已下发，待核对」，以下发后回读为准。只有回读逐字段一致才是 success；
 // 应答结果未知（超时等）但回读一致也升为 success（via='readback'）。
+// 混合字段的总结果排序（Fable 11/25 改 B）：结果未知 > 未变化 > 无法核对 > 已生效（逐字段结论见 rules.ts fieldResults）。
 //
 // - transition() 是纯函数：不合法的事件原样返回当前状态（比如 sending 期间再点确认）。
 // - createUnifiedController() 负责副作用：确认时按最新上下文复核、下发前读一次、真正发送前再核对
@@ -41,9 +42,9 @@ export type UnifiedState<S = unknown> =
   | ({ status: 'sending'; step: SendingStep; before?: S } & Base)
   /** 已生效：回读逐字段一致。via='reply'：Reply success=true；via='readback'：应答结果未知，但回读逐字段一致 */
   | ({ status: 'success'; via: 'reply' | 'readback'; before: S; after: S } & Base)
-  /** 未变化：Reply success=true，下发的字段都读到了，但有和下发的不一样的（mismatches 全是 differ，至少一条） */
+  /** 未变化：Reply success=true，有字段读到了但和下发的不一样（mismatches 至少一条 differ；也可能同时有 missing / unreadable） */
   | ({ status: 'unapplied'; before: S; after: S; mismatches: EchoMismatch[] } & Base)
-  /** 无法核对：Reply success=true，有字段设备没回报或回读接口读不到；能核对的字段照常判，mismatches 里可能同时有 differ */
+  /** 无法核对：Reply success=true，没有不一致的，但有字段设备没回报或回读接口读不到（mismatches 全是 missing / unreadable） */
   | ({ status: 'unverifiable'; before: S; after: S; mismatches: EchoMismatch[] } & Base)
   | ({ status: 'failure'; outcome: FailureOutcome; error: string; before?: S; after?: S | null; afterError?: string } & Base)
   /**
@@ -290,10 +291,10 @@ export function createUnifiedController<S>(deps: UnifiedDeps<S>): UnifiedControl
         write('unknown', target, { codes: ['REPLY_OK', 'OFFLINE'], fields })
         dispatch({ type: 'UNKNOWN', replied: true, cause: '', before, after, afterError: TEXT.roomsOffline, mismatches })
       } else if (verdict === 'unchanged') {
-        write('unapplied', target, { codes: ['REPLY_OK', 'ECHO_MISMATCH'], fields: byKind('differ') })
+        write('unapplied', target, { codes: ['REPLY_OK', 'ECHO_MISMATCH'], fields: byKind('differ', 'missing', 'unreadable') })
         dispatch({ type: 'UNAPPLIED', before, after, mismatches })
       } else {
-        write('unverifiable', target, { codes: ['REPLY_OK', 'NOT_VERIFIED'], fields: byKind('missing', 'unreadable', 'differ') })
+        write('unverifiable', target, { codes: ['REPLY_OK', 'NOT_VERIFIED'], fields: byKind('missing', 'unreadable') })
         dispatch({ type: 'UNVERIFIABLE', before, after, mismatches })
       }
       return state
