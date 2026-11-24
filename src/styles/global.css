@@ -62,6 +62,7 @@
 .logo-mark svg { width: 18px; height: 18px; }
 .logo-text b { display: block; color: #fff; font-size: 15px; font-weight: 600; letter-spacing: .5px; line-height: 1.15; }
 .logo-text small { display: block; color: #64748b; font-size: 8.5px; letter-spacing: 2.2px; margin-top: 2px; }
+/* .sb-scroll 右内边距、.proj-switch 右外边距与边框决定项目菜单阴影的裁剪位置（Layout.tsx ProjectSwitch 的 clip-path 15px），改动时同步 */
 .sb-scroll { flex: 1; overflow-y: auto; padding: 14px 12px; }
 .sb-label { font-size: 10.5px; color: #64748b; padding: 8px 8px 8px; letter-spacing: .5px; }
 .nav-item { display: flex; align-items: center; gap: 11px; height: 33px; padding: 0 10px; margin: 0 0 3px; border-radius: 8px; color: #cbd5e1; font-size: 13.5px; position: relative; transition: background .15s; }

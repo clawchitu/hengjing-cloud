@@ -80,7 +80,7 @@ function SelectContent({ className, children, position = 'popper', ...props }: R
   )
 }
 
-/* 选项：同项目切换菜单的 .opt（8px 10px、7px 圆角、13px），高亮 --bg 底，当前项 --primary-soft 底、--primary 字、600 */
+/* 选项：同项目切换菜单的选项（Layout 的 ProjectSwitch：8px 10px、7px 圆角、13px），高亮 --bg 底，当前项 --primary-soft 底、--primary 字、600 */
 function SelectItem({ className, children, value, ...props }: React.ComponentProps<typeof SelectPrimitive.Item>) {
   return (
     <SelectPrimitive.Item

@@ -17,11 +17,17 @@ const currentName = (page: Page) => page.locator('.proj-switch .name')
 /** 当前高亮项（cmdk 的 aria-selected 表示键盘高亮，不是当前项目） */
 const highlighted = (list: Locator) => list.and(list.page().locator('[aria-selected="true"]'))
 
-/** aria-activedescendant 指向的元素文字（没有该属性时返回 null） */
-async function activeText(page: Page, owner: Locator) {
-  const id = await owner.getAttribute('aria-activedescendant')
-  if (!id) return null
-  return (await page.locator(`[id="${id}"]`).textContent())?.trim() ?? ''
+/**
+ * 当前焦点元素（读屏实际读取的那个）的角色，以及它的 aria-activedescendant 指向的元素文字（没有该属性时为 null；
+ * 指向的元素不存在时为 'MISSING'）
+ */
+async function focusedActive(page: Page) {
+  return page.evaluate(() => {
+    const el = document.activeElement
+    const id = el?.getAttribute('aria-activedescendant')
+    const target = id ? document.getElementById(id) : null
+    return { role: el?.getAttribute('role') ?? el?.tagName, active: id ? (target ? (target.textContent ?? '').trim() : 'MISSING') : null }
+  })
 }
 
 async function open(page: Page, login: (role: 'dealer' | 'admin', project?: string) => Promise<void>, role: 'dealer' | 'admin' = 'dealer', project?: string) {
@@ -38,7 +44,11 @@ test.describe('项目切换菜单', () => {
     await expect(menu(page)).toBeVisible()
     await expect(trigger(page)).toHaveAttribute('aria-expanded', 'true')
     await expect(highlighted(menuOptions(page))).toHaveCount(0)
-    await expect(menu(page)).not.toHaveAttribute('aria-activedescendant')
+    // 弹层是有名称的 dialog，触发器声明的弹出类型与之一致；焦点在列表上，没有活动项
+    await expect(page.getByRole('dialog', { name: '切换当前项目' })).toBeVisible()
+    await expect(trigger(page)).toHaveAttribute('aria-haspopup', 'dialog')
+    expect(await trigger(page).getAttribute('aria-controls')).toBe(await menu(page).getAttribute('id'))
+    expect(await focusedActive(page)).toEqual({ role: 'listbox', active: null })
     await page.keyboard.press('Escape')
     await tick(page)
     await expect(menu(page)).toHaveCount(0)
@@ -53,10 +63,11 @@ test.describe('项目切换菜单', () => {
     await tick(page)
     await expect(menu(page)).toBeVisible()
     await expect(highlighted(menuOptions(page))).toHaveText(/朝阳壹号院 A栋/)
-    expect(await activeText(page, menu(page))).toContain('朝阳壹号院 A栋')
+    expect(await focusedActive(page)).toEqual({ role: 'listbox', active: expect.stringContaining('朝阳壹号院 A栋') })
     await page.keyboard.press('ArrowDown')
     await tick(page)
     await expect(highlighted(menuOptions(page))).toHaveText(/朝阳壹号院 B栋/)
+    expect(await focusedActive(page)).toEqual({ role: 'listbox', active: expect.stringContaining('朝阳壹号院 B栋') })
     await page.keyboard.press('ArrowDown')
     await tick(page)
     await page.keyboard.press('ArrowUp')
@@ -70,17 +81,79 @@ test.describe('项目切换菜单', () => {
     await expect(trigger(page)).toBeFocused()
   })
 
-  test('Tab 关闭菜单，焦点回到触发器', async ({ page, login }) => {
+  for (const key of ['Tab', 'Shift+Tab']) {
+    test(`${key} 关闭菜单，焦点回到触发器`, async ({ page, login }) => {
+      await open(page, login)
+      await trigger(page).focus()
+      await page.keyboard.press('Enter')
+      await tick(page)
+      await expect(menu(page)).toBeVisible()
+      await page.keyboard.press(key)
+      await tick(page)
+      await expect(menu(page)).toHaveCount(0)
+      await expect(trigger(page)).toBeFocused()
+    })
+  }
+
+  test('键盘 Tab 聚焦触发器时有焦点环，鼠标点击没有', async ({ page, login }) => {
     await open(page, login)
-    await trigger(page).focus()
-    await page.keyboard.press('Enter')
-    await tick(page)
-    await expect(menu(page)).toBeVisible()
+    // 侧栏里触发器前面的最后一个链接
+    await page.locator('.sidebar .nav-item', { hasText: '统一控制' }).focus()
     await page.keyboard.press('Tab')
+    await expect(trigger(page)).toBeFocused()
+    expect(await trigger(page).evaluate((n) => n.matches(':focus-visible'))).toBe(true)
+    expect(await trigger(page).evaluate((n) => getComputedStyle(n).outlineStyle)).not.toBe('none')
+    await page.locator('h1').first().click()
+    await page.getByText('当前项目', { exact: true }).click()
+    await tick(page)
+    await page.keyboard.press('Escape') // 键盘接管：回到触发器且有焦点环（同原生按钮）
+    await tick(page)
+    await expect(trigger(page)).toBeFocused()
+    // 先用键盘操作过，再用鼠标打开并点选：焦点回到触发器但没有焦点环
+    await page.getByText('当前项目', { exact: true }).click()
+    await tick(page)
+    await menuOptions(page).filter({ hasText: '朝阳壹号院 B栋' }).click()
+    await tick(page)
+    await expect(currentName(page)).toHaveText('朝阳壹号院 B栋')
+    await expect(trigger(page)).toBeFocused()
+    const ring = () => trigger(page).evaluate((n) => getComputedStyle(n).outlineStyle)
+    expect(await ring()).toBe('none')
+    // 再在触发器上按键（键盘接管）：焦点环回来
+    await page.keyboard.press('ArrowDown')
+    await tick(page)
+    await page.keyboard.press('Escape')
+    await tick(page)
+    await expect(trigger(page)).toBeFocused()
+    expect(await ring()).not.toBe('none')
+    // 鼠标点触发器打开、再点触发器关闭：同样没有焦点环
+    await page.getByText('当前项目', { exact: true }).click()
+    await tick(page)
+    await page.getByText('当前项目', { exact: true }).click()
     await tick(page)
     await expect(menu(page)).toHaveCount(0)
-    await expect(trigger(page)).toBeFocused()
+    expect(await ring()).toBe('none')
   })
+
+  for (const height of [560, 420]) {
+    test(`矮窗口（高 ${height}）：菜单整个在屏内，能滚到最后一项`, async ({ page, login }) => {
+      await page.setViewportSize({ width: 1440, height })
+      await open(page, login, 'admin')
+      await page.getByText('当前项目', { exact: true }).click()
+      await tick(page)
+      const box = (await menu(page).boundingBox())!
+      expect(box.y).toBeGreaterThanOrEqual(0)
+      expect(box.y + box.height).toBeLessThanOrEqual(height)
+      const last = menuOptions(page).last()
+      await expect(last).not.toBeInViewport()
+      await menu(page).evaluate((m) => { m.scrollTop = m.scrollHeight })
+      await expect(last).toBeInViewport({ ratio: 1 })
+      // 键盘 End 也能到最后一项
+      await page.keyboard.press('Home')
+      await page.keyboard.press('End')
+      await tick(page)
+      await expect(highlighted(menuOptions(page))).toHaveText(await last.textContent() ?? '')
+    })
+  }
 
   test('空格、下键也能打开菜单', async ({ page, login }) => {
     await open(page, login)
@@ -112,7 +185,7 @@ test.describe('项目切换菜单', () => {
     await tick(page)
     await expect(highlighted(menuOptions(page))).toHaveText(/河西府 2栋/)
     await expect(cur).toBeInViewport()
-    expect(await activeText(page, menu(page))).toContain('河西府 2栋')
+    expect(await focusedActive(page)).toEqual({ role: 'listbox', active: expect.stringContaining('河西府 2栋') })
     await page.keyboard.press('ArrowDown')
     await tick(page)
     await expect(highlighted(menuOptions(page))).toHaveText(/河西府 3栋/)
@@ -126,13 +199,21 @@ test.describe('项目切换菜单', () => {
     await page.getByText('当前项目', { exact: true }).click()
     await tick(page)
     await page.keyboard.press('ArrowDown')
+    await page.keyboard.press('ArrowDown')
     await tick(page)
-    await expect(highlighted(menuOptions(page))).toHaveCount(1)
+    await expect(highlighted(menuOptions(page))).toHaveText(/朝阳壹号院 B栋/)
+    expect(await focusedActive(page)).toEqual({ role: 'listbox', active: expect.stringContaining('朝阳壹号院 B栋') })
     const box = (await menuOptions(page).nth(3).boundingBox())!
     await page.mouse.move(box.x + 20, box.y + 10)
     await page.mouse.move(box.x + 30, box.y + 12)
     await tick(page)
     await expect(highlighted(menuOptions(page))).toHaveCount(0)
+    expect(await focusedActive(page)).toEqual({ role: 'listbox', active: null })
+    // 再按方向键：从当前项目重新开始，焦点元素上的活动项与高亮一致（不残留清除前的旧值）
+    await page.keyboard.press('ArrowDown')
+    await tick(page)
+    await expect(highlighted(menuOptions(page))).toHaveText(/朝阳壹号院 A栋/)
+    expect(await focusedActive(page)).toEqual({ role: 'listbox', active: expect.stringContaining('朝阳壹号院 A栋') })
   })
 
   test('点选项切换项目；点外部关闭且不抢焦点', async ({ page, login }) => {
@@ -175,16 +256,21 @@ test.describe('顶栏项目搜索', () => {
     await tick(page)
     await expect(hits(page)).toHaveCount(8)
     await expect(input).toHaveAttribute('aria-expanded', 'true')
+    // aria-controls 指向结果 listbox（不是外层 dialog）
+    const listId = await page.getByRole('listbox', { name: '项目搜索结果' }).getAttribute('id')
+    expect(listId).toBeTruthy()
+    await expect(input).toHaveAttribute('aria-controls', listId!)
+    await expect(page.getByRole('dialog', { name: '项目搜索结果' })).toBeVisible()
     await expect(highlighted(hits(page))).toHaveCount(0)
     await expect(input).not.toHaveAttribute('aria-activedescendant')
     await page.keyboard.press('ArrowDown')
     await tick(page)
     await expect(highlighted(hits(page))).toHaveText(/朝阳壹号院 A栋/)
-    expect(await activeText(page, input)).toContain('朝阳壹号院 A栋')
+    expect(await focusedActive(page)).toEqual({ role: 'combobox', active: expect.stringContaining('朝阳壹号院 A栋') })
     await page.keyboard.press('ArrowDown')
     await tick(page)
     await expect(highlighted(hits(page))).toHaveText(/朝阳壹号院 B栋/)
-    expect(await activeText(page, input)).toContain('朝阳壹号院 B栋')
+    expect(await focusedActive(page)).toEqual({ role: 'combobox', active: expect.stringContaining('朝阳壹号院 B栋') })
     await expect(input).toBeFocused()
     await page.keyboard.press('Enter')
     await tick(page)
@@ -194,6 +280,111 @@ test.describe('顶栏项目搜索', () => {
     await expect(input).toHaveValue('')
     await expect(input).toBeFocused()
     await expect(input).toHaveAttribute('aria-expanded', 'false')
+    await expect(input).not.toHaveAttribute('aria-controls')
+    await expect(input).not.toHaveAttribute('aria-activedescendant')
+  })
+
+  test('无结果时：aria-controls 仍指向（空的）结果列表，没有活动项', async ({ page, login }) => {
+    await open(page, login)
+    const input = search(page)
+    await input.fill('西溪')
+    await tick(page)
+    await expect(page.getByText('未找到匹配的项目（仅搜索您可见的集成项目内的项目）')).toBeVisible()
+    await page.keyboard.press('ArrowDown')
+    await tick(page)
+    const listId = await page.getByRole('listbox', { name: '项目搜索结果' }).getAttribute('id')
+    await expect(input).toHaveAttribute('aria-controls', listId!)
+    await expect(input).not.toHaveAttribute('aria-activedescendant')
+    // 点“未找到”文字不让输入框失焦
+    await page.getByText('未找到匹配的项目（仅搜索您可见的集成项目内的项目）').click()
+    await tick(page)
+    await expect(input).toBeFocused()
+  })
+
+  test('高亮后关闭再打开：高亮清空，回车选第一条而不是旧高亮项', async ({ page, login }) => {
+    await open(page, login)
+    const input = search(page)
+    const reopenAndCheck = async () => {
+      await expect(hits(page).first()).toBeVisible()
+      await expect(highlighted(hits(page))).toHaveCount(0)
+      await expect(input).not.toHaveAttribute('aria-activedescendant')
+    }
+    const highlightThird = async () => {
+      for (let i = 0; i < 3; i++) await page.keyboard.press('ArrowDown')
+      await tick(page)
+      await expect(highlighted(hits(page))).toHaveText(/朝阳壹号院 C栋/)
+    }
+    await input.fill('朝阳')
+    await tick(page)
+    // Esc → 下键重开
+    await highlightThird()
+    await page.keyboard.press('Escape')
+    await tick(page)
+    await expect(input).not.toHaveAttribute('aria-activedescendant')
+    await page.keyboard.press('ArrowDown')
+    await tick(page)
+    await reopenAndCheck()
+    // 点外部 → 点输入框重开
+    await highlightThird()
+    await page.locator('h1').first().click()
+    await tick(page)
+    await expect(hits(page)).toHaveCount(0)
+    await input.click()
+    await tick(page)
+    await reopenAndCheck()
+    // Tab 离开（关闭）→ 回到输入框重开
+    await highlightThird()
+    await page.keyboard.press('Tab')
+    await tick(page)
+    await expect(hits(page)).toHaveCount(0)
+    await expect(input).not.toBeFocused()
+    await input.focus()
+    await tick(page)
+    await reopenAndCheck()
+    await page.keyboard.press('Enter')
+    await tick(page)
+    await expect(currentName(page)).toHaveText('朝阳壹号院 A栋')
+  })
+
+  test('一次性改掉输入、高亮项被筛掉：不自动高亮新的第一项', async ({ page, login }) => {
+    await open(page, login)
+    const input = search(page)
+    await input.fill('朝阳')
+    await tick(page)
+    for (let i = 0; i < 3; i++) await page.keyboard.press('ArrowDown')
+    await tick(page)
+    await expect(highlighted(hits(page))).toHaveText(/朝阳壹号院 C栋/)
+    await input.fill('朝阳壹号院 F')
+    await tick(page)
+    await expect(hits(page)).toHaveCount(1)
+    await expect(highlighted(hits(page))).toHaveCount(0)
+    await expect(input).not.toHaveAttribute('aria-activedescendant')
+    // 结果由空变非空同样不自动高亮
+    await input.fill('西溪')
+    await tick(page)
+    await expect(hits(page)).toHaveCount(0)
+    await input.fill('朝阳')
+    await tick(page)
+    await expect(hits(page).first()).toBeVisible()
+    await expect(highlighted(hits(page))).toHaveCount(0)
+  })
+
+  test('输入法组字中的回车不选中、不关闭', async ({ page, login }) => {
+    await open(page, login)
+    const input = search(page)
+    await input.fill('朝阳')
+    await tick(page)
+    await page.keyboard.press('ArrowDown')
+    await tick(page)
+    await input.evaluate((n) => {
+      n.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }))
+      n.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', keyCode: 229, isComposing: true, bubbles: true, cancelable: true }))
+    })
+    await tick(page)
+    await expect(hits(page).first()).toBeVisible()
+    await expect(highlighted(hits(page))).toHaveText(/朝阳壹号院 A栋/)
+    await expect(currentName(page)).toHaveText('朝阳壹号院 A栋')
+    await expect(page.locator('.toast')).toHaveCount(0)
   })
 
   test('没有高亮时回车选第一条（同旧版）', async ({ page, login }) => {
