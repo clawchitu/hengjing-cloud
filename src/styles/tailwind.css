@@ -115,4 +115,11 @@
     font-size: inherit;
     font-weight: inherit;
   }
+  /* 表格：同 preflight，否则 shadcn Table 会出现单元格间隙、行边框失效（border-spacing 在 collapse 下不起作用，写 0 兜底） */
+  :where(table)[data-slot] {
+    text-indent: 0;
+    border-color: inherit;
+    border-collapse: collapse;
+    border-spacing: 0;
+  }
 }
