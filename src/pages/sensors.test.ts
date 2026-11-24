@@ -2,9 +2,9 @@
 // 室内空气传感器页（S8）：真实接口模式 + 假后端（ctrl 207 / 208 按 protobuf 编码），不连任何真实服务。
 // 覆盖：请求用 project.id、208 时间为毫秒；65536 隐藏；统计从 208 小时数据算、无「超标时长」；
 // 三态（加载 / 失败 / 空）；项目离线、无权限、控制屏未连接不发或不重试；切换传感器不串数据。
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, renderHook, screen, waitFor, within } from '@testing-library/react'
 import { QueryClientProvider } from '@tanstack/react-query'
-import { createElement } from 'react'
+import { createElement, type ReactNode } from 'react'
 import { MemoryRouter as Router, Route, Routes } from 'react-router-dom'
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { BinaryWriter, WireType } from '@bufbuild/protobuf/wire'
@@ -21,7 +21,7 @@ import { AppProvider } from '../app/store'
 import Layout from '../components/Layout'
 import { __resetCurrentForTests } from '../data/org/current'
 import { __resetSessionViewForTests } from '../data/session'
-import { HOUR_MS, SENSOR_ROUTES } from '../data/sensors'
+import { HOUR_MS, SENSOR_ROUTES, useAirSensors, useSensorHours } from '../data/sensors'
 import Sensors from './Sensors'
 
 // ECharts 在 jsdom 里量不到尺寸：换成一个把 option 挂在属性上的占位，断言系列数据
@@ -306,13 +306,26 @@ describe('三态', () => {
 })
 
 describe('项目离线 / 无项目 / 无权限 / 控制屏未连接', () => {
-  it('项目离线：显示「控制屏离线」空态，不发任何 ctrl 请求', async () => {
+  it('项目离线：Layout 显示离线空态、不挂载本页，不发任何 ctrl 请求', async () => {
     localStorage.setItem('hjc-project', 'p2-entity')
     const b = backend({ '/ctrl/air-sensor-get': () => body207([KC2]) })
     await signIn('u', 'pw', true)
     mount()
-    await screen.findByText('控制屏离线')
-    expect(within(document.querySelector('.page-head') as HTMLElement).getByText('260911001')).toBeTruthy()
+    await screen.findByText('项目离线，暂无数据')
+    expect(screen.queryByText('传感器列表', { exact: false })).toBeNull()
+    expect(b.calls.filter((c) => c.url.includes('/ctrl/air-sensor'))).toHaveLength(0)
+  })
+
+  it('数据层自身也判空：没有项目、项目离线时 hook 不发请求（不依赖 Layout 不挂载）', async () => {
+    const b = backend({ '/ctrl/air-sensor-get': () => body207([KC2]), '/ctrl/air-sensor-data-hour-get': () => body208([]) })
+    await signIn('u', 'pw', true)
+    const client = createQueryClient()
+    const wrapper = ({ children }: { children: ReactNode }) => createElement(QueryClientProvider, { client }, children)
+    const none = renderHook(() => [useAirSensors(null), useSensorHours(null, undefined, '24小时')], { wrapper })
+    const off = renderHook(() => [useAirSensors({ id: 'p2-entity', online: false }), useSensorHours({ id: 'p2-entity', online: false }, { id: 1, online: true }, '24小时')], { wrapper })
+    await act(async () => { await new Promise((r) => setTimeout(r, 20)) })
+    expect(none.result.current.map((v) => v.kind)).toEqual(['no-project', 'idle'])
+    expect(off.result.current.map((v) => v.kind)).toEqual(['offline', 'idle'])
     expect(b.calls.filter((c) => c.url.includes('/ctrl/air-sensor'))).toHaveLength(0)
   })
 

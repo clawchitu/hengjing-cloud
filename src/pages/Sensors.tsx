@@ -165,8 +165,8 @@ export default function Sensors() {
 
   const body = (() => {
     switch (view.kind) {
-      case 'no-project': return <Placeholder icon={faSmog} title="暂无可用项目" text="当前账号下没有可查看的项目。" />
-      case 'offline': return <Placeholder icon={faPlugCircleXmark} title="控制屏离线" text="项目离线时无法读取空气传感器数据，恢复在线后再查看。" />
+      // 没有项目、项目离线时 Layout 不挂载设备页（S11），空态在 Layout；数据层照样不发请求，这里只留页头兜底
+      case 'no-project': case 'offline': return <></>
       case 'forbidden': return <Placeholder icon={faLock} title="未开通空气传感器数据" text="当前账号没有读取空气传感器数据的权限，请联系管理员开通。" />
       case 'loading': return <Placeholder icon={faSmog} title="正在读取" text="正在从控制屏读取空气传感器数据…" />
       case 'unavailable': return <Placeholder icon={faPlugCircleXmark} title="控制屏未连接" text="控制屏暂时无法连接，稍后会自动重试。" />
