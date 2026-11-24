@@ -99,6 +99,20 @@ export async function setRoomPower(projectId: string, ids: string[], on: boolean
   roomState[projectId] = roomsOf(projectId).map((r) => (ids.includes(r.id) ? { ...r, on } : r))
   return delay(roomState[projectId], 200)
 }
+/**
+ * 演示用的单房间设置：按 201 Query 的语义改演示数据（-1 = 不变）。交付包里直接拒绝，不能出现假成功
+ * （真实下发走 src/features/thermostat/source.ts → src/api/ctrl.ts 的 writeCtrl）
+ */
+export async function applyRoomSet(projectId: string, roomId: string, q: { temperature: number; eco: number; switch: number }) {
+  if (!__HJC_MOCK__) return Promise.reject(new Error('演示数据已剔除，未下发'))
+  roomState[projectId] = roomsOf(projectId).map((r) => (r.id !== roomId ? r : {
+    ...r,
+    ...(q.temperature !== -1 ? { setTemp: q.temperature } : {}),
+    ...(q.eco !== -1 ? { mode: q.eco === 1 ? '节能' as const : '标准' as const } : {}),
+    ...(q.switch !== -1 ? { on: q.switch === 1 } : {}),
+  }))
+  return delay(roomState[projectId], 200)
+}
 /** GET /api/projects/:id/rooms/:roomId/stats/24h — hourly temp/hum/dew for today */
 export function getRoomStats24h(projectId: string, roomId: string) {
   const r = roomsOf(projectId).find((x) => x.id === roomId)
