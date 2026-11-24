@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button'
 import { defaultText } from '../api/errors'
 import { logout } from '../data/session'
 import { useOrgScope } from '../data/org'
+import { useWriteLockSetup } from './writeLockSetup'
 
 function Panel({ title, text, children }: { title: string; text: string; children?: ReactNode }) {
   return (
@@ -23,6 +24,8 @@ function Panel({ title, text, children }: { title: string; text: string; childre
 
 export function OrgGate({ children }: { children: ReactNode }) {
   const org = useOrgScope()
+  // 共用写锁的初始化（注入可见项目查询、注册核对器）
+  useWriteLockSetup()
   if (org.status === 'loading') return (
     <Panel title="正在加载" text="正在获取集成项目和项目列表…">
       <Button onClick={logout}>退出登录</Button>

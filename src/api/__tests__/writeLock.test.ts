@@ -384,6 +384,20 @@ describe('候选结果提交（#33）与无效核对', () => {
     expect(await verify(KEY)).toBe('released')
     expect(commit).toHaveBeenCalledTimes(2)
   })
+  it('commit 返回 false（Fable 裁定：提交这一刻否决）：一致也不放锁，结论记 mismatch、逐字段结果未知，标 lastVetoed；下一次核对开始时清掉', async () => {
+    let veto = true
+    const commit = vi.fn(() => (veto ? false : undefined))
+    await unknownSettled(async () => ({ same: true, commit }))
+    expect(await verify(KEY)).toBe('mismatch')
+    expect(commit).toHaveBeenCalledTimes(1)
+    expect(lockOf(PA)).toMatchObject({ phase: 'unknown', lastVerify: 'mismatch', lastVetoed: true })
+    expect(lockOf(PA)?.lastFields).toEqual({ temperature: 'unknown' })
+    veto = false
+    const v = verify(KEY)
+    expect(lockOf(PA)?.lastVetoed).toBe(false) // 核对开始即清
+    expect(await v).toBe('released')
+    expect(lockOf(PA)).toBeNull()
+  })
   it('读取途中换号：核对器返回的逐字段结果作废，改了的字段全部记为结果未知；别的账号看不到 lastFields', async () => {
     const t = await unknownSettled(async () => { acct = { user: 'u2', gen: 9 }; return { verdict: 'applied', fields: { temperature: 'applied' } } })
     void t
