@@ -3,7 +3,7 @@ import { useMemo, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { faEyeSlash, faEye, faChartLine, faSliders, faShieldHalved, faLock, faThermometerHalf, faWind, faDroplet, faCube } from '@fortawesome/free-solid-svg-icons'
 import { faUser as faUserR } from '@fortawesome/free-regular-svg-icons'
-import { Icon, LogoMark } from '../components/ui'
+import { Icon, LogoMark } from '../components/legacy'
 import { useApp } from '../app/store'
 import * as api from '../api'
 

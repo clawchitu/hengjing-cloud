@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { faMagnifyingGlass, faFolderPlus, faPlus, faHouse, faPenToSquare, faSliders, faBuilding, faArrowRight } from '@fortawesome/free-solid-svg-icons'
-import { Card, Icon, Pager, Seg } from '../components/ui'
+import { Card, Icon, Pager, Seg } from '../components/legacy'
 import { useApp } from '../app/store'
 import { PROGRAMS } from '../api'
 

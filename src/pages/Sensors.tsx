@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { faBuilding, faLocationDot, faRotate, faTemperatureHalf, faDroplet, faTemperatureLow, faSmog, faLeaf, faDownload, type IconDefinition } from '@fortawesome/free-solid-svg-icons'
-import { Card, Chart, Icon, Seg, axis, tooltip, useAsync, useClock } from '../components/ui'
+import { Card, Chart, Icon, Seg, axis, tooltip, useAsync, useClock } from '../components/legacy'
 import { useApp } from '../app/store'
 import * as api from '../api'
 import type { DayPoint, HourPoint, MetricKey, Sensor } from '../api'
@@ -104,7 +104,7 @@ export default function Sensors() {
           <div className="sub" style={{ gap: 14 }}><span><Icon icon={faBuilding} /> {project.name}</span><span className="num">{project.id}</span><span><Icon icon={faLocationDot} /> {project.city} · {project.district}</span>{project.online ? <span className="green"><span className="dot" /> 在线</span> : <span className="red"><span className="dot" /> 离线</span>}<span className="num">{project.version}</span></div></div>
         <div className="actions"><Seg className="primary" value={range} options={['24小时', '7日', '30日']} onChange={setRange} /><span className="faint num" style={{ fontSize: 12 }}><Icon icon={faRotate} /> {project.online ? `${clock} 更新` : `最后更新 ${project.lastOnline?.slice(11) ?? '—'}`}</span></div>
       </div>
-      <div className="grid" style={{ gridTemplateColumns: `repeat(${Math.max(3, kpis.length)}, minmax(0, 1fr))`, marginBottom: 20 }}>
+      <div className="hj-grid" style={{ gridTemplateColumns: `repeat(${Math.max(3, kpis.length)}, minmax(0, 1fr))`, marginBottom: 20 }}>
         {kpis.map((m) => {
           const s = avg(m.key)
           return (
@@ -119,7 +119,7 @@ export default function Sensors() {
       <Card style={{ marginBottom: 20 }}>
         <div className="card-head"><h3 className="card-title">传感器列表 <span className="faint" style={{ fontWeight: 400, fontSize: 13 }}>{sensors.length} 台</span></h3>
           <div className="legend-dots"><span><span className="dot green" style={{ width: 7, height: 7 }} />良好</span><span><span className="dot" style={{ color: '#f59e0b', width: 7, height: 7 }} />超标</span><span><span className="dot" style={{ color: '#cbd5e1', width: 7, height: 7 }} />离线</span></div></div>
-        <div className="grid g4">
+        <div className="hj-grid g4">
           {sensors.map((s) => (
             <div key={s.id} className={'sensor' + (s.id === cur?.id ? ' on' : '') + (!s.online ? ' off' : '')} onClick={() => (s.online ? setSel(s.id) : toast(`${s.room}传感器离线，最后在线 ${s.last}`, true))}>
               <div className="sh"><div><b>{s.room}</b><small className="num">{s.id} · {s.floor}</small></div><span className={'pill ' + tag(s.tag)}>{s.tag}</span></div>

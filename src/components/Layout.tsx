@@ -5,7 +5,7 @@ import {
   faCloudSun, faLayerGroup, faSliders, faLeaf, faTemperatureHalf, faFan, faSitemap, faGear, faRightFromBracket,
   faChevronDown, faChevronRight, faMagnifyingGlass, faHouse, faPlugCircleXmark, faClock,
 } from '@fortawesome/free-solid-svg-icons'
-import { Avatar, Icon, LogoMark } from './ui'
+import { Avatar, Icon, LogoMark } from './legacy'
 import { useApp } from '../app/store'
 import { gatewayOf, type Project } from '../api'
 

@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { faMagnifyingGlass, faCircleInfo, faLayerGroup, faChevronDown, faChevronUp, faPowerOff, faWandMagicSparkles, faSnowflake, faSun, faDropletSlash, faWind, faRobot, faMinus, faDoorOpen, faTemperatureHalf, faPaperPlane, faTriangleExclamation, faCircleCheck, faSpinner, faCircleXmark, faRotateRight } from '@fortawesome/free-solid-svg-icons'
-import { Card, Icon, useAsync } from '../components/ui'
+import { Card, Icon, useAsync } from '../components/legacy'
 import { useApp } from '../app/store'
 import * as api from '../api'
 import { hasRooms } from '../api'

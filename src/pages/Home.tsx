@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { faLocationDot, faChevronDown, faRotateRight, faDroplet, faWind, faTemperatureLow, faGauge, faEye, faSun, faCloudSun, faCloudRain, faCloud, faMoon, faUmbrella, faLeaf, faLayerGroup, faBuilding, faSignal, faPlugCircleXmark, faArrowRight, faStar, faTemperatureHalf, faClock } from '@fortawesome/free-solid-svg-icons'
-import { Card, Chart, Icon, Seg, axis, tooltip, useAsync } from '../components/ui'
+import { Card, Chart, Icon, Seg, axis, tooltip, useAsync } from '../components/legacy'
 import { useApp } from '../app/store'
 import * as api from '../api'
 
@@ -107,7 +107,7 @@ export default function Home() {
         </Card>
       </div>
 
-      <div className="grid g4" style={{ marginBottom: 20 }}>
+      <div className="hj-grid g4" style={{ marginBottom: 20 }}>
         <Card className="stat" pad={false}><div className="si" style={{ background: '#ecfeff', color: '#0891b2' }}><Icon icon={faLayerGroup} /></div><div><span>集成项目</span><b className="num">{groups.length}</b></div></Card>
         <Card className="stat" pad={false}><div className="si" style={{ background: '#eff6ff', color: '#2563eb' }}><Icon icon={faBuilding} /></div><div><span>项目总数</span><b className="num">{projects.length}</b></div></Card>
         <Card className="stat" pad={false}><div className="si" style={{ background: '#ecfdf5', color: '#059669' }}><Icon icon={faSignal} /></div><div><span>在线项目</span><b className="num">{online}<small> / {projects.length}</small></b></div></Card>
@@ -121,7 +121,7 @@ export default function Home() {
             <button className="link" onClick={() => nav('/groups')}>全部项目 <Icon icon={faArrowRight} /></button>
           </div></div>
         {favs && favs.length === 0 && <div className="empty-fav"><Icon icon={faStar} /><b>暂无常用项目</b><small>在「集成项目」或顶部搜索中选择项目后，这里会显示您最常用的项目</small></div>}
-        <div className="grid g4">
+        <div className="hj-grid g4">
           {(favs ?? []).map(({ project: p, count }) => (
             <div key={p.id} className="proj-card" title={`已选择 ${count} 次`} onClick={() => { setProjectId(p.id); if (!p.online) toast(`${p.name} 当前离线，显示最后在线数据`, true); nav('/sensors') }}>
               <div className="pc-h"><span className={'pill ' + (p.online ? 'green' : 'gray')} style={{ color: p.online ? undefined : 'var(--muted)' }}>{p.online ? '在线' : '离线'}</span><span className="faint num" style={{ fontSize: 12 }}>{p.id}</span></div>

@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { faSatelliteDish } from '@fortawesome/free-solid-svg-icons'
-import { Card, Icon, Pager, Seg, useAsync } from '../components/ui'
+import { Card, Icon, Pager, Seg, useAsync } from '../components/legacy'
 import { useApp } from '../app/store'
 import * as api from '../api'
 
@@ -30,7 +30,7 @@ export default function Connections() {
         <div><h1>设备连接状态</h1><div className="sub">{project.name}<span className="sep">·</span>网关 {gw.id}<span className="sep">·</span>每 30 秒检测一次</div></div>
         <button className="btn primary" onClick={checkAll}><Icon icon={faSatelliteDish} />立即检测</button>
       </div>
-      <div className="grid g4" style={{ marginBottom: 20 }}>
+      <div className="hj-grid g4" style={{ marginBottom: 20 }}>
         <Card className="kpi"><div className="k-label">接入设备</div><div className="k-val">{rows.length}</div><div className="k-foot">{new Set(rows.map((r) => r.type)).size} 类设备</div></Card>
         <Card className="kpi"><div className="k-label">在线</div><div className="k-val green">{on}</div><div className="k-foot">在线率 {(on / rows.length * 100).toFixed(1)}%</div></Card>
         <Card className="kpi"><div className="k-label">离线</div><div className="k-val muted">{off}</div><div className="k-foot">{project.online ? (off ? '最长 2h 37m' : '—') : '网关离线'}</div></Card>
