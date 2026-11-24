@@ -143,7 +143,9 @@ export function echoMismatches(q: WriteQuery<203>, after: UnifiedEcho): string[]
     if (got === null || got === undefined || !Number.isFinite(got)) { out.push(TEXT.echoMissing(label(k))); continue }
     const same = k === 'roomTemp' ? Math.abs(got - q.roomTemp) < 0.01 : got === q[k]
     if (!same) {
-      const gotText = describeQuery({ systemSwitch: UNCHANGED, systemMode: Mode.OPERATION_MODE_NONE, roomSwitch: UNCHANGED, roomTemp: UNCHANGED, [k]: got } as WriteQuery<203>)[0]?.value ?? String(got)
+      const isSw = k === 'systemSwitch' || k === 'roomSwitch'
+      // 开关回读到 0/1 以外的值时直接显示原始数字，避免「下发 关闭，回读 关闭」这种矛盾文案
+      const gotText = isSw && got !== SWITCH_ON && got !== SWITCH_OFF ? String(got) : describeQuery({ systemSwitch: UNCHANGED, systemMode: Mode.OPERATION_MODE_NONE, roomSwitch: UNCHANGED, roomTemp: UNCHANGED, [k]: got } as WriteQuery<203>)[0]?.value ?? String(got)
       out.push(TEXT.echoDiffer(label(k), sentText, gotText))
     }
   }

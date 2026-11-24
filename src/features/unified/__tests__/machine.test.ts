@@ -170,6 +170,14 @@ describe('控制器：离线与复核', () => {
     expect(send).not.toHaveBeenCalled()
   })
 
+  it('确认弹窗打开期间 app_code 变成 8：confirm 退回 idle，不发', async () => {
+    const { ctl, send, setContext } = setup()
+    ctl.request({ roomTemp: 24 })
+    setContext({ ...CTX, appCode: 8 })
+    expect(await ctl.confirm()).toEqual({ status: 'idle', errors: [TEXT.tempDisabledByApp] })
+    expect(send).not.toHaveBeenCalled()
+  })
+
   it('确认弹窗打开期间切换了项目：confirm 退回 idle，不发', async () => {
     const { ctl, send, setContext } = setup()
     ctl.request({ roomSwitch: 1 })
@@ -185,11 +193,13 @@ describe('控制器：离线与复核', () => {
     ['离线', (c: UnifiedContext) => ({ ...c, online: false }), TEXT.offline],
     ['换了项目', (c: UnifiedContext) => ({ ...c, projectId: 'another-project-0001' }), TEXT.projectChanged],
     ['项目没了', () => null, TEXT.projectChanged],
+    ['app_code 变成 12', (c: UnifiedContext) => ({ ...c, appCode: 12 }), TEXT.tempDisabledByApp],
+    ['温度范围收窄', (c: UnifiedContext) => ({ ...c, tempRange: { max: 23 } }), TEXT.tempOutOfRange({ min: 16, max: 23, step: 0.5 })],
   ] as const)('下发前读取期间%s：不下发，failure/not-sent', async (_n, change, msg) => {
     const gate = deferred<Snap>()
     const readBack = vi.fn(() => gate.promise)
     const { ctl, send, setContext } = setup({ readBack })
-    ctl.request({ roomSwitch: 1 })
+    ctl.request({ roomSwitch: 1, roomTemp: 24 })
     const p = ctl.confirm()
     setContext(change(CTX))
     gate.resolve({ roomTemp: 22, roomSwitch: 1 })
@@ -303,7 +313,8 @@ describe('控制器：失败不重试', () => {
     ['后端参数错误 code 3', new ApiError('bad_request', '参数错误', { status: 400, code: 3 }), 'rejected'],
     ['网关无权限', new ApiError('forbidden', '无权限', { status: 403 }), 'rejected'],
     ['令牌失效', new ApiError('unauthenticated', '登录已过期', { status: 401, code: 16 }), 'rejected'],
-    ['前端取消（无状态）', new ApiError('aborted', '请求已取消'), 'not-sent'],
+    ['发出后被取消（无状态 aborted）', new ApiError('aborted', '请求已取消'), 'unknown'],
+    ['前端写防护（无状态）', new ApiError('write_blocked', '下发已关闭'), 'not-sent'],
   ] as const)('%s → %s；只要不是 not-sent 就回读', async (_n, err, outcome) => {
     expect(outcomeOf(err)).toBe(outcome)
     const send = vi.fn(async () => { throw err })

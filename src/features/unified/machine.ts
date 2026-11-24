@@ -102,8 +102,11 @@ export interface UnifiedController<S> {
   dispose: () => void
 }
 
-/** 前端自己抛的（没有 HTTP 状态）：写防护拦截、写消息校验不过、发出前取消 → 肯定没发出 */
-const LOCAL_NOT_SENT = new Set<ApiErrorKind>(['write_blocked', 'bad_request', 'aborted'])
+/**
+ * 前端自己在发请求之前抛的（没有 HTTP 状态）：写防护拦截、写消息校验不过 → 肯定没发出。
+ * aborted 不算：fetch 发出后被取消也是无状态的 aborted，可能已经到了控制屏
+ */
+const LOCAL_NOT_SENT = new Set<ApiErrorKind>(['write_blocked', 'bad_request'])
 /** 后端或网关明确拒绝、不会转给控制屏执行的：控制屏 success=false、无权限、令牌失效、参数错误 */
 const REJECTED = new Set<ApiErrorKind>(['ctrl', 'forbidden', 'unauthenticated', 'bad_request'])
 const errText = (e: unknown) => (e instanceof Error ? e.message : String(e))
@@ -119,11 +122,15 @@ export function outcomeOf(e: unknown): FailureOutcome {
   return 'unknown'
 }
 
-/** 实际发送前的复核：项目没换、仍在线 */
-function recheck(ctx: UnifiedContext | null | undefined, target: UnifiedTarget): string | null {
-  if (!ctx || ctx.projectId !== target.projectId) return TEXT.projectChanged
-  if (ctx.online !== true) return TEXT.offline
-  return null
+const sameQuery = (a: WriteQuery<203>, b: WriteQuery<203>) =>
+  a.systemSwitch === b.systemSwitch && a.systemMode === b.systemMode && a.roomSwitch === b.roomSwitch && a.roomTemp === b.roomTemp
+
+/** 复核：项目没换，且按最新上下文（在线、app_code、温度范围）重新校验仍通过、组装结果不变。返回错误或 null */
+function recheck(ctx: UnifiedContext | null | undefined, target: UnifiedTarget, draft: UnifiedDraft, query: WriteQuery<203>): string[] | null {
+  if (!ctx || ctx.projectId !== target.projectId) return [TEXT.projectChanged]
+  const v = validateUnified(draft, ctx)
+  if (!v.ok) return v.errors
+  return sameQuery(v.query, query) ? null : [TEXT.projectChanged]
 }
 
 function toTarget(ctx: UnifiedContext): UnifiedTarget {
@@ -149,7 +156,7 @@ export function createUnifiedController<S>(deps: UnifiedDeps<S>): UnifiedControl
     try { log(makeEntry(event, { projectCode: t?.projectCode, projectId: t?.projectId, ...p })) } catch { /* 日志失败不影响下发 */ }
   }
 
-  async function run(target: UnifiedTarget, query: WriteQuery<203>): Promise<UnifiedState<S>> {
+  async function run(target: UnifiedTarget, draft: UnifiedDraft, query: WriteQuery<203>): Promise<UnifiedState<S>> {
     // 1. 下发前读一次；读不到就不下发（无法核对）
     let before: S
     try {
@@ -163,10 +170,11 @@ export function createUnifiedController<S>(deps: UnifiedDeps<S>): UnifiedControl
     write('read-before', target)
 
     // 读取是异步的，期间项目可能离线或被切换：发送前再复核一次
-    const stale = recheck(deps.getContext(), target)
+    const stale = recheck(deps.getContext(), target, draft, query)
     if (stale) {
-      write('blocked', target, { message: stale })
-      dispatch({ type: 'FAIL', outcome: 'not-sent', error: stale, before })
+      const error = stale.join('；')
+      write('blocked', target, { message: error })
+      dispatch({ type: 'FAIL', outcome: 'not-sent', error, before })
       return state
     }
 
@@ -235,26 +243,17 @@ export function createUnifiedController<S>(deps: UnifiedDeps<S>): UnifiedControl
       if (inflight) return inflight
       if (state.status !== 'confirming') return Promise.resolve(state)
       const { target, draft, query: confirmed } = state
-      // 复核：确认弹窗打开期间项目可能离线或被切换
-      const ctx = deps.getContext()
-      const errors: string[] = []
-      let query: WriteQuery<203> | null = null
-      if (!ctx || ctx.projectId !== target.projectId) errors.push(TEXT.projectChanged)
-      else {
-        const v = validateUnified(draft, ctx)
-        // 同一份草稿组装结果不变；下发的就是弹窗里展示的那份
-        if (v.ok) query = confirmed
-        else errors.push(...v.errors)
-      }
-      if (!query) {
+      // 复核：确认弹窗打开期间项目可能离线、被切换或 app_code 变了
+      const errors = recheck(deps.getContext(), target, draft, confirmed)
+      if (errors) {
         write('blocked', target, { message: errors.join('；') })
         dispatch({ type: 'CANCEL' })
         dispatch({ type: 'REJECT', errors })
         return Promise.resolve(state)
       }
-      write('confirm', target, { query })
+      write('confirm', target, { query: confirmed })
       dispatch({ type: 'CONFIRM' })
-      inflight = run(target, query).finally(() => { inflight = null })
+      inflight = run(target, draft, confirmed).finally(() => { inflight = null })
       return inflight
     },
     reset() { dispatch({ type: 'RESET' }) },

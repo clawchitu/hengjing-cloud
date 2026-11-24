@@ -122,6 +122,11 @@ describe('echoMismatches（默认核对）', () => {
       TEXT.echoDiffer(TEXT.roomTemp, '24.5°C', '22°C'),
     ])
   })
+  it('开关回读到异常值时显示原始数字', () => {
+    expect(echoMismatches({ systemSwitch: 0, systemMode: 0, roomSwitch: -1, roomTemp: -1 }, { systemSwitch: 2 })).toEqual([
+      TEXT.echoDiffer(TEXT.systemSwitch, TEXT.off, '2'),
+    ])
+  })
   it('全是不变时不核对任何字段', () => {
     expect(echoMismatches({ systemSwitch: -1, systemMode: 0, roomSwitch: -1, roomTemp: -1 }, {})).toEqual([])
   })

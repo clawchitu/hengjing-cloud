@@ -27,7 +27,7 @@ export function bindUnifiedControl<S>(initial: UseUnifiedControlOptions<S>) {
   const ctl = createUnifiedController<S>({
     getContext: () => cur.context,
     readBack: (id) => cur.readBack(id),
-    verify: (q, b, a) => cur.verify?.(q, b, a) ?? [],
+    verify: (q, b, a) => cur.verify(q, b, a),
     send: (id, q) => (cur.send ?? defaultSender)(id, q),
     log: (e) => (cur.log ?? consoleLogger)(e),
   })
