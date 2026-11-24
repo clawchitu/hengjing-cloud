@@ -7,11 +7,11 @@
 import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { ConfirmHost } from '@/components/ConfirmHost'
 import { Toaster } from '@/components/ui/sonner'
-import { ConfirmControllerContext as Ctl, createConfirmController, showToast, type ConfirmOptions } from './feedback'
+import { ConfirmControllerContext as Ctl, createConfirmController, routeScope, showToast, type ConfirmOptions } from './feedback'
 import type { Project, Role, Scope, User } from '../api'
 import type { ApiError } from '../api/errors'
 import type { SessionInfo } from '../api/session'
-import { can, logout, mockSignIn, useSession, useSessionBoot } from '../data/session'
+import { can, getSessionView, logout, mockSignIn, useSession, useSessionBoot } from '../data/session'
 import { useCurrentProject, useOrgScope, useResetOnAccountChange, type LoadStatus, type SetProjectResult } from '../data/org'
 
 type Auth = { username: string; role: Role }
@@ -87,7 +87,11 @@ export function useApp(): Ctx {
 }
 
 export function AppProvider({ children }: { children: ReactNode }) {
-  const [ctl] = useState(createConfirmController)
+  // 请求所属上下文：路由 + 会话（登录态、账号），见 app/feedback.ts「离开即失效」
+  const [ctl] = useState(() => createConfirmController(() => {
+    const v = getSessionView()
+    return `${routeScope()}|${v.authed ? v.userKey ?? '' : '-'}`
+  }))
   useEffect(() => ctl.trackInput(document), [ctl])
   // Provider 卸载：未结算的确认按 false 结算，不悬空
   useEffect(() => () => ctl.cancel(), [ctl])
@@ -100,8 +104,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     // 已登录 → 被动变成未登录（续期失败、令牌失效）时提示一次；主动退出不带 reason
     if (prevAuthed.current && !sess.authed && !sess.authLoading && sess.reason?.kind === 'unauthenticated') showToast('登录已过期，请重新登录', true)
-    // 未登录（登出、会话失效）时不能留着确认弹窗
-    if (!sess.authed) ctl.cancel()
+    // 登出、会话失效、换账号后不能留着确认弹窗（只关所属会话已过期的请求）
+    ctl.cancelStale()
     prevAuthed.current = sess.authed
   }, [sess, ctl])
 

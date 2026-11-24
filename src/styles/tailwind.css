@@ -136,5 +136,6 @@
  */
 @layer base {
   [data-focus-ring='off']:focus-visible { outline: none; }
-  [data-focus-ring='on']:focus { outline: auto 1px -webkit-focus-ring-color; outline: auto 1px Highlight; }
+  /* 先写通用的 Highlight，再写 -webkit-focus-ring-color：认识后者的浏览器用后者，不认识的整条忽略、保留前者 */
+  [data-focus-ring='on']:focus { outline: auto 1px Highlight; outline: auto 1px -webkit-focus-ring-color; }
 }

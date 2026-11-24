@@ -151,6 +151,23 @@ test.describe('确认弹窗', () => {
 })
 
 test.describe('确认弹窗随离开失效', () => {
+  test('历史条目已变、React 还没处理时点「确认下发」：按取消处理（不下发），弹窗关闭', async ({ page, login }) => {
+    await login('dealer')
+    await page.goto('/thermostat')
+    await settle(page)
+    await page.getByRole('button', { name: '全部开启' }).click()
+    await tick(page)
+    // 同一个同步块里：浏览器换了历史条目（相当于后退 / 前进已经发生、popstate 还没交给 React），紧接着点旧弹窗的确认
+    await page.evaluate(() => {
+      history.pushState({ key: 'elsewhere', idx: 99 }, '', '/home')
+      const ok = [...document.querySelectorAll('[role=alertdialog] button')].find((b) => b.textContent === '确认下发') as HTMLButtonElement
+      ok.click()
+    })
+    await tick(page, 2000)
+    await expect(page.getByRole('alertdialog')).toHaveCount(0)
+    await expect(page.locator('[data-sonner-toast]', { hasText: '已下发' })).toHaveCount(0)
+  })
+
   test('温控「全部开启」确认打开时浏览器后退：弹窗消失、按取消处理（不下发）', async ({ page, login }) => {
     await login('dealer')
     await page.goto('/home')
