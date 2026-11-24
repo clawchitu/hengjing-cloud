@@ -24,7 +24,7 @@ async function expectFocusVisible(el: Locator) {
 
 /** 从页面里一个确定的起点按 Tab，直到目标按钮获得焦点（真实键盘导航，不用 el.focus()） */
 async function tabTo(page: Page, el: Locator) {
-  await page.locator('.search input').focus()
+  await page.getByPlaceholder('搜索项目名称 / 项目ID').focus()
   for (let i = 0; i < 200; i++) {
     await page.keyboard.press('Tab')
     if (await el.evaluate((n) => n === document.activeElement)) return

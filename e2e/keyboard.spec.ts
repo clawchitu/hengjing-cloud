@@ -1,26 +1,10 @@
-// 键盘可操作性（docs/plan-s1-s3.md 第 2 节 S2 验收）：Button 回车 / 空格触发；Switch 空格切换且 aria-checked 正确；
+// 键盘可操作性（docs/plan-s1-s3.md 第 2 节 S2 验收；Button 的用例在 interactions.spec.ts）：Switch 空格切换且 aria-checked 正确；
 // Select 方向键选择、Esc 关闭并回到触发器；Tabs 左右键切换。只做行为断言，不截图。
 import type { Page } from '@playwright/test'
 import { expect, test } from './fixtures'
 
 /** 时钟是暂停的：每次按键后推进一点，让 Radix 的 setTimeout(0) 焦点回收和 mock 数据跑完 */
 const tick = (page: Page, ms = 100) => page.clock.runFor(ms)
-
-test('Button：回车与空格都能触发', async ({ page, login }) => {
-  await login('dealer')
-  await page.goto('/groups')
-  await tick(page, 1500)
-  const btn = page.getByRole('button', { name: '新建项目', exact: true })
-  await btn.focus()
-  await page.keyboard.press('Enter')
-  await tick(page)
-  await expect(page.getByText('新建项目：演示环境为只读')).toHaveCount(1)
-  await tick(page, 3000) // 等 toast 消失
-  await expect(page.getByText('新建项目：演示环境为只读')).toHaveCount(0)
-  await page.keyboard.press('Space')
-  await tick(page)
-  await expect(page.getByText('新建项目：演示环境为只读')).toHaveCount(1)
-})
 
 test('Switch：空格切换，aria-checked 跟随', async ({ page, login }) => {
   await login('dealer')
