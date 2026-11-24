@@ -41,7 +41,8 @@ export function makeEntry(event: UnifiedLogEvent, p: { projectCode?: string; pro
   if (id) e.projectId = id
   const q = numbersOnly(p.query)
   if (q) e.query = q
-  if (p.message) e.message = redact(String(p.message))
+  // 文案里可能带完整项目 id（比如写防护「项目不在下发名单内：…」），换成打码后的
+  if (p.message) e.message = redact(p.projectId ? String(p.message).split(String(p.projectId)).join(id ?? '***') : String(p.message))
   return e
 }
 

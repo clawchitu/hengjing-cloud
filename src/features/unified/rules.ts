@@ -83,7 +83,8 @@ export function validateUnified(draft: UnifiedDraft, ctx: UnifiedContext | null 
   const d = draft ?? {}
   if (d.systemSwitch !== undefined && !isSwitch(d.systemSwitch)) errors.push(TEXT.badSwitch(TEXT.systemSwitch))
   if (d.roomSwitch !== undefined && !isSwitch(d.roomSwitch)) errors.push(TEXT.badSwitch(TEXT.roomSwitch))
-  if (d.systemMode !== undefined && !MODE_VALUES.has(d.systemMode)) errors.push(TEXT.badMode)
+  // 0 是「不变」（OPERATION_MODE_NONE），等同于没选
+  if (d.systemMode !== undefined && d.systemMode !== Mode.OPERATION_MODE_NONE && !MODE_VALUES.has(d.systemMode)) errors.push(TEXT.badMode)
   if (d.roomTemp !== undefined) {
     const avail = tempAvailability(ctx.appCode)
     if (!avail.enabled) errors.push(avail.reason)
@@ -115,5 +116,36 @@ export function describeQuery(q: WriteQuery<203>): Array<{ label: string; value:
   if (q.systemMode !== Mode.OPERATION_MODE_NONE) out.push({ label: TEXT.systemMode, value: MODE_OPTIONS.find((o) => o.value === q.systemMode)?.label ?? String(q.systemMode) })
   if (q.roomSwitch !== UNCHANGED) out.push({ label: TEXT.roomSwitch, value: sw(q.roomSwitch) })
   if (q.roomTemp !== UNCHANGED) out.push({ label: TEXT.roomTemp, value: `${q.roomTemp}${TEXT.tempUnit}` })
+  return out
+}
+
+/** 回读整理后的统一控制相关值（页面把 200/210 等读数映射成这个形状）；缺失或 null 表示没读到 */
+export interface UnifiedEcho {
+  systemSwitch?: number | null
+  systemMode?: number | null
+  roomSwitch?: number | null
+  roomTemp?: number | null
+}
+
+/** 默认核对：只核对下发了的字段；温度按 0.01 容差比较（float32） */
+export function echoMismatches(q: WriteQuery<203>, after: UnifiedEcho): string[] {
+  const out: string[] = []
+  const items = describeQuery(q)
+  const label = (k: keyof UnifiedEcho) => ({ systemSwitch: TEXT.systemSwitch, systemMode: TEXT.systemMode, roomSwitch: TEXT.roomSwitch, roomTemp: TEXT.roomTemp })[k]
+  const changed: Array<keyof UnifiedEcho> = []
+  if (q.systemSwitch !== UNCHANGED) changed.push('systemSwitch')
+  if (q.systemMode !== Mode.OPERATION_MODE_NONE) changed.push('systemMode')
+  if (q.roomSwitch !== UNCHANGED) changed.push('roomSwitch')
+  if (q.roomTemp !== UNCHANGED) changed.push('roomTemp')
+  for (const k of changed) {
+    const got = after?.[k]
+    const sentText = items.find((i) => i.label === label(k))?.value ?? String(q[k])
+    if (got === null || got === undefined || !Number.isFinite(got)) { out.push(TEXT.echoMissing(label(k))); continue }
+    const same = k === 'roomTemp' ? Math.abs(got - q.roomTemp) < 0.01 : got === q[k]
+    if (!same) {
+      const gotText = describeQuery({ systemSwitch: UNCHANGED, systemMode: Mode.OPERATION_MODE_NONE, roomSwitch: UNCHANGED, roomTemp: UNCHANGED, [k]: got } as WriteQuery<203>)[0]?.value ?? String(got)
+      out.push(TEXT.echoDiffer(label(k), sentText, gotText))
+    }
+  }
   return out
 }

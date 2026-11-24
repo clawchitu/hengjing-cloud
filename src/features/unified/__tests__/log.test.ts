@@ -21,6 +21,11 @@ describe('日志脱敏', () => {
     expect(e.at).toBe('1970-01-01T00:00:00.000Z')
   })
 
+  it('文案里的完整项目 id 换成打码后的', () => {
+    const e = makeEntry('blocked', { projectId: '66cfd7959fb60d63c917fd0a', message: '项目不在下发名单内：66cfd7959fb60d63c917fd0a' })
+    expect(e.message).toBe('项目不在下发名单内：66cf…fd0a')
+  })
+
   it('query 只保留数值字段，混进来的其他字段丢掉', () => {
     const e = makeEntry('send', { query: { systemSwitch: -1, roomTemp: 24, user_id: 'u-secret', token: JWT, bad: NaN } as object })
     expect(e.query).toEqual({ systemSwitch: -1, roomTemp: 24 })
@@ -32,7 +37,8 @@ describe('日志脱敏', () => {
     const ctl = createUnifiedController<{ name: string; secret: string }>({
       getContext: () => ({ projectId, projectCode: '240829001', appCode: 1, online: true }),
       readBack: async () => ({ name: '房间11', secret: 'READBACK-RAW' }),
-      send: async () => { throw new ApiError('server', `失败 ${JWT}`) },
+      send: async () => { throw new ApiError('server', `失败 ${JWT} 项目 ${projectId}`) },
+      verify: () => [],
       log: (e) => logs.push(e),
     })
     ctl.request({ roomTemp: 24 })

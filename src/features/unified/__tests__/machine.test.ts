@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { ApiError } from '@/api/errors'
 import { TEXT } from '../constants'
 import type { UnifiedLogEntry } from '../log'
-import { createUnifiedController, INITIAL, transition, type UnifiedEvent, type UnifiedState, type UnifiedTarget } from '../machine'
+import { createUnifiedController, INITIAL, outcomeOf, transition, type UnifiedEvent, type UnifiedState, type UnifiedTarget } from '../machine'
 import type { UnifiedContext } from '../rules'
 
 type Snap = { roomTemp: number; roomSwitch: number }
@@ -27,6 +27,7 @@ function setup(over: Partial<Parameters<typeof createUnifiedController<Snap>>[0]
     getContext: () => context,
     readBack,
     send,
+    verify: () => [],
     log: (e) => logs.push(e),
     ...over,
   })
@@ -131,7 +132,23 @@ describe('控制器：正常流程', () => {
     let n = 0
     const { ctl } = setup({ readBack: vi.fn(async () => { if (n++) throw new ApiError('unavailable', '控制屏未连接'); return { roomTemp: 22, roomSwitch: 1 } }) })
     ctl.request({ roomTemp: 24 })
-    expect(await ctl.confirm()).toMatchObject({ status: 'success', after: null, afterError: `${TEXT.readAfterFailed}：控制屏未连接` })
+    expect(await ctl.confirm()).toMatchObject({ status: 'success', after: null, afterError: `${TEXT.readAfterFailed}：控制屏未连接`, mismatches: [] })
+  })
+
+  it('verify 抛错时带前缀记为不一致', async () => {
+    const { ctl } = setup({ verify: () => { throw new Error('映射失败') } })
+    ctl.request({ roomTemp: 24 })
+    expect(await ctl.confirm()).toMatchObject({ status: 'success', mismatches: [`${TEXT.verifyFailed}：映射失败`] })
+  })
+
+  it('下发失败且回读失败：afterError 不说「已生效」', async () => {
+    let n = 0
+    const { ctl } = setup({
+      send: vi.fn(async () => { throw new ApiError('timeout', '未收到控制屏应答，下发结果未知') }),
+      readBack: vi.fn(async () => { if (n++) throw new Error('x'); return { roomTemp: 22, roomSwitch: 1 } }),
+    })
+    ctl.request({ roomTemp: 24 })
+    expect(await ctl.confirm()).toMatchObject({ status: 'failure', outcome: 'unknown', after: null, afterError: `${TEXT.readAfterFailedUnknown}：x` })
   })
 })
 
@@ -162,6 +179,23 @@ describe('控制器：离线与复核', () => {
     ctl.request({ roomSwitch: 1 })
     expect(ctl.getState()).toEqual({ status: 'idle', errors: [TEXT.noProject] })
     expect(send).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['离线', (c: UnifiedContext) => ({ ...c, online: false }), TEXT.offline],
+    ['换了项目', (c: UnifiedContext) => ({ ...c, projectId: 'another-project-0001' }), TEXT.projectChanged],
+    ['项目没了', () => null, TEXT.projectChanged],
+  ] as const)('下发前读取期间%s：不下发，failure/not-sent', async (_n, change, msg) => {
+    const gate = deferred<Snap>()
+    const readBack = vi.fn(() => gate.promise)
+    const { ctl, send, setContext } = setup({ readBack })
+    ctl.request({ roomSwitch: 1 })
+    const p = ctl.confirm()
+    setContext(change(CTX))
+    gate.resolve({ roomTemp: 22, roomSwitch: 1 })
+    expect(await p).toMatchObject({ status: 'failure', outcome: 'not-sent', error: msg, before: { roomTemp: 22 } })
+    expect(send).not.toHaveBeenCalled()
+    expect(readBack).toHaveBeenCalledTimes(1)
   })
 
   it('idle 下调 confirm 无效', async () => {
@@ -260,6 +294,24 @@ describe('控制器：失败不重试', () => {
     expect(await ctl.confirm()).toMatchObject({ status: 'failure', outcome: 'not-sent', error: `${TEXT.readBeforeFailed}：控制屏未连接` })
     expect(send).not.toHaveBeenCalled()
     expect(readBack).toHaveBeenCalledTimes(1)
+  })
+
+  it.each([
+    ['服务端 500', new ApiError('server', '内部错误', { status: 500, code: 13 }), 'unknown'],
+    ['控制屏 503', new ApiError('unavailable', '控制屏消息发送失败', { status: 503, code: 14 }), 'unknown'],
+    ['后端返回取消 code 1', new ApiError('aborted', '请求已取消', { status: 499, code: 1 }), 'unknown'],
+    ['后端参数错误 code 3', new ApiError('bad_request', '参数错误', { status: 400, code: 3 }), 'rejected'],
+    ['网关无权限', new ApiError('forbidden', '无权限', { status: 403 }), 'rejected'],
+    ['令牌失效', new ApiError('unauthenticated', '登录已过期', { status: 401, code: 16 }), 'rejected'],
+    ['前端取消（无状态）', new ApiError('aborted', '请求已取消'), 'not-sent'],
+  ] as const)('%s → %s；只要不是 not-sent 就回读', async (_n, err, outcome) => {
+    expect(outcomeOf(err)).toBe(outcome)
+    const send = vi.fn(async () => { throw err })
+    const { ctl, readBack } = setup({ send })
+    ctl.request({ roomSwitch: 1 })
+    expect(await ctl.confirm()).toMatchObject({ status: 'failure', outcome })
+    expect(send).toHaveBeenCalledTimes(1)
+    expect(readBack).toHaveBeenCalledTimes(outcome === 'not-sent' ? 1 : 2)
   })
 
   it('普通异常按结果未知处理', async () => {

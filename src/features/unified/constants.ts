@@ -85,5 +85,9 @@ export const TEXT = {
   projectChanged: '当前项目已变化，请重新确认',
   readBeforeFailed: '下发前读取当前状态失败，未下发',
   readAfterFailed: '下发已生效，但回读失败，请稍后刷新核对',
+  readAfterFailedUnknown: '下发后回读失败，请稍后刷新核对',
   echoMismatch: '回读结果与下发值不一致，请核对',
+  verifyFailed: '核对出错',
+  echoMissing: (label: string) => `${label}未回读到`,
+  echoDiffer: (label: string, sent: string, got: string) => `${label}下发 ${sent}，回读 ${got}`,
 } as const

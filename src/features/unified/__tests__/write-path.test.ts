@@ -26,7 +26,7 @@ describe('默认下发经统一写入口', () => {
   it('打到 /ctrl/unified-ctrl-set，Query 不改的字段编码后为 -1，只发一次', async () => {
     setConfig({ apiBase: '/api', apiEnv: 'test' })
     const be = fakeBackend({ '/ctrl/unified-ctrl-set': ok })
-    const ctl = createUnifiedController({ getContext: () => CTX, readBack: async () => ({}), log: () => {} })
+    const ctl = createUnifiedController({ getContext: () => CTX, readBack: async () => ({}), verify: () => [], log: () => {} })
     ctl.request({ roomTemp: 25.5 })
     expect(await ctl.confirm()).toMatchObject({ status: 'success' })
     expect(be.calls).toHaveLength(1)
@@ -40,11 +40,24 @@ describe('默认下发经统一写入口', () => {
     for (const cfg of [{ writeMode: 'off' as const }, { writeProjectIds: ['someone-else'] }]) {
       setConfig({ apiBase: '/api', apiEnv: 'test', ...cfg })
       const be = fakeBackend({ '/ctrl/unified-ctrl-set': ok })
-      const ctl = createUnifiedController({ getContext: () => CTX, readBack: async () => ({}), log: () => {} })
+      const ctl = createUnifiedController({ getContext: () => CTX, readBack: async () => ({}), verify: () => [], log: () => {} })
       ctl.request({ roomSwitch: 1 })
       expect(await ctl.confirm()).toMatchObject({ status: 'failure', outcome: 'not-sent' })
       expect(be.calls).toHaveLength(0)
     }
+  })
+
+  it('写防护文案里的完整项目 id 不进日志', async () => {
+    setConfig({ apiBase: '/api', apiEnv: 'test', writeProjectIds: ['someone-else'] })
+    fakeBackend({})
+    const logs: unknown[] = []
+    const ctl = createUnifiedController({ getContext: () => CTX, readBack: async () => ({}), verify: () => [], log: (e) => logs.push(e) })
+    ctl.request({ roomSwitch: 1 })
+    const end = await ctl.confirm()
+    expect(end).toMatchObject({ status: 'failure', error: expect.stringContaining('项目不在下发名单内') })
+    const text = JSON.stringify(logs)
+    expect(text).toContain('项目不在下发名单内')
+    expect(text).not.toContain(CTX.projectId)
   })
 
   it('生产环境默认拦截', async () => {
@@ -57,7 +70,7 @@ describe('默认下发经统一写入口', () => {
   it('控制屏 success=false → rejected，不重发', async () => {
     setConfig({ apiBase: '/api', apiEnv: 'test' })
     const be = fakeBackend({ '/ctrl/unified-ctrl-set': () => json({ body: encodeMessage(pb.UnifiedCtrlSetReplySchema, { success: false, msg: '控制屏忙' }) }) })
-    const ctl = createUnifiedController({ getContext: () => CTX, readBack: async () => ({}), log: () => {} })
+    const ctl = createUnifiedController({ getContext: () => CTX, readBack: async () => ({}), verify: () => [], log: () => {} })
     ctl.request({ roomSwitch: 1 })
     expect(await ctl.confirm()).toMatchObject({ status: 'failure', outcome: 'rejected', error: expect.stringContaining('控制屏忙') })
     expect(be.calls).toHaveLength(1)
@@ -68,11 +81,11 @@ describe('bindUnifiedControl（hook 的依赖绑定）', () => {
   it('确认时用的是最新注入的项目信息与函数', async () => {
     const send1 = vi.fn(async () => ({ success: true, msg: '' }))
     const send2 = vi.fn(async () => ({ success: true, msg: '' }))
-    const { ctl, update } = bindUnifiedControl({ context: CTX, readBack: async () => 1, send: send1, log: () => {} })
+    const { ctl, update } = bindUnifiedControl({ context: CTX, readBack: async () => 1, verify: () => [], send: send1, log: () => {} })
     ctl.request({ roomSwitch: 1 })
-    update({ context: { ...CTX, online: false }, readBack: async () => 1, send: send2, log: () => {} })
+    update({ context: { ...CTX, online: false }, readBack: async () => 1, verify: () => [], send: send2, log: () => {} })
     expect(await ctl.confirm()).toMatchObject({ status: 'idle', errors: ['项目离线，不能下发'] })
-    update({ context: CTX, readBack: async () => 1, send: send2, log: () => {} })
+    update({ context: CTX, readBack: async () => 1, verify: () => [], send: send2, log: () => {} })
     ctl.request({ roomSwitch: 1 })
     await ctl.confirm()
     expect(send1).not.toHaveBeenCalled()

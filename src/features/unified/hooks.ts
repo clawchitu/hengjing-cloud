@@ -1,6 +1,6 @@
 // 统一控制的 React hooks（只是状态机的薄封装，逻辑都在 machine.ts / rules.ts，便于单测）。
 // 当前项目信息先由页面通过参数注入；S6a 合并后改为从项目数据 hooks 取。
-import { useEffect, useState, useSyncExternalStore } from 'react'
+import { useLayoutEffect, useState, useSyncExternalStore } from 'react'
 import { consoleLogger } from './log'
 import { createUnifiedController, defaultSender, type UnifiedController, type UnifiedDeps, type UnifiedState } from './machine'
 import { resolveTempRange, tempAvailability, type TempAvailability, type UnifiedContext } from './rules'
@@ -38,7 +38,8 @@ export function useUnifiedControl<S>(opts: UseUnifiedControlOptions<S>): Unified
   // 控制器整个组件生命周期只建一次；依赖每次渲染后更新，确认时读到的是最新一次渲染传入的项目。
   // 不在卸载时 dispose：StrictMode 会先卸再装同一个实例；卸载后 useSyncExternalStore 已退订，状态更新无害。
   const [{ ctl, update }] = useState(() => bindUnifiedControl(opts))
-  useEffect(() => { update(opts) })
+  // layout effect 在提交后、浏览器响应下一次点击之前就跑完，确认时读到的是已提交的最新项目
+  useLayoutEffect(() => { update(opts) })
 
   const state = useSyncExternalStore(ctl.subscribe, ctl.getState, ctl.getState)
   const ctx = opts.context

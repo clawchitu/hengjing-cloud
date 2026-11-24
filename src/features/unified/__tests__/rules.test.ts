@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { UnifiedCtrlSetQuery_OperatingMode as Mode } from '@/api/gen/ctrl200_pb.js'
 import { DEFAULT_TEMP_RANGE, MODE_OPTIONS, TEMP_MAX, TEMP_MIN, TEMP_STEP, TEXT } from '../constants'
-import { checkTemp, clampTemp, describeQuery, resolveTempRange, tempAvailability, validateUnified, type UnifiedContext } from '../rules'
+import { checkTemp, clampTemp, describeQuery, echoMismatches, resolveTempRange, tempAvailability, validateUnified, type UnifiedContext } from '../rules'
 
 const ctx = (p: Partial<UnifiedContext> = {}): UnifiedContext => ({ projectId: 'p-0000000000000001', projectCode: '240829001', projectName: '测试项目0829', appCode: 1, online: true, ...p })
 
@@ -91,7 +91,9 @@ describe('其他校验', () => {
   })
   it('模式必须是列出的值', () => {
     expect(validateUnified({ systemMode: 7 as Mode }, ctx())).toMatchObject({ ok: false, errors: [TEXT.badMode] })
-    expect(validateUnified({ systemMode: 0 as Mode }, ctx())).toMatchObject({ ok: false, errors: expect.arrayContaining([TEXT.badMode]) })
+    // 0 = 不变，等同于没选
+    expect(validateUnified({ systemMode: 0 as Mode }, ctx())).toEqual({ ok: false, errors: [TEXT.noChanges] })
+    expect(validateUnified({ systemMode: 0 as Mode, roomSwitch: 1 }, ctx())).toMatchObject({ ok: true, query: { systemMode: 0, roomSwitch: 1 } })
   })
   it('关闭房间同时设温度被拒', () => {
     expect(validateUnified({ roomSwitch: 0, roomTemp: 24 }, ctx())).toEqual({ ok: false, errors: [TEXT.tempWhileRoomOff] })
@@ -105,5 +107,22 @@ describe('其他校验', () => {
       { label: TEXT.systemSwitch, value: TEXT.on },
       { label: TEXT.roomTemp, value: '25.5°C' },
     ])
+  })
+})
+
+describe('echoMismatches（默认核对）', () => {
+  const q = { systemSwitch: 1, systemMode: 100, roomSwitch: -1, roomTemp: 24.5 }
+  it('只核对下发了的字段，一致时为空', () => {
+    expect(echoMismatches(q, { systemSwitch: 1, systemMode: 100, roomSwitch: 0, roomTemp: 24.500001 })).toEqual([])
+  })
+  it('不一致、没读到分别给出说明', () => {
+    expect(echoMismatches(q, { systemSwitch: 0, systemMode: null, roomTemp: 22 })).toEqual([
+      TEXT.echoDiffer(TEXT.systemSwitch, TEXT.on, TEXT.off),
+      TEXT.echoMissing(TEXT.systemMode),
+      TEXT.echoDiffer(TEXT.roomTemp, '24.5°C', '22°C'),
+    ])
+  })
+  it('全是不变时不核对任何字段', () => {
+    expect(echoMismatches({ systemSwitch: -1, systemMode: 0, roomSwitch: -1, roomTemp: -1 }, {})).toEqual([])
   })
 })

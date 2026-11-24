@@ -79,8 +79,11 @@ export interface UnifiedDeps<S> {
   getContext: () => UnifiedContext | null | undefined
   /** 回读当前状态，下发前后各调一次，用来回显核对。测试里注入假数据 */
   readBack: (projectId: string) => Promise<S>
-  /** 核对回读结果与下发值，返回不一致项的说明；不给就不核对 */
-  verify?: (query: WriteQuery<203>, before: S, after: S) => string[]
+  /**
+   * 核对回读结果与下发值，返回不一致项的说明（必填：回读就是为了核对）。
+   * 回读能整理成 UnifiedEcho 时可直接用 rules.ts 的 echoMismatches()
+   */
+  verify: (query: WriteQuery<203>, before: S, after: S) => string[]
   send?: UnifiedSender
   log?: UnifiedLogger
 }
@@ -99,17 +102,28 @@ export interface UnifiedController<S> {
   dispose: () => void
 }
 
-const NOT_SENT_KINDS = new Set<ApiErrorKind>(['write_blocked', 'bad_request', 'aborted'])
-const UNKNOWN_KINDS = new Set<ApiErrorKind>(['timeout', 'network'])
+/** 前端自己抛的（没有 HTTP 状态）：写防护拦截、写消息校验不过、发出前取消 → 肯定没发出 */
+const LOCAL_NOT_SENT = new Set<ApiErrorKind>(['write_blocked', 'bad_request', 'aborted'])
+/** 后端或网关明确拒绝、不会转给控制屏执行的：控制屏 success=false、无权限、令牌失效、参数错误 */
+const REJECTED = new Set<ApiErrorKind>(['ctrl', 'forbidden', 'unauthenticated', 'bad_request'])
 const errText = (e: unknown) => (e instanceof Error ? e.message : String(e))
 
-function outcomeOf(e: unknown): FailureOutcome {
-  if (isApiError(e)) {
-    if (NOT_SENT_KINDS.has(e.kind)) return 'not-sent'
-    if (UNKNOWN_KINDS.has(e.kind)) return 'unknown'
-  }
-  // 非 ApiError 的异常（比如注入的 send 抛了普通错误）无法判断是否到达，按未知处理
-  return isApiError(e) ? 'rejected' : 'unknown'
+/**
+ * 只有能确定的才算 not-sent / rejected，其余（超时、断网、500、503、后端返回的取消、普通异常）
+ * 一律按结果未知处理并回读核对：请求可能已经到达控制屏并执行。
+ */
+export function outcomeOf(e: unknown): FailureOutcome {
+  if (!isApiError(e)) return 'unknown'
+  if (e.status === undefined && LOCAL_NOT_SENT.has(e.kind)) return 'not-sent'
+  if (e.kind === 'ctrl' || (e.status !== undefined && REJECTED.has(e.kind))) return 'rejected'
+  return 'unknown'
+}
+
+/** 实际发送前的复核：项目没换、仍在线 */
+function recheck(ctx: UnifiedContext | null | undefined, target: UnifiedTarget): string | null {
+  if (!ctx || ctx.projectId !== target.projectId) return TEXT.projectChanged
+  if (ctx.online !== true) return TEXT.offline
+  return null
 }
 
 function toTarget(ctx: UnifiedContext): UnifiedTarget {
@@ -148,6 +162,14 @@ export function createUnifiedController<S>(deps: UnifiedDeps<S>): UnifiedControl
     }
     write('read-before', target)
 
+    // 读取是异步的，期间项目可能离线或被切换：发送前再复核一次
+    const stale = recheck(deps.getContext(), target)
+    if (stale) {
+      write('blocked', target, { message: stale })
+      dispatch({ type: 'FAIL', outcome: 'not-sent', error: stale, before })
+      return state
+    }
+
     // 2. 下发一次，不重试
     dispatch({ type: 'STEP', step: 'send', before })
     write('send', target, { query })
@@ -168,7 +190,7 @@ export function createUnifiedController<S>(deps: UnifiedDeps<S>): UnifiedControl
         after = await deps.readBack(target.projectId)
         write('read-after', target)
       } catch (e) {
-        afterError = `${TEXT.readAfterFailed}：${errText(e)}`
+        afterError = `${sendError === null ? TEXT.readAfterFailed : TEXT.readAfterFailedUnknown}：${errText(e)}`
         write('read-after', target, { message: afterError })
       }
     }
@@ -181,8 +203,8 @@ export function createUnifiedController<S>(deps: UnifiedDeps<S>): UnifiedControl
     }
 
     let mismatches: string[] = []
-    if (after !== null && deps.verify) {
-      try { mismatches = deps.verify(query, before, after) } catch (e) { mismatches = [errText(e)] }
+    if (after !== null) {
+      try { mismatches = deps.verify(query, before, after) } catch (e) { mismatches = [`${TEXT.verifyFailed}：${errText(e)}`] }
     }
     write('success', target, { query, message: mismatches.length ? `${TEXT.echoMismatch}：${mismatches.join('；')}` : afterError })
     dispatch({ type: 'SUCCEED', before, after, afterError, mismatches })
