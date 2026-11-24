@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { snapshotProject, type WriteProject } from '../../../api/guard'
 import { APP_CODE, capabilitiesOf, hasRooms, isStandalone, toAppCode } from '../capabilities'
 import { isOnlineEntity, joinScope, PLATFORM_DEALER, PLATFORM_DEALER_ID, withPlatformDealer, projectsInGroup, projectsInGroups, resolveCurrentProject, resolveDealerId, toDealer, toGroup, toProject } from '../map'
 import type { Group, Project } from '../types'
@@ -113,5 +114,17 @@ describe('经销商默认值', () => {
     expect(resolveDealerId([{ id: 'D1' }, { id: 'D2' }], '')).toBe('D1')
     expect(resolveDealerId([{ id: 'D1' }, { id: 'D2' }], 'D2')).toBe('D2')
     expect(resolveDealerId([{ id: 'D1' }], 'D2')).toBe('D1')
+  })
+})
+
+describe('与写入口对齐（写防护按 code 比对白名单、请求用 id）', () => {
+  it('Project 能直接当 WriteProject 传给写入口：快照取到 id 与 code', () => {
+    const p = toProject({ id: '6aa3a0ade8f3372b86b15b05', code: '260911001', app_code: '12', online: true })
+    const w: WriteProject = p // 类型层面可直接传
+    expect(snapshotProject(w)).toEqual({ id: '6aa3a0ade8f3372b86b15b05', code: '260911001' })
+  })
+  it('后端缺 code 的项目映射为空串，写防护拒绝（fail closed），不会用别的字段顶替', () => {
+    expect(toProject({ id: 'x' }).code).toBe('')
+    expect(snapshotProject(toProject({ id: 'x' }))).toBeNull()
   })
 })
