@@ -129,3 +129,13 @@
     border-spacing: 0;
   }
 }
+
+/*
+ * 脚本聚焦时明确指定键盘外圈的兜底（app/feedback.ts 的 focusWithRing）：浏览器不支持 focus({ focusVisible }) 时，
+ * 在元素上打 data-focus-ring，on 强制显示浏览器默认外圈、off 强制隐藏；失焦即清除。支持该选项的浏览器（含 CI 的 Chromium）不会打这个标记。
+ */
+@layer base {
+  [data-focus-ring='off']:focus-visible { outline: none; }
+  /* 先写通用的 Highlight，再写 -webkit-focus-ring-color：认识后者的浏览器用后者，不认识的整条忽略、保留前者 */
+  [data-focus-ring='on']:focus { outline: auto 1px Highlight; outline: auto 1px -webkit-focus-ring-color; }
+}

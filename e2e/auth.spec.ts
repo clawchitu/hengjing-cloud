@@ -1,5 +1,5 @@
 // 登录跳转（演示数据模式，假的 /api/login 响应；不连真实后端，不截图）
-import { expect, test } from './fixtures'
+import { expect, expectToast, test } from './fixtures'
 
 test.describe('登录跳转', () => {
   test.beforeEach(async ({ page }) => {
@@ -18,7 +18,7 @@ test.describe('登录跳转', () => {
     await expect(page).toHaveURL(/\/login$/)
     await submit(page)
     await expect(page).toHaveURL(/\/sensors$/)
-    await expect(page.locator('.toasts')).toContainText('登录成功，欢迎回来')
+    await expectToast(page, '登录成功，欢迎回来')
   })
 
   test('直接打开登录页 → 登录后去首页', async ({ page }) => {
@@ -32,7 +32,7 @@ test.describe('登录跳转', () => {
     await page.route('**/api/login', (r) => { calls++; return r.fulfill({ json: { ok: false }, status: 401 }) })
     await page.goto('/login')
     await page.getByRole('button', { name: '登 录' }).click()
-    await expect(page.locator('.toasts')).toContainText('请输入用户名和密码')
+    await expectToast(page, '请输入用户名和密码')
     expect(calls).toBe(0)
   })
 
@@ -40,7 +40,7 @@ test.describe('登录跳转', () => {
     await page.route('**/api/login', (r) => r.fulfill({ json: { ok: false }, status: 401 }))
     await page.goto('/login')
     await submit(page)
-    await expect(page.locator('.toasts')).toContainText('用户名或密码错误')
+    await expectToast(page, '用户名或密码错误')
     await expect(page).toHaveURL(/\/login$/)
   })
 })

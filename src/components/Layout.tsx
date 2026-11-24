@@ -12,6 +12,7 @@ import { AfterRender, itemById, setActive } from '@/components/ui/command-sync'
 import { Popover, PopoverAnchor, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { cn } from '@/lib/utils'
 import { useApp } from '../app/store'
+import { useCancelConfirmOnLeave, useConfirm } from '../app/feedback'
 import { dealerSections, projectsInGroup, useOrgScope, whenProjectSet } from '../data/org'
 import { gatewayOf, type Project } from '../api'
 
@@ -331,7 +332,8 @@ function OfflineBanner({ p }: { p: Project }) {
 }
 
 export default function Layout() {
-  const { logout, project, confirm, user } = useApp()
+  const { logout, project, user } = useApp()
+  const confirm = useConfirm()
   const loc = useLocation()
   const nav = useNavigate()
   const cur = ALL.find((n) => loc.pathname.startsWith(n.to))
@@ -341,6 +343,8 @@ export default function Layout() {
   const noProject = !project.id
 
   useEffect(() => { window.scrollTo(0, 0) }, [loc.pathname])
+  // 确认弹窗随离开失效：路由变化（含后退）或 Layout 卸载（如会话过期换成登录页）时按取消结算
+  useCancelConfirmOnLeave()
 
   const onLogout = async () => {
     if (await confirm({ title: '退出登录', body: '确定要退出恒境云平台吗？', okText: '退出' })) { logout(); nav('/login') }

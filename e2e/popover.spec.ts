@@ -77,7 +77,7 @@ test.describe('项目切换菜单', () => {
     await tick(page)
     await expect(menu(page)).toHaveCount(0)
     await expect(currentName(page)).toHaveText('朝阳壹号院 B栋')
-    await expect(page.locator('.toast').filter({ hasText: '已切换到「朝阳壹号院 B栋」' })).toBeVisible()
+    await expect(page.locator('[data-sonner-toast]').filter({ hasText: '已切换到「朝阳壹号院 B栋」' })).toBeVisible()
     await expect(trigger(page)).toBeFocused()
   })
 
@@ -310,7 +310,7 @@ test.describe('顶栏项目搜索', () => {
     await tick(page)
     await expect(hits(page)).toHaveCount(0)
     await expect(currentName(page)).toHaveText('朝阳壹号院 B栋')
-    await expect(page.locator('.toast').filter({ hasText: '当前项目已切换为「朝阳壹号院 B栋」' })).toBeVisible()
+    await expect(page.locator('[data-sonner-toast]').filter({ hasText: '当前项目已切换为「朝阳壹号院 B栋」' })).toBeVisible()
     await expect(input).toHaveValue('')
     await expect(input).toBeFocused()
     await expect(input).toHaveAttribute('aria-expanded', 'false')
@@ -418,7 +418,7 @@ test.describe('顶栏项目搜索', () => {
     await expect(hits(page).first()).toBeVisible()
     await expect(highlighted(hits(page))).toHaveText(/朝阳壹号院 A栋/)
     await expect(currentName(page)).toHaveText('朝阳壹号院 A栋')
-    await expect(page.locator('.toast')).toHaveCount(0)
+    await expect(page.locator('[data-sonner-toast]')).toHaveCount(0)
   })
 
   test('没有高亮时回车选第一条（同旧版）', async ({ page, login }) => {

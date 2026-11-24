@@ -229,7 +229,6 @@ tr.st-err td { background: #fffcf2; }
 .temp-box .tv b small { font-size: 18px; color: var(--faint); font-weight: 500; }
 .temp-box .round { width: 38px; height: 38px; border-radius: 50%; border: 0; background: #fff; box-shadow: 0 1px 4px rgba(15,23,42,.12); font-size: 16px; color: var(--muted); }
 .temp-box .round.plus { background: var(--primary); color: #fff; }
-.temp-box input[type=range] { width: 100%; accent-color: var(--primary); margin-top: 18px; }
 .temp-box .ticks { display: flex; justify-content: space-between; font-size: 11px; color: var(--faint); }
 .preview { background: var(--navy); color: #fff; border-radius: 16px; padding: 20px; }
 .preview .step-h { color: #fff; }
@@ -389,7 +388,8 @@ tr.cur-row .bico { background: #cffafe; color: var(--primary); }
 .full { grid-column: 1 / -1; }
 
 .home-mid.full { grid-template-columns: minmax(0, 1fr); }
-.ctl-type .opt-btn:disabled { cursor: not-allowed; }
-.ctl-type .opt-btn:disabled:not(.on) { opacity: .45; background: #f8fafc; }
-.ctl-type .opt-btn.on:disabled { opacity: 1; }
+/* [aria-disabled=true]：新风「露点控制」不可用时仍要能聚焦以显示提示（FreshAir.tsx），外观同 :disabled；:is() 的权重同 :disabled */
+.ctl-type .opt-btn:is(:disabled, [aria-disabled=true]) { cursor: not-allowed; }
+.ctl-type .opt-btn:is(:disabled, [aria-disabled=true]):not(.on) { opacity: .45; background: #f8fafc; }
+.ctl-type .opt-btn.on:is(:disabled, [aria-disabled=true]) { opacity: 1; }
 .ctl-hint { display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--muted); margin: -4px 0 10px; }

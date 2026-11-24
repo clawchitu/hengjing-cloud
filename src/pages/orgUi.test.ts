@@ -69,7 +69,8 @@ function mountAt(path: string) {
         createElement(Route, { path: '/sensors', element: page('传感器') }),
       ))))))
 }
-const toasts = () => document.querySelector('.toasts')?.textContent ?? ''
+// Sonner 在下一个宏任务里才把 toast 放进列表，断言出现要等一下
+const toasts = () => document.querySelector('[data-sonner-toaster]')?.textContent ?? ''
 const flush = () => act(async () => { await new Promise((r) => setTimeout(r, 20)) })
 
 beforeEach(() => {
@@ -328,10 +329,10 @@ describe('切换失败的提示文案', () => {
     mountAt('/groups')
     const row = (await screen.findByText('范围外的项目')).closest('tr')!
     await act(async () => { fireEvent.click(within(row).getByRole('button', { name: /查看数据/ })) })
-    expect(toasts()).toContain('项目列表正在刷新，请稍后重试')
+    await waitFor(() => expect(toasts()).toContain('项目列表正在刷新，请稍后重试'))
     await flush()
     await act(async () => { fireEvent.click(within(row).getByRole('button', { name: /查看数据/ })) })
-    expect(toasts()).toContain('无权查看该项目')
+    await waitFor(() => expect(toasts()).toContain('无权查看该项目'))
     expect(screen.queryByText('传感器页内容')).toBeNull()
   })
 })

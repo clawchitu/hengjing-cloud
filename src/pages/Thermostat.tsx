@@ -8,6 +8,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger } from '@/components/u
 import { Switch } from '@/components/ui/switch'
 import { useStats, type Range } from './Sensors'
 import { useApp } from '../app/store'
+import { useConfirm } from '../app/feedback'
 import * as api from '../api'
 import { PROGRAMS, hasRooms, type Room } from '../api'
 
@@ -46,7 +47,8 @@ function RoomCard({ r, selected, onSelect, onToggle }: { r: Room; selected: bool
 }
 
 export default function Thermostat() {
-  const { projectId, project, toast, confirm } = useApp()
+  const { projectId, project, toast } = useApp()
+  const confirm = useConfirm()
   const [rooms, setRooms] = useAsync(() => api.getRooms(projectId), [projectId])
   const [sel, setSel] = useState('TP-01')
   const [range, setRange] = useState<Range>('24小时')
