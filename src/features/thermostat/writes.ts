@@ -22,9 +22,10 @@ import { useSyncExternalStore } from 'react'
 import { isApiError } from '@/api/errors'
 import {
   acquire, checkSentRecord, claim, currentAccount, lockKeysOf, lockOf, lockVersion, markOverdue, markSent, release, requireVerify, settle, subscribe as subscribeLock,
-  type FieldResult, type LockInfo, type LockTarget, type MatchResult, type SentRecord,
+  type FieldResult, type LockInfo, type LockTarget, type MatchDetail, type MatchResult, type SentRecord,
 } from '@/api/writeLock'
 import { getStoredProjectId } from '@/data/org/current'
+import { verdictOf } from '@/api/writeLockVerify'
 import { outcomeOf } from '@/features/unified/machine'
 
 export type Stage = 'preflight' | 'sending' | 'verifying'
@@ -40,9 +41,11 @@ export interface WriteResult {
   /** 失败原因、未知原因，或成功文案 */
   text: string
   readback: Readback
-  /** 回读核对的整体结论（四态）与逐字段结论；还没核对完时没有 */
+  /** 回读核对的整体结论（四态）与逐字段结论（只记写锁认可的核对）；还没核对完时没有 */
   verdict?: FieldResult
   fields?: Record<string, FieldResult>
+  /** 写锁没等到有效的一致核对就放开了（有效期到期等）：已恢复下发，结果仍未确认 */
+  ended?: 'expired'
 }
 
 /** 本标签正在进行的一次下发（只用于界面阶段展示；互斥靠写锁） */
@@ -128,6 +131,8 @@ export interface OpSpec<P, L> {
   read: (signal: AbortSignal) => Promise<L>
   /** 读数与下发目标逐字段比对（writeLockVerify.ts 的四态结论） */
   matches: (payload: P, read: L) => MatchResult
+  /** 写锁认可了一次全部一致的核对（之后的自动再核对一致也会调）：页面据此清草稿 */
+  onApplied?: () => void
   /** 发起的页面还在（没卸载） */
   present: () => boolean
   toast: (text: string, err?: boolean) => void
@@ -182,29 +187,67 @@ export async function runOp<P, L>(o: OpSpec<P, L>): Promise<RunResult> {
     let sent: Promise<void>
     try { sent = o.send(payload, beforeSend) } catch (e) { sent = Promise.reject(e) }
     markSent(token, sent, sentRecord)
-    // 写锁用它核对：新读一次 200（界面同步刷新），逐字段比对；全部一致写锁才放开。结论记到本次结果里（只对本会话）
+    // 写锁用它核对：新读一次 200（界面同步刷新），逐字段比对；全部一致写锁才放开。
+    // 页面状态（结果条、成功提示、清草稿）只跟写锁「认可」的核对走（#33 的候选提交）：核对函数本身不改页面——
+    //   一致 → 返回 { same: true, commit }，写锁确认这次核对仍有效（没过期、没超时、没换号、锁还在）才调 commit，
+    //          这时才提示成功、更新结果、通知页面清草稿；
+    //   其余 → 返回逐字段结论（MatchDetail），写锁认可后才记到锁的 lastVerify / lastFields，这里订阅写锁再同步给页面。
+    //   锁没等到有效的一致就放开（到期、别的标签页删除记录）：结果标为「已到期」，草稿不动（由页面单独维护）
     let firstCheck: (v: FieldResult | null) => void = () => {}
     const checked = new Promise<FieldResult | null>((r) => { firstCheck = r })
+    let lastThrew = false
+    let applied = false
+    let failed = false
+    // 「正在核对…」只是进度，不是结论：开始时标 pending，这次核对没被写锁认可（中止等）就恢复原来的显示
+    let before: Readback | null = null
     requireVerify(token, async (signal) => {
-      if (sameSession()) patch({ readback: 'pending' })
-      try {
-        const r = o.matches(payload, await o.read(signal))
-        const det = typeof r === 'object' && r ? r : { verdict: (r === true ? 'applied' : r === 'unverifiable' ? 'unverifiable' : 'unchanged') as FieldResult, fields: {} }
-        if (sameSession()) {
-          const was = results.get(key)?.verdict
-          patch({ readback: 'ok', verdict: det.verdict, fields: det.fields })
-          // 后来的自动再核对才一致：补一次成功提示（仍在原项目时提示即可，结果条清掉；不在时把成功留给原项目）
-          if (det.verdict === 'applied' && was && was !== 'applied') {
-            if (visible()) { say(o.okText); clearKey() } else patch({ text: o.okText })
+      lastThrew = true // 没读完（超时、中止、出错）都按回读失败
+      if (sameSession()) { const cur = results.get(key); if (cur && before === null) before = cur.readback; patch({ readback: 'pending' }) }
+      const r = o.matches(payload, await o.read(signal))
+      lastThrew = false
+      const det: MatchDetail = typeof r === 'object' && r ? r : { verdict: (r === true ? 'applied' : r === 'unverifiable' ? 'unverifiable' : 'unchanged') as FieldResult, fields: {} }
+      if (det.verdict !== 'applied') return r === false || r === 'unverifiable' ? r : det
+      return {
+        same: true,
+        commit: () => {
+          applied = true
+          before = null
+          if (sameSession()) {
+            const cur = results.get(key)
+            // 已下发（success）的这次，或之前核对过不一致、后来才一致：提示成功（在原项目时清结果条，不在时把成功留给原项目）；
+            // 结果未知后第一次核对就一致：结果记为一致（与之前相同，不另弹提示）
+            if (cur?.outcome === 'ok' || (cur?.verdict && cur.verdict !== 'applied')) {
+              if (visible()) { say(o.okText); clearKey() } else patch({ readback: 'ok', verdict: 'applied', fields: det.fields, text: o.okText })
+            } else patch({ readback: 'ok', verdict: 'applied', fields: det.fields })
           }
-        }
-        firstCheck(det.verdict)
-        return r
-      } catch (e) {
-        if (sameSession()) patch({ readback: 'fail', verdict: 'unknown', fields: undefined })
-        firstCheck('unknown')
-        throw e
+          try { o.onApplied?.() } catch { /* 页面回调出错不影响锁 */ }
+          firstCheck('applied')
+        },
       }
+    })
+    let seen: { v: unknown; f: unknown } = { v: undefined, f: undefined }
+    const offLock = subscribeLock(() => {
+      const info = lockOf(o.project)
+      if (!info || info.key !== token.key) {
+        offLock()
+        if (!applied && !failed && sameSession()) patch({ ended: 'expired' })
+        firstCheck(null)
+        return
+      }
+      if (info.lastVerify === seen.v && info.lastFields === seen.f) {
+        // 核对结束但没有新的认可结论（中止等）：恢复「正在核对」之前的显示
+        if (!info.verifying && before !== null) { const b = before; before = null; if (sameSession()) patch({ readback: b }) }
+        return
+      }
+      before = null
+      seen = { v: info.lastVerify, f: info.lastFields }
+      const fields = info.lastFields ?? {}
+      const vals = Object.values(fields)
+      const verdict: FieldResult = vals.length ? verdictOf(vals)
+        : info.lastVerify === 'mismatch' ? 'unchanged' : info.lastVerify === 'unverifiable' ? 'unverifiable' : 'unknown'
+      const threw = lastThrew && (info.lastVerify === 'failed' || info.lastVerify === 'offline')
+      if (sameSession()) patch(threw ? { readback: 'fail', verdict: 'unknown', fields: info.lastFields } : { readback: 'ok', verdict, fields: info.lastFields })
+      firstCheck(verdict)
     })
     let outcome: Outcome
     let text: string
@@ -218,6 +261,7 @@ export async function runOp<P, L>(o: OpSpec<P, L>): Promise<RunResult> {
       else { const c = classify(e); outcome = c.outcome; text = c.text; wrote = c.sent && claimed }
     }
     if (outcome !== 'ok') say(outcome === 'unknown' ? `${o.subject} 下发结果未知：${text}` : `${o.subject} ${text}`, true)
+    failed = outcome === 'fail'
     record({ outcome, text, readback: outcome === 'unknown' ? 'waiting' : 'pending' })
     // 结论交给写锁：ok / unknown 进入待核对（原写已结算时立刻自动核对一次），fail 放锁
     settle(token, outcome)
@@ -235,12 +279,9 @@ export async function runOp<P, L>(o: OpSpec<P, L>): Promise<RunResult> {
       return outcome
     }
     // 已下发：等写锁的第一次核对结论（核对超时由写锁兜底，这里多等一点）
+    // 成功提示、清结果条已在写锁认可后的 commit 里做过
     const verdict = await within(checked, LIMITS.preflightMs + 5_000, '核对').catch(() => null)
-    if (verdict === 'applied') {
-      if (visible()) { say(o.okText); clearKey() } else patch({ text: o.okText })
-      return 'ok'
-    }
-    return 'unverified'
+    return verdict === 'applied' && applied ? 'ok' : 'unverified'
   } catch {
     // 回调意外抛错：还没认领就放锁；已认领的由写锁按「发出后」的规则处理
     if (claimed) settle(token, 'unknown')

@@ -251,3 +251,74 @@ describe('展示隔离', () => {
     expect(W.__versionForTests()).toBe(v)
   })
 })
+
+describe('核对结论只在写锁认可后才进页面（#35 Codex 第二轮第 2 条）', () => {
+  /** 已下发（success）→ 写锁自动核对，读取卡在 gate 上 */
+  async function sentAndReading(o: Partial<Spec> = {}) {
+    const g = gate()
+    let applied = 0
+    const x = spec({ read: async () => { await g.p; return 26 }, onApplied: () => { applied += 1 }, ...o })
+    const run = W.runOp(x.s)
+    await flush()
+    expect(L.lockOf(P1)?.verifying).toBe(true)
+    return { ...x, g, run, applied: () => applied }
+  }
+
+  it('核对跨过有效期：读到一致也不提示成功、不通知清草稿，结果标「已到期」，锁按到期放开', async () => {
+    const t0 = Date.now()
+    const x = await sentAndReading()
+    vi.spyOn(Date, 'now').mockReturnValue(t0 + L.DEFAULT_TTL_MS + 1_000)
+    x.g.open()
+    expect(await x.run).toBe('unverified')
+    await flush()
+    expect(x.toasts).not.toContain('客厅 已下发')
+    expect(x.applied()).toBe(0)
+    expect(L.lockOf(P1)).toBeNull()
+    expect(W.getResult('P1', 'R1')).toMatchObject({ outcome: 'ok', ended: 'expired' })
+    expect(W.getResult('P1', 'R1')?.verdict).toBeUndefined()
+  })
+
+  it('核对超时：按回读失败记结果未知、锁保持；超时后迟到的一致读数不算，不提示成功、不清草稿', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    const g = gate()
+    let applied = 0
+    const x = spec({ read: async () => { await g.p; return 26 }, onApplied: () => { applied += 1 } })
+    const run = W.runOp(x.s)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(L.lockOf(P1)?.verifying).toBe(true)
+    await vi.advanceTimersByTimeAsync(L.VERIFY_TIMEOUT_MS + 10)
+    expect(await run).toBe('unverified')
+    expect(L.lockOf(P1)).toMatchObject({ phase: 'unknown', lastVerify: 'failed' })
+    expect(W.getResult('P1', 'R1')).toMatchObject({ readback: 'fail', verdict: 'unknown' })
+    g.open()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(x.toasts).not.toContain('客厅 已下发')
+    expect(applied).toBe(0)
+    expect(L.lockOf(P1)?.phase).toBe('unknown')
+  })
+
+  it('核对读取途中换账号：一致也作废，不提示、不清草稿、不写进新会话的结果，锁保持', async () => {
+    const x = await sentAndReading()
+    userKey = 'user:B'
+    x.g.open()
+    await x.run
+    await flush()
+    expect(x.toasts).not.toContain('客厅 已下发')
+    expect(x.applied()).toBe(0)
+    expect(L.lockOf(P1)?.phase).toBe('unknown')
+    expect(W.getResult('P1', 'R1')).toBeNull()
+  })
+
+  it('认可的一致才提示成功并通知清草稿；不一致只在写锁记下之后才出现在结果里（逐字段）', async () => {
+    const x = await sentAndReading()
+    expect(W.getResult('P1', 'R1')?.verdict).toBeUndefined()
+    x.g.open()
+    expect(await x.run).toBe('ok')
+    expect(x.toasts).toContain('客厅 已下发')
+    expect(x.applied()).toBe(1)
+    const y = spec({ matches: () => ({ verdict: 'unchanged', fields: { temperature: 'unchanged' } }) })
+    expect(await W.runOp(y.s)).toBe('unverified')
+    expect(L.lockOf(P1)).toMatchObject({ lastVerify: 'mismatch', lastFields: { temperature: 'unchanged' } })
+    expect(W.getResult('P1', 'R1')).toMatchObject({ readback: 'ok', verdict: 'unchanged', fields: { temperature: 'unchanged' } })
+  })
+})

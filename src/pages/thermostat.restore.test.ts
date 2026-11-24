@@ -95,4 +95,12 @@ describe('刷新恢复的锁：锁提示逐字段四态', () => {
     expect(bar.querySelector('[data-lock-fields]')).toBeNull()
     expect(bar.textContent).not.toMatch(/设定温度|节能模式|未生效|客厅/)
   })
+
+  it('恢复锁核对一致放锁后：页面重读一次 200 刷新卡片（恢复锁的核对读数不写回缓存）', async () => {
+    const be = await reloadWith('admin-1', { temperature: 26, eco: -1, switch: -1 }, () => reply200([{ ...ROOM, setTemp: 26 }]))
+    await screen.findByText('客厅')
+    await waitFor(() => expect(document.querySelector('[data-lock]')).toBeNull())
+    // 页面首次读取 + 核对器读取 + 放锁后的重读
+    await waitFor(() => expect(be.callsTo('/ctrl/room-temperature-data-get').length).toBeGreaterThanOrEqual(3))
+  })
 })

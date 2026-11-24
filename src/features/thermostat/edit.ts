@@ -176,6 +176,14 @@ export function describeChanges(c: DraftChanges): string {
   return parts.join('，')
 }
 
+/** 待确认草稿的描述（面板值不可用或已等于草稿时用）：「设定温度 → 26.0°C，节能模式 → 节能」 */
+export function describeDraft(d: RoomDraft): string {
+  const parts: string[] = []
+  if (d.temp !== undefined) parts.push(`设定温度 → ${fmtTemp(d.temp)}°C`)
+  if (d.eco !== undefined) parts.push(`节能模式 → ${ecoLabel(d.eco)}`)
+  return parts.join('，')
+}
+
 /** 成功提示里的描述：「设定温度 24.5°C，节能模式 开」 */
 export function describeResult(c: DraftChanges): string {
   const parts: string[] = []

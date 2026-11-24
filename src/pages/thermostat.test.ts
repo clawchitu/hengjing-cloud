@@ -1030,3 +1030,80 @@ describe('#35 评审修正', () => {
     act(() => { if (other.ok) releaseLock(other.token) })
   })
 })
+
+describe('#35 第二轮：206 目标集合、到期后草稿保留', () => {
+  for (const [what, bad, reason] of [
+    ['有房间设备 ID 为 0', { ...OFF_ROOM, id: 0 }, '有 1 个设备 ID 无效'],
+    ['有重复的设备 ID', { ...OFF_ROOM, id: ROOM.id }, '有重复的设备 ID'],
+  ] as const) {
+    it(`206：原始 200 里${what} → 不弹确认、不下发，说明原因`, async () => {
+      const be = backend({ '/ctrl/project-room-switch-set': ok206 })
+      rooms = [ROOM, OFF_ROOM, bad]
+      await openRooms()
+      fireEvent.click(screen.getByRole('button', { name: '全部开启' }))
+      await waitFor(() => expect(toasts()).toContain(reason))
+      expect(toasts()).toContain('本次未下发')
+      expect(screen.queryByRole('alertdialog')).toBeNull()
+      expect(writes(be)).toHaveLength(0)
+    })
+  }
+  it('206：确认文案的房间数按原始 200 完整列表；确认后预检读到无效 ID → 取消，不下发', async () => {
+    const be = backend({ '/ctrl/project-room-switch-set': ok206 })
+    await openRooms()
+    fireEvent.click(screen.getByRole('button', { name: '全部开启' }))
+    expect((await dialog()).textContent).toContain('2 个温控面板')
+    rooms = [ROOM, OFF_ROOM, { ...OFF_ROOM, id: 0 }]
+    await confirmOk()
+    await waitFor(() => expect(toasts()).toContain('设备 ID 无效'))
+    expect(writes(be)).toHaveLength(0)
+    expect(document.querySelector('[data-lock]')).toBeNull()
+  })
+
+  /** 下发温度 +0.5，设备未生效（锁保持），然后让写锁过期：把时钟拨过有效期再点「核对」（核对前查到期 → 到期放锁 + 强制重读） */
+  async function sendThenExpire(during: object[]) {
+    const be = backend({ '/ctrl/room-temperature-set': ok201NoApply })
+    await draftAndSend()
+    await confirmOk()
+    await waitFor(() => expect(within(card('客厅')).getAllByRole('alert').map((a) => a.textContent).join()).toContain('指令已下发，设备状态暂未变化'))
+    await poll(during)
+    const t = Date.now() + 3 * 60_000
+    vi.spyOn(Date, 'now').mockReturnValue(t)
+    fireEvent.click(within(document.querySelector('[data-lock="unknown"]') as HTMLElement).getByRole('button', { name: '核对' }))
+    await waitFor(() => expect(document.querySelector('[data-lock]')).toBeNull())
+    await flush(80)
+    return be
+  }
+  it('锁到期时面板离线：只恢复下发资格并强制重读，草稿保留（标「上次下发未核对一致」），结果条写明已到期；「放弃本次改动」才清', async () => {
+    const be = await sendThenExpire([{ ...ROOM, isConnected: false }, OFF_ROOM])
+    expect(toasts()).not.toContain('未下发的修改已清除')
+    const c = card('客厅')
+    expect(c.querySelector('[data-pending]')?.textContent).toContain('上次下发未核对一致：设定温度 25.5 → 26.0°C')
+    expect(c.textContent).toContain('写锁有效期已到')
+    await poll([{ ...ROOM, isConnected: false }, OFF_ROOM])
+    expect(card('客厅').querySelector('[data-pending]')).toBeTruthy()
+    fireEvent.click(btn(card('客厅'), '放弃本次改动'))
+    await poll([ROOM, OFF_ROOM])
+    expect(card('客厅').textContent).not.toContain('待下发')
+    expect(card('客厅').querySelector('[data-pending]')).toBeNull()
+    expect(within(card('客厅')).getByLabelText('客厅 设定温度').textContent).toBe('25.5°C')
+    expect(writes(be)).toHaveLength(1)
+  })
+  it('锁到期时目标房间缺失：草稿保留；房间回来后仍是「上次下发未核对一致」，可重新下发', async () => {
+    const be = await sendThenExpire([OFF_ROOM])
+    expect(toasts()).not.toContain('未下发的修改已清除')
+    await poll([ROOM, OFF_ROOM])
+    const c = card('客厅')
+    expect(c.querySelector('[data-pending]')?.textContent).toContain('上次下发未核对一致')
+    expect(btn(c, '重新下发').disabled).toBe(false)
+    expect(writes(be)).toHaveLength(1)
+  })
+  it('锁到期后面板读数已等于草稿（不是有效核对）：草稿仍保留，由用户放弃', async () => {
+    await sendThenExpire([ROOM, OFF_ROOM])
+    await poll([{ ...ROOM, setTemp: 26 }, OFF_ROOM])
+    expect(card('客厅').querySelector('[data-pending]')?.textContent).toContain('设定温度 → 26.0°C')
+    fireEvent.click(btn(card('客厅'), '放弃本次改动'))
+    await flush()
+    expect(card('客厅').querySelector('[data-pending]')).toBeNull()
+  })
+})
+

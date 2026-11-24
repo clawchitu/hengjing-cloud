@@ -106,6 +106,24 @@ export function toRoomViews(reply: CtrlReply<200>): RoomView[] {
   return (reply.data ?? []).filter((r) => Number.isSafeInteger(r.id) && r.id > 0).map(toRoomView)
 }
 
+/** 设备 ID 能可靠标识一个房间：正的安全整数（0 是 proto3 缺省，不是真实 ID） */
+export const validRoomId = (id: unknown): id is number => typeof id === 'number' && Number.isSafeInteger(id) && id > 0
+
+/**
+ * 206（全部房间开关）的目标房间集合：基于原始 200 回包的完整房间列表（不是过滤后的页面列表）。206 控制项目全部房间，
+ * 不按集合限制范围，所以只要有房间无法可靠标识（ID 为 0 / 无效）或 ID 重复，就无法逐个核对每个被控制的房间 → 拒绝下发并说明原因
+ */
+export function allRoomsTarget(reply: Pick<CtrlReply<200>, 'data'>): { ok: true; roomIds: number[] } | { ok: false; reason: string } {
+  const data = reply.data ?? []
+  if (!data.length) return { ok: false, reason: '没有读到任何房间' }
+  const bad = data.filter((r) => !validRoomId(r.id)).length
+  if (bad) return { ok: false, reason: `控制屏返回的房间里有 ${bad} 个设备 ID 无效，无法逐个核对全部房间` }
+  const ids = data.map((r) => r.id)
+  const dup = ids.length - new Set(ids).size
+  if (dup) return { ok: false, reason: `控制屏返回的房间里有重复的设备 ID，无法逐个核对全部房间` }
+  return { ok: true, roomIds: ids }
+}
+
 // ---------------------------------------------------------------------------
 // 顶部 KPI
 

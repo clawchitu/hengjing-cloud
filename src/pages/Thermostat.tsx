@@ -22,9 +22,9 @@ import { lockKeysOf, onForceReread, OTHER_ACCOUNT_TEXT, verify, type FieldResult
 import { describeFields, verdictOf } from '../api/writeLockVerify'
 import type { CtrlReply } from '../api/ctrl'
 import {
-  ALL, buildRoomSet, buildRoomSwitch, canStep, clearResult, describeChanges, describeResult, draftChanges, ecoLabel,
+  ALL, allRoomsTarget, buildRoomSet, buildRoomSwitch, canStep, clearResult, describeChanges, describeDraft, describeResult, draftChanges, ecoLabel,
   editBlock, editDraft, fmtTemp, hasDraftChanges, isLocked, match201, match206, noteCurrentProject, reconcileDraft, record201, record206,
-  resolveTempRange, runOp, sameQuery, stepTemp, summarize, switchBlock, tempBlock, thermostatSource, useFreshRooms, useRooms, useRoomStats,
+  resolveTempRange, runOp, sameQuery, stepTemp, summarize, switchBlock, tempBlock, thermostatSource, useFreshRooms, useRooms, useRoomsRaw, useRoomStats,
   useWrites, useFreshRead, windLabel,
   type ChartData, type EditCtx, type EndMode, type RoomDraft, type RoomView, type Running, type StatsRange, type TempRange, type WriteResult,
 } from '../features/thermostat'
@@ -78,6 +78,10 @@ const isGood = (r: WriteResult) => r.outcome === 'ok' && (r.verdict === undefine
 /** 结果条文案：确定失败给原因；已下发 / 结果未知按回读核对的四态（整体作标题，混合时附摘要与逐字段） */
 function resultText(res: WriteResult): string {
   if (res.outcome === 'fail') return res.text
+  if (res.ended === 'expired') {
+    const last = res.verdict && res.verdict !== 'applied' ? `${VERDICT_TEXT[res.verdict]}（最近一次核对）` : '已下发，结果未确认'
+    return `${last}。写锁有效期已到、仍未核对一致，已恢复下发；请以面板读数为准。`
+  }
   if (res.readback === 'waiting') return `下发结果未知：${res.text}。等控制屏结束上一条指令后自动核对 …`
   if (res.readback === 'pending') return res.outcome === 'unknown' ? `下发结果未知：${res.text}。正在核对 …` : '已下发，正在核对 …'
   if (res.readback === 'fail') return '已下发，结果未知（回读失败）。可在上方点「核对」再试，或等到期后自动恢复。'
@@ -99,8 +103,10 @@ interface RoomCardProps {
   conflict: ('temp' | 'eco')[]
   onEdit: (patch: { temp?: number; eco?: 0 | 1 }) => void
   onDiscard: () => void
-  /** 冻结 / 解冻本次下发的草稿快照：冻结期间（写锁或本次下发还在）普通轮询不整理、不清除它 */
-  onFreeze: (on: boolean) => void
+  /** 这份草稿已交给一次下发、待确认（与写锁是否还在无关）：普通轮询不整理、不清除，直到核对一致、确定失败或用户放弃 */
+  pending: boolean
+  /** 标记 / 取消「待确认」 */
+  onPending: (on: boolean) => void
   /** 本项目（按控制屏）的写锁：任何阶段（含结果未知待核对）都禁用全部下发 */
   lock: LockInfo | null
   /** 本标签正在进行的一次下发（界面阶段） */
@@ -111,7 +117,7 @@ interface RoomCardProps {
   freshRead: (signal?: AbortSignal) => Promise<{ list: RoomView[]; raw: Pick<CtrlReply<200>, 'data'> }>
 }
 
-function RoomCard({ room: r, ctx, range, selected, onSelect, draft, conflict, onEdit, onDiscard, onFreeze, lock, running, result, freshRooms, freshRead }: RoomCardProps) {
+function RoomCard({ room: r, ctx, range, selected, onSelect, draft, conflict, onEdit, onDiscard, pending, onPending, lock, running, result, freshRooms, freshRead }: RoomCardProps) {
   // 确认与当前项目都在真正发起下发的这个组件里取：卸载、离开、换项目时确认按取消结算
   const confirm = useConfirm()
   const { project } = useCurrentProject()
@@ -137,9 +143,9 @@ function RoomCard({ room: r, ctx, range, selected, onSelect, draft, conflict, on
    * 确认之后交给下发流程（features/thermostat/writes.ts）：取共用写锁（按控制屏）→ 新读一次 200 → 用新读数重新组装并与
    * 确认时比对 → 一致才认领写锁并经统一写入口下发 → 写后新读一次 200 回读（结果未知时由写锁核对）
    */
-  async function submit(p: Project, confirmed: { query: WriteQuery201; draft: RoomDraft | null }, okText: string, kind: 'set' | 'switch', v?: boolean) {
+  async function submit(p: Project, confirmed: { query: WriteQuery201; draft: RoomDraft | null }, okText: string, kind: 'set' | 'switch', v?: boolean, onApplied?: () => void) {
     return runOp({
-      project: p, target: r.key, subject: r.name, okText, toast: showToast,
+      project: p, target: r.key, subject: r.name, okText, toast: showToast, onApplied,
       present: () => present.current && latest.current.project?.id === p.id,
       preflight: async (signal) => {
         const list = await freshRooms(signal)
@@ -174,13 +180,13 @@ function RoomCard({ room: r, ctx, range, selected, onSelect, draft, conflict, on
     const p = now.project
     if (!p || p.id !== p0.id) return abort('当前项目已变化')
     if (isLocked(p)) return abort('有下发正在进行')
-    // 下发开始：冻结这次的草稿快照。只有写锁确认全部目标字段一致（ok）或确定失败需回滚（fail）才清；
-    // 没发出（中止 / 被占）解冻、照常整理；已下发未核对一致 / 结果未知：保持冻结，待核对、回读失败、面板离线、目标缺失期间
-    // 普通轮询都不整理它，写锁放开后（之后核对一致或到期）才回到普通整理
-    onFreeze(true)
-    const out = await submit(p, { query: built.query, draft: now.draft }, okText, 'set')
+    // 下发开始：这份草稿进入「待确认」（与写锁分开维护）。只有写锁认可的核对全部一致（onApplied，含之后的自动再核对）、
+    // 确定失败需回滚（fail），或用户点「放弃本次改动」才清；没发出（中止 / 被占）取消待确认、照常整理。
+    // 待核对、回读失败、面板离线、目标缺失期间，以及写锁到期放开之后，普通轮询都不整理它（到期只恢复下发资格并强制重读）
+    onPending(true)
+    const out = await submit(p, { query: built.query, draft: now.draft }, okText, 'set', undefined, onDiscard)
     if (out === 'ok' || out === 'fail') onDiscard()
-    else if (out === 'aborted' || out === 'busy') onFreeze(false)
+    else if (out === 'aborted' || out === 'busy') onPending(false)
   }
 
   async function toggle(v: boolean) {
@@ -260,6 +266,14 @@ function RoomCard({ room: r, ctx, range, selected, onSelect, draft, conflict, on
         <div className="te-bar fail" role="alert" onClick={(e) => e.stopPropagation()}>
           <span>面板{conflict.map((c) => (c === 'temp' ? '设定温度' : '节能模式')).join('、')}已在外部变化（现为 {conflict.includes('temp') ? `${fmt1(r.setTemp)}°C` : ''}{conflict.length > 1 ? '，' : ''}{conflict.includes('eco') && r.eco !== null ? ecoLabel(r.eco) : ''}），未下发的修改需要重新核对。</span>
           <Button onClick={onDiscard}>放弃修改</Button>
+        </div>
+      ) : pending && draft ? (
+        <div className="te-bar pending" data-pending="" onClick={(e) => e.stopPropagation()}>
+          <span>{isBusy ? '已下发，待核对一致：' : '上次下发未核对一致：'}<b className="num">{dirty ? describeChanges(changes) : describeDraft(draft)}</b>{isBusy ? '' : '。可放弃本次改动，或以面板读数为准重新下发。'}</span>
+          <span className="row">
+            <Button onClick={onDiscard}>放弃本次改动</Button>
+            {!isBusy && dirty && <Button variant="primary" onClick={() => void send()} disabled={!!block}>重新下发</Button>}
+          </span>
         </div>
       ) : dirty ? (
         <div className="te-bar pending" onClick={(e) => e.stopPropagation()}>
@@ -362,14 +376,15 @@ export default function Thermostat() {
   // 全部开关（206）与「放弃草稿」的确认在本组件发起
   const confirm = useConfirm()
   const rooms = useRooms(project, caps.thermostat)
+  const rawRooms = useRoomsRaw(project, caps.thermostat)
   const freshRooms = useFreshRooms(project)
   const freshRead = useFreshRead(project)
   const writes = useWrites(project)
   const [sel, setSel] = useState('')
   const [range, setRange] = useState<StatsRange>('24小时')
   // 草稿带上所属项目：切换项目即作废（演示数据的房间编号在不同项目里重复）
-  // frozen：这份草稿已交给一次下发（见 RoomCard 的 send）；冻结期间只要写锁或本次下发还在，就不按普通轮询整理
-  const [draftState, setDraftState] = useState<{ pid: string; d: RoomDraft | null; frozen?: boolean }>({ pid: '', d: null })
+  // pending：这份草稿已交给一次下发、待确认（见 RoomCard 的 send），与写锁分开维护；待确认期间不按普通轮询整理
+  const [draftState, setDraftState] = useState<{ pid: string; d: RoomDraft | null; pending?: boolean }>({ pid: '', d: null })
   const pid = project?.id ?? ''
   const rawDraft = draftState.pid === pid ? draftState.d : null
   const setDraft = (u: RoomDraft | null | ((d: RoomDraft | null) => RoomDraft | null)) =>
@@ -387,8 +402,8 @@ export default function Thermostat() {
   const ctx: EditCtx = { online, fresh: !rooms.isError }
   const real = thermostatSource().kind === 'real'
   const draftRoom = rawDraft ? list?.find((x) => x.key === rawDraft.key) : undefined
-  const frozen = !!rawDraft && draftState.frozen === true && (writes.lock !== null || writes.running !== null)
-  const freeze = (on: boolean) => setDraftState((st) => (st.pid === pid && st.d ? { ...st, frozen: on } : st))
+  const frozen = !!rawDraft && draftState.pending === true
+  const markPending = (on: boolean) => setDraftState((st) => (st.pid === pid && st.d ? { ...st, pending: on } : st))
   const rec = frozen ? { draft: rawDraft, conflict: [] as ('temp' | 'eco')[] } : reconcileDraft(rawDraft, draftRoom, ctx)
   const draft = rec.draft
   const latest = useLatest({ project, online, list })
@@ -405,6 +420,13 @@ export default function Thermostat() {
     return onForceReread((e) => { if (e.keys.some((k) => mine.has(k))) void refetchRooms() })
   }, [project, refetchRooms])
   const present = usePresent()
+  // 写锁放开（核对一致、到期、别的标签页删除，含刷新恢复的锁——恢复锁的核对读数不写回缓存）：重读一次刷新卡片
+  const lockKey = writes.lock?.key ?? null
+  const prevLock = useRef<string | null>(null)
+  useEffect(() => {
+    if (prevLock.current && !lockKey) void refetchRooms()
+    prevLock.current = lockKey
+  }, [lockKey, refetchRooms])
 
   // 草稿生命周期：回读后不能设置 / 已生效的草稿真正清除（不只是不显示），清除原因提示一次
   useEffect(() => {
@@ -462,10 +484,14 @@ export default function Thermostat() {
   const all = async (v: boolean) => {
     const p0 = project
     if (isLocked(p0) || !online) return
-    const keys = list.map((r) => r.key).join(',')
     const subject = `全部${v ? '开启' : '关闭'}`
-    const okText = `已生效：${subject}（${list.length} 个房间）`
-    const ok = await confirm({ title: subject, body: <>将向 <b>{p0.name}</b>（<span className="num">{p0.code}</span>）的 {list.length} 个温控面板下发「{v ? '开启' : '关闭'}」指令，确定继续？</>, okText: '确认下发', danger: !v })
+    // 206 控制项目全部房间：确认文案的房间数与核对集合都基于最近一次读到的原始 200 完整列表（不是过滤后的页面列表），
+    // 确认后预检再新读一次核对；有房间 ID 为 0 / 无效或重复 → 无法逐个核对，不弹确认、不下发
+    const target = rawRooms.data ? allRoomsTarget(rawRooms.data) : { ok: false as const, reason: '还没有读到面板数据' }
+    if (!target.ok) { showToast(`${subject}：${target.reason}，本次未下发`, true); return }
+    const ids = target.roomIds
+    const okText = `已生效：${subject}（${ids.length} 个房间）`
+    const ok = await confirm({ title: subject, body: <>将向 <b>{p0.name}</b>（<span className="num">{p0.code}</span>）的 {ids.length} 个温控面板下发「{v ? '开启' : '关闭'}」指令，确定继续？</>, okText: '确认下发', danger: !v })
     if (!ok) return
     const now = latest.current
     const p = now.project
@@ -473,17 +499,18 @@ export default function Thermostat() {
     if (!p || p.id !== p0.id) return abort('当前项目已变化')
     if (!now.online) return abort('项目已离线')
     if (isLocked(p)) return abort('有下发正在进行')
-    // 同样走状态机：确认后新读一次房间列表，范围（房间数与房间）变了就取消，要求按新列表重新确认
+    // 同样走状态机：确认后新读一次原始 200，目标集合（完整、有效、与确认时相同）变了就取消，要求按新列表重新确认
     await runOp({
       project: p, target: ALL, subject, okText, toast: showToast,
       present: () => present.current && latest.current.project?.id === p.id,
       preflight: async (signal) => {
-        const fresh = await freshRooms(signal)
+        const fresh = allRoomsTarget((await freshRead(signal)).raw)
         const cur = latest.current.project
         if (!cur || cur.id !== p.id || cur.online !== true) return { ok: false, reason: '项目已变化或已离线' }
-        if (fresh.map((r) => r.key).join(',') !== keys) return { ok: false, reason: `房间列表已变化（现为 ${fresh.length} 个）` }
-        // 记下确认后预检读到的目标房间 id 集合：写锁核对（含刷新恢复）逐个检查，回读缺了的房间按无法核对
-        return { ok: true, payload: { on: v, roomIds: fresh.map((r) => r.equipmentId) } }
+        if (!fresh.ok) return { ok: false, reason: fresh.reason }
+        if (fresh.roomIds.join(',') !== ids.join(',')) return { ok: false, reason: `房间列表已变化（现为 ${fresh.roomIds.length} 个）` }
+        // 确认后预检读到的目标房间 id 集合：写锁核对（含刷新恢复）逐个检查，回读缺了的房间按无法核对
+        return { ok: true, payload: { on: v, roomIds: fresh.roomIds } }
       },
       send: (q, beforeSend) => thermostatSource().setAll(p, q.on, beforeSend),
       record: record206,
@@ -521,7 +548,7 @@ export default function Thermostat() {
         {list.map((r) => (
           <RoomCard key={r.key} room={r} ctx={ctx} range={tempRange} selected={statRoom?.key === r.key} onSelect={() => setSel(r.key)}
             draft={draft?.key === r.key ? draft : null} conflict={draft?.key === r.key ? rec.conflict : []}
-            onEdit={(patch) => void onEdit(r.key, patch)} onDiscard={() => setDraft((d) => (d?.key === r.key ? null : d))} onFreeze={freeze}
+            onEdit={(patch) => void onEdit(r.key, patch)} onDiscard={() => setDraft((d) => (d?.key === r.key ? null : d))} pending={frozen && draft?.key === r.key} onPending={markPending}
             lock={lock} running={writes.running} result={writes.result(r.key)} freshRooms={freshRooms} freshRead={freshRead} />
         ))}
       </div>

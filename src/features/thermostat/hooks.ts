@@ -6,6 +6,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useCallback } from 'react'
 import { queryKeys } from '@/api/query'
 import type { Project } from '@/data/org'
+import type { CtrlReply } from '@/api/ctrl'
 import type { RoomView } from './model'
 import { thermostatSource } from './source'
 import { currentSessionKey } from './writes'
@@ -20,16 +21,26 @@ const roomsKey = (kind: 'real' | 'mock', projectId: string) =>
 export const canRead = (project: Pick<Project, 'id' | 'online'> | null, kind: 'real' | 'mock') =>
   !!project?.id && (kind === 'mock' || project.online === true)
 
-export function useRooms(project: Project | null, enabled = true) {
+/** 缓存里存一次 200 的页面列表与原始回包（206 的目标集合要按原始完整列表定，见 model.ts 的 allRoomsTarget） */
+type RoomsData = { list: RoomView[]; raw: Pick<CtrlReply<200>, 'data'> }
+const roomsQuery = (project: Project | null, enabled: boolean) => {
   const src = thermostatSource()
   const id = project?.id ?? ''
-  return useQuery({
+  return {
     queryKey: roomsKey(src.kind, id),
-    queryFn: ({ signal }) => src.rooms(id, signal),
+    queryFn: ({ signal }: { signal: AbortSignal }): Promise<RoomsData> => src.roomsRaw(id, signal),
     enabled: enabled && canRead(project, src.kind),
-    refetchInterval: src.kind === 'real' ? ROOMS_POLL_MS : false,
     staleTime: src.kind === 'real' ? 10_000 : Infinity,
-  })
+  }
+}
+
+export function useRooms(project: Project | null, enabled = true) {
+  const src = thermostatSource()
+  return useQuery({ ...roomsQuery(project, enabled), select: (d: RoomsData) => d.list, refetchInterval: src.kind === 'real' ? ROOMS_POLL_MS : false })
+}
+/** 同一份缓存里的原始 200 回包（不另发请求、不另起轮询） */
+export function useRoomsRaw(project: Project | null, enabled = true) {
+  return useQuery({ ...roomsQuery(project, enabled), select: (d: RoomsData) => d.raw })
 }
 
 /**
@@ -50,7 +61,7 @@ export function useFreshRead(project: Project | null) {
     const r = await src.roomsRaw(id, signal)
     if (signal?.aborted) throw new Error('读取已中止，结果已丢弃')
     if (currentSessionKey() !== session) throw new Error('读取期间登录状态已变化，结果已丢弃')
-    qc.setQueryData(key, r.list)
+    qc.setQueryData(key, r)
     return r
   }, [qc, id])
 }
