@@ -13,9 +13,10 @@ import { Popover, PopoverAnchor, PopoverContent, PopoverTrigger } from '@/compon
 import { cn } from '@/lib/utils'
 import { useApp } from '../app/store'
 import { useCancelConfirmOnLeave, useConfirm } from '../app/feedback'
-import { dealerSections, projectsInGroup, useOrgScope, whenProjectSet } from '../data/org'
+import { useIsFetching } from '@tanstack/react-query'
+import { dealerSections, orgKeys, projectsInGroup, useOrgScope, whenProjectSet } from '../data/org'
 import type { Project } from '../api'
-import { linksOf } from '../data/connections'
+import { linksOf, OFFLINE_RECHECK_MS } from '../data/connections'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 
@@ -334,15 +335,27 @@ function OfflineBanner({ p }: { p: Project }) {
       <div className="ob-main">
         <b>项目离线 · {p.name}</b>
         <span>
-          {links.length ? links.map((l, i) => <Fragment key={l.label}>{i > 0 && '、'}{l.label} <span className="num">{l.id}</span></Fragment>) : '控制屏'}
-          {' '}未连接，暂时读不到设备数据，也无法下发控制。
+          {links.length ? <>{links.map((l, i) => <Fragment key={l.label}>{i > 0 && '、'}{l.label} <span className="num">{l.id}</span></Fragment>)}{' '}未连接</> : '控制屏未连接'}
+          ，暂时读不到设备数据，也无法下发控制。
         </span>
       </div>
     </div>
   )
 }
 
-function OfflinePage({ p, title, onRetry }: { p: Project; title: string; onRetry: () => void }) {
+function OfflinePage({ p, title }: { p: Project; title: string }) {
+  const org = useOrgScope()
+  // 组织数据（项目列表、集成项目等，都是只读接口）正在请求：按钮禁用，不重复发
+  const fetching = useIsFetching({ queryKey: orgKeys.all }) > 0
+  const [asked, setAsked] = useState(false)
+  const refetch = org.refetch
+  // 挂载期间每 60 秒只读重取一次（标签页不可见时跳过），项目恢复在线后自动显示页面
+  useEffect(() => {
+    const t = setInterval(() => { if (document.visibilityState !== 'hidden') refetch() }, OFFLINE_RECHECK_MS)
+    return () => clearInterval(t)
+  }, [refetch])
+  // 手动重取后失败（有旧数据时后台刷新失败记在 staleError）：提示可重试
+  const failed = asked && !fetching ? org.staleError : null
   return (
     <div className="page offline-page">
       <OfflineBanner p={p} />
@@ -351,14 +364,15 @@ function OfflinePage({ p, title, onRetry }: { p: Project; title: string; onRetry
         <div className="ph-ico"><Icon icon={faPlugCircleXmark} /></div>
         <h3>项目离线，暂无数据</h3>
         <p>项目恢复在线后即可查看实时数据。</p>
-        <Button style={{ marginTop: 16 }} onClick={onRetry}>重新获取在线状态</Button>
+        <Button style={{ marginTop: 16 }} disabled={fetching} aria-busy={fetching} onClick={() => { setAsked(true); refetch() }}>重新获取在线状态</Button>
+        {failed && <p role="alert" style={{ marginTop: 10, color: 'var(--red)' }}>获取在线状态失败：{failed.message}，请稍后重试</p>}
       </Card>
     </div>
   )
 }
 
 export default function Layout() {
-  const { logout, project, user, orgRefetch } = useApp()
+  const { logout, project, user } = useApp()
   const confirm = useConfirm()
   const loc = useLocation()
   const nav = useNavigate()
@@ -369,6 +383,20 @@ export default function Layout() {
   const noProject = !project.id
 
   useEffect(() => { window.scrollTo(0, 0) }, [loc.pathname])
+  // 当前项目从离线恢复在线：空态（含被点的按钮）卸载，焦点会掉到 body。移到页面标题（tabIndex=-1），页面还没有标题时移到主区域
+  const wasOffline = useRef({ id: project.id, offline })
+  useEffect(() => {
+    const prev = wasOffline.current
+    wasOffline.current = { id: project.id, offline }
+    if (!(prev.offline && !offline && prev.id === project.id)) return
+    const t = setTimeout(() => {
+      const h = document.querySelector<HTMLElement>('.main .page h1') ?? document.querySelector<HTMLElement>('.main')
+      if (!h) return
+      if (!h.hasAttribute('tabindex')) h.tabIndex = -1
+      h.focus()
+    }, 0)
+    return () => clearTimeout(t)
+  }, [offline, project.id])
   // 确认弹窗随离开失效：路由变化（含后退）或 Layout 卸载（如会话过期换成登录页）时按取消结算
   useCancelConfirmOnLeave()
 
@@ -428,7 +456,7 @@ export default function Layout() {
         {isProjectPage && noProject ? (
           <div className="page"><div className="empty-fav" role="status"><b>暂无可用项目</b><small>当前账号下没有可查看的项目，请到「集成项目」确认，或联系管理员</small></div></div>
         ) : offline ? (
-          <OfflinePage p={project} title={cur?.label ?? ''} onRetry={orgRefetch} />
+          <OfflinePage p={project} title={cur?.label ?? ''} />
         ) : <Fragment key={project.id}><Outlet /></Fragment>}
       </div>
     </div>

@@ -61,7 +61,8 @@ export default function Connections() {
     if (r.rows) {
       const n = connCounts(r.rows)
       toast(`检测完成：${n.online} 台在线，${n.offline} 台离线，${n.error} 台通讯异常`)
-    } else if (r.error) toast(r.error.kind === 'unavailable' ? '控制屏未连接，无法检测' : `检测失败：${r.error.message}`, true)
+    // 控制屏未连接是常态，页面已显示空态：只给普通提示，不弹错误（方案 3.3）
+    } else if (r.error) toast(r.error.kind === 'unavailable' ? '控制屏未连接，暂时无法检测' : `检测失败：${r.error.message}`, r.error.kind !== 'unavailable')
   }
 
   const head = (
@@ -69,14 +70,15 @@ export default function Connections() {
       <div><h1>设备连接状态</h1><div className="sub">{project.name}
         {links.map((l) => <Fragment key={l.label}><span className="sep">·</span>{l.label} <span className="num">{l.id}</span></Fragment>)}
         <span className="sep">·</span>每 30 秒检测一次</div></div>
-      {sum.permitted && <Button variant="primary" onClick={checkNow} disabled={sum.fetching}><Icon icon={faSatelliteDish} />立即检测</Button>}
+      {sum.permitted && <Button variant="primary" onClick={checkNow} disabled={sum.fetching} aria-busy={sum.fetching}><Icon icon={faSatelliteDish} />立即检测</Button>}
     </div>
   )
 
   let body: ReactNode
   if (!sum.permitted) body = <Empty icon={faLock} title="未开通设备连接状态" text="当前账号没有读取设备连接状态的权限，请联系管理员开通。" />
   else if (sum.status === 'loading' || sum.status === 'idle') body = <Empty icon={faSatelliteDish} title="正在读取设备连接状态" text="正在向控制屏读取设备连接状态…" />
-  // 控制屏离线（503）：显示空态，不显示上一次的明细（方案 3.3）；轮询仍在，控制屏恢复后自动显示
+  // 控制屏离线（503）：显示空态，不显示上一次的明细（方案 3.3）；轮询仍在，控制屏恢复后自动显示。
+  // 503 之后再遇到其他错误：数据层已把旧明细作废（status=error），走下面的「读取失败」
   else if (offlineScreen) body = <Empty icon={faPlugCircleXmark} title="控制屏未连接" text="控制屏当前没有连上平台，暂时读不到设备连接状态；恢复连接后会自动刷新。" />
   else if (sum.status === 'error') body = (
     <Empty icon={faTriangleExclamation} title="读取失败" text={sum.error?.message || defaultText('server')}>

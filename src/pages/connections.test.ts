@@ -14,11 +14,11 @@ import { __resetHttpForTests } from '../api/http'
 import { createQueryClient } from '../api/query'
 import { __resetSessionForTests, signIn } from '../api/session'
 import { clearTokens } from '../api/tokens'
-import { fakeBackend, json, type Call } from '../api/__tests__/helpers'
+import { fakeBackend, json, text, type Call } from '../api/__tests__/helpers'
 import { AppProvider } from '../app/store'
 import { __resetCurrentForTests } from '../data/org/current'
 import { __resetSessionViewForTests } from '../data/session'
-import { CONN_POLL_MS, CONN_ROUTE } from '../data/connections'
+import { __resetConnectionsForTests, CONN_POLL_MS, CONN_ROUTE, OFFLINE_RECHECK_MS } from '../data/connections'
 import Layout from '../components/Layout'
 import Connections from './Connections'
 
@@ -84,14 +84,25 @@ function mountAt(path: string) {
 const tableNames = () => [...document.querySelectorAll('tbody tr')].map((tr) => tr.querySelector('td')?.textContent)
 const seg = (name: string) => screen.getAllByRole('button').find((b) => b.textContent?.startsWith(name))!
 const toasts = () => document.querySelector('[data-sonner-toaster]')?.textContent ?? ''
+const toastType = (text: string) => [...document.querySelectorAll('[data-sonner-toast]')].find((t) => t.textContent?.includes(text))?.getAttribute('data-type')
+function deferred() {
+  let release!: () => void
+  const gate = new Promise<void>((r) => { release = r })
+  return { gate, release }
+}
+/** 模拟标签页可见 / 隐藏（TanStack 的 focusManager 听 visibilitychange） */
+function setVisible(v: boolean) {
+  Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => (v ? 'visible' : 'hidden') })
+  document.dispatchEvent(new Event('visibilitychange'))
+}
 const kpi = (label: string) => [...document.querySelectorAll('.kpi')].find((k) => k.querySelector('.k-label')?.textContent === label)
 
 beforeEach(() => {
   setConfig({ apiBase: '/api', dataSource: 'real' })
   localStorage.clear(); sessionStorage.clear()
-  __resetHttpForTests(); __resetSessionForTests(); __resetSessionViewForTests(); __resetCurrentForTests(); clearTokens()
+  __resetHttpForTests(); __resetSessionForTests(); __resetSessionViewForTests(); __resetCurrentForTests(); clearTokens(); __resetConnectionsForTests()
 })
-afterEach(() => { cleanup(); vi.useRealTimers(); vi.unstubAllGlobals(); setConfig(null) })
+afterEach(() => { cleanup(); setVisible(true); vi.useRealTimers(); vi.unstubAllGlobals(); setConfig(null) })
 
 describe('设备连接状态页（ctrl 205）', () => {
   it('请求体：project_id 用实体 id、user_id 用当前用户、空 Query 传空串；页头显示控制屏编号', async () => {
@@ -292,7 +303,7 @@ describe('项目离线态（S11）', () => {
     expect(await screen.findByText('项目离线，暂无数据')).toBeTruthy()
   })
 
-  it('没有控制屏和 DTU 编号的离线项目：横幅写「控制屏 未连接」', async () => {
+  it('没有控制屏和 DTU 编号的离线项目：横幅写「控制屏未连接」', async () => {
     localStorage.setItem('hjc-project', 'px')
     backend({
       '/ctrl/projects': () => json({ project_entities: [{ id: 'px', code: '1', name: '无编号' }] }),
@@ -300,7 +311,7 @@ describe('项目离线态（S11）', () => {
     })
     await signIn('u', 'pw', true)
     mountAt('/sensors')
-    expect((await screen.findByRole('alert')).textContent).toContain('控制屏 未连接')
+    expect((await screen.findByRole('alert')).textContent).toContain('控制屏未连接，暂时读不到设备数据')
   })
 
   it('「重新获取在线状态」只重取项目列表等只读接口；项目恢复在线后显示页面', async () => {
@@ -318,5 +329,202 @@ describe('项目离线态（S11）', () => {
     expect(screen.queryByRole('alert')).toBeNull()
     const writes = be.calls.filter((c) => /set|send|invalidate|click/.test(c.url))
     expect(writes).toEqual([])
+  })
+})
+
+describe('连接状态：503 之后的旧明细、轮询与并发（评审补充）', () => {
+  for (const [label, fail] of [
+    ['500', () => json({ code: 13, message: '内部错误' }, 500)],
+    ['网络超时 / 断开', () => { throw new TypeError('Failed to fetch') }],
+  ] as const) {
+    it(`成功 → 503 → ${label} → 成功：503 之后旧明细不再出现，直到下一次成功`, async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true })
+      let mode: 'ok' | '503' | 'fail' = 'ok'
+      backend({ '/ctrl/device-summary-get': () => (mode === 'ok' ? reply(ROWS) : mode === '503' ? unavailable() : fail()) })
+      await signIn('u', 'pw', true)
+      mountAt('/connections')
+      await screen.findByText('网络HUB')
+      mode = '503'
+      await act(async () => { await vi.advanceTimersByTimeAsync(CONN_POLL_MS) })
+      expect(await screen.findByText('控制屏未连接')).toBeTruthy()
+      mode = 'fail'
+      await act(async () => { await vi.advanceTimersByTimeAsync(CONN_POLL_MS) })
+      await act(async () => { await vi.advanceTimersByTimeAsync(5_000) }) // 可重试错误会重试 1 次
+      expect(await screen.findByText('读取失败')).toBeTruthy()
+      expect(screen.queryByText('网络HUB')).toBeNull()
+      expect(screen.queryByText(/最近一次刷新失败/)).toBeNull()
+      expect(document.querySelector('table')).toBeNull()
+      mode = 'ok'
+      await act(async () => { await vi.advanceTimersByTimeAsync(CONN_POLL_MS) })
+      expect(await screen.findByText('网络HUB')).toBeTruthy()
+      expect(screen.queryByText('读取失败')).toBeNull()
+    })
+  }
+
+  it('503 之后离开再进入页面（缓存里仍是旧明细）：遇到其他错误也不显示旧明细', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    let mode: 'ok' | '503' | '500' = 'ok'
+    backend({ '/ctrl/device-summary-get': () => (mode === 'ok' ? reply(ROWS) : mode === '503' ? unavailable() : json({ code: 13, message: '内部错误' }, 500)) })
+    await signIn('u', 'pw', true)
+    const r = mountAt('/connections')
+    await screen.findByText('网络HUB')
+    mode = '503'
+    await act(async () => { await vi.advanceTimersByTimeAsync(CONN_POLL_MS) })
+    await screen.findByText('控制屏未连接')
+    r.unmount()
+    mode = '500'
+    mountAt('/connections')
+    await act(async () => { await vi.advanceTimersByTimeAsync(5_000) })
+    expect(await screen.findByText('读取失败')).toBeTruthy()
+    expect(screen.queryByText('网络HUB')).toBeNull()
+  })
+
+  it('标签页隐藏时暂停轮询，恢复可见后继续', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    const be = backend()
+    await signIn('u', 'pw', true)
+    mountAt('/connections')
+    await screen.findByText('网络HUB')
+    await act(async () => { setVisible(false) })
+    await act(async () => { await vi.advanceTimersByTimeAsync(CONN_POLL_MS * 3) })
+    expect(be.callsTo('/ctrl/device-summary-get')).toHaveLength(1)
+    await act(async () => { setVisible(true) })
+    await act(async () => { await vi.advanceTimersByTimeAsync(CONN_POLL_MS + 500) })
+    expect(be.callsTo('/ctrl/device-summary-get').length).toBeGreaterThanOrEqual(2)
+  })
+
+  it('慢请求：上一次没返回不发下一次；进行中「立即检测」禁用、aria-busy，连点不加请求', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    let gate: ReturnType<typeof deferred> | null = null
+    const be = backend({ '/ctrl/device-summary-get': async () => { if (gate) await gate.gate; return reply(ROWS) } })
+    await signIn('u', 'pw', true)
+    mountAt('/connections')
+    await screen.findByText('网络HUB')
+    gate = deferred()
+    await act(async () => { await vi.advanceTimersByTimeAsync(CONN_POLL_MS) })
+    expect(be.callsTo('/ctrl/device-summary-get')).toHaveLength(2)
+    const btn = screen.getByRole('button', { name: '立即检测' }) as HTMLButtonElement
+    expect(btn.disabled).toBe(true)
+    expect(btn.getAttribute('aria-busy')).toBe('true')
+    for (let i = 0; i < 3; i++) await act(async () => { fireEvent.click(btn) })
+    // 请求挂着（服务端 10 秒、前端 12 秒超时之内）再过两个轮询周期也不叠加
+    await act(async () => { await vi.advanceTimersByTimeAsync(5_000) })
+    expect(be.callsTo('/ctrl/device-summary-get')).toHaveLength(2)
+    await act(async () => { gate!.release() })
+    await waitFor(() => expect(btn.disabled).toBe(false))
+    expect(btn.getAttribute('aria-busy')).toBe('false')
+  })
+
+  it('切换项目后，上一个项目迟到的回复不会显示在新项目上', async () => {
+    const slow = deferred()
+    backend({
+      '/ctrl/device-summary-get': async (c) => {
+        const pid = (c.body as { project_id: string }).project_id
+        if (pid === 'p1') { await slow.gate; return reply([{ deviceName: '旧项目设备', connStatus: 1 }]) }
+        return reply([{ deviceName: '新项目设备', connStatus: 1 }])
+      },
+    })
+    await signIn('u', 'pw', true)
+    mountAt('/connections')
+    await screen.findByText('正在读取设备连接状态')
+    const { setStoredProjectId } = await import('../data/org/current')
+    await act(async () => { setStoredProjectId('p3') })
+    expect(await screen.findByText('新项目设备')).toBeTruthy()
+    await act(async () => { slow.release() })
+    await act(async () => { await new Promise((r) => setTimeout(r, 20)) })
+    expect(screen.queryByText('旧项目设备')).toBeNull()
+    expect(screen.getByText('新项目设备')).toBeTruthy()
+  })
+
+  it('页面卸载后迟到的回复：不报错、不弹提示', async () => {
+    const slow = deferred()
+    backend({ '/ctrl/device-summary-get': async () => { await slow.gate; return reply(ROWS) } })
+    const err = vi.spyOn(console, 'error')
+    await signIn('u', 'pw', true)
+    const r = mountAt('/connections')
+    await screen.findByText('正在读取设备连接状态')
+    r.unmount()
+    await act(async () => { slow.release(); await new Promise((res) => setTimeout(res, 20)) })
+    expect(err).not.toHaveBeenCalled()
+    expect(toasts()).toBe('')
+    err.mockRestore()
+  })
+
+  it('手动检测遇到 503：普通提示，不弹错误', async () => {
+    let down = false
+    backend({ '/ctrl/device-summary-get': () => (down ? unavailable() : reply(ROWS)) })
+    await signIn('u', 'pw', true)
+    mountAt('/connections')
+    await screen.findByText('网络HUB')
+    down = true
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: '立即检测' })) })
+    await waitFor(() => expect(toasts()).toContain('控制屏未连接，暂时无法检测'))
+    expect(toastType('控制屏未连接')).not.toBe('error')
+  })
+})
+
+describe('离线页：自动重取、按钮反馈、恢复后的焦点（评审补充）', () => {
+  it('挂载期间每 60 秒只读重取一次项目列表；标签页隐藏时跳过', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    localStorage.setItem('hjc-project', 'p2')
+    const be = backend()
+    await signIn('u', 'pw', true)
+    mountAt('/sensors')
+    await screen.findByText('项目离线，暂无数据')
+    const n0 = be.callsTo('/ctrl/projects').length
+    await act(async () => { await vi.advanceTimersByTimeAsync(OFFLINE_RECHECK_MS - 1_000) })
+    expect(be.callsTo('/ctrl/projects')).toHaveLength(n0)
+    await act(async () => { await vi.advanceTimersByTimeAsync(1_500) })
+    expect(be.callsTo('/ctrl/projects')).toHaveLength(n0 + 1)
+    await act(async () => { setVisible(false) })
+    await act(async () => { await vi.advanceTimersByTimeAsync(OFFLINE_RECHECK_MS * 2) })
+    expect(be.callsTo('/ctrl/projects')).toHaveLength(n0 + 1)
+    expect(be.calls.filter((c) => /set|send|invalidate|click|device-summary/.test(c.url))).toEqual([])
+  })
+
+  it('60 秒自动重取发现项目恢复在线：直接显示页面', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    localStorage.setItem('hjc-project', 'p2')
+    let online = false
+    backend({ '/ctrl/projects': () => json({ project_entities: PROJECTS.map((p) => (p.id === 'p2' ? { ...p, online: online || undefined } : p)) }) })
+    await signIn('u', 'pw', true)
+    mountAt('/sensors')
+    await screen.findByText('项目离线，暂无数据')
+    online = true
+    await act(async () => { await vi.advanceTimersByTimeAsync(OFFLINE_RECHECK_MS + 500) })
+    expect(await screen.findByText('传感器页内容')).toBeTruthy()
+  })
+
+  it('「重新获取在线状态」进行中禁用；失败时提示可重试', async () => {
+    localStorage.setItem('hjc-project', 'p2')
+    let gate: ReturnType<typeof deferred> | null = null
+    let fail = false
+    backend({ '/ctrl/projects': async () => { if (gate) await gate.gate; return fail ? text('no permission', 403) : json({ project_entities: PROJECTS }) } })
+    await signIn('u', 'pw', true)
+    mountAt('/sensors')
+    await screen.findByText('项目离线，暂无数据')
+    const btn = screen.getByRole('button', { name: '重新获取在线状态' }) as HTMLButtonElement
+    gate = deferred(); fail = true
+    await act(async () => { fireEvent.click(btn) })
+    expect(btn.disabled).toBe(true)
+    expect(btn.getAttribute('aria-busy')).toBe('true')
+    await act(async () => { gate!.release() })
+    await waitFor(() => expect(btn.disabled).toBe(false))
+    expect((await screen.findByText(/获取在线状态失败/)).textContent).toContain('请稍后重试')
+  })
+
+  it('恢复在线后焦点移到页面标题（h1，tabIndex=-1）', async () => {
+    localStorage.setItem('hjc-project', 'p2')
+    let online = false
+    backend({ '/ctrl/projects': () => json({ project_entities: PROJECTS.map((p) => (p.id === 'p2' ? { ...p, online: online || undefined } : p)) }) })
+    await signIn('u', 'pw', true)
+    mountAt('/connections')
+    await screen.findByText('项目离线，暂无数据')
+    online = true
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: '重新获取在线状态' })) })
+    await screen.findByText('网络HUB')
+    await waitFor(() => expect(document.activeElement?.tagName).toBe('H1'))
+    expect(document.activeElement?.textContent).toBe('设备连接状态')
+    expect(document.activeElement?.getAttribute('tabindex')).toBe('-1')
   })
 })

@@ -18,6 +18,8 @@ import { can } from './session'
 
 /** 连接状态每 30 秒重新读一次 205（方案 1.2「每 30 秒检测一次」、3.4 轮询） */
 export const CONN_POLL_MS = 30_000
+/** 项目离线页挂载期间多久自动重取一次项目列表（只读，Layout 用） */
+export const OFFLINE_RECHECK_MS = 60_000
 /** ctrl 205 的路由模板（permission_paths 判断用） */
 export const CONN_ROUTE = '/v1/ctrl/device-summary-get'
 
@@ -118,13 +120,15 @@ export interface DeviceSummary {
   fetching: boolean
   /** 账号有没有 ctrl 205 的权限（没有就不发请求） */
   permitted: boolean
-  /** 最近一次成功的时间（毫秒时间戳），没有为 0 */
-  updatedAt: number
   /** 立即重新读一次 205，返回这次的结果 */
   check: () => Promise<{ rows: ConnRow[] | null; error: ApiError | null }>
 }
 
 const NO_ROWS: ConnRow[] = []
+/** 项目 id → 最近一次 205 返回 503 的时间 */
+const lastUnavailable = new Map<string, number>()
+/** 仅供测试 */
+export const __resetConnectionsForTests = () => lastUnavailable.clear()
 const asApiError = (e: unknown): ApiError | null => (e == null ? null : isApiError(e) ? e : null)
 
 /**
@@ -150,14 +154,20 @@ export function useDeviceSummary(project: Pick<Project, 'id' | 'online'> | null)
     const r = await qRefetch()
     return { rows: r.isSuccess ? r.data : null, error: r.isError ? asApiError(r.error) ?? null : null }
   }, [qRefetch])
-  const status: DeviceSummary['status'] = !enabled ? 'idle' : q.data !== undefined ? 'success' : q.isError ? 'error' : 'loading'
+  // 控制屏离线（503）后，之前读到的明细作废：直到下一次 205 成功前都不再显示（之后遇到 500 / 超时也不恢复旧明细）。
+  // 按项目记下最近一次 503 的时间，数据时间不晚于它就不可展示。放在模块里：页面卸载再进入（缓存里仍是旧数据）也成立；
+  // 只比较时间戳，换账号后残留的记录也只会挡住比它更早的数据
+  const offlineAt = q.error && asApiError(q.error)?.kind === 'unavailable' ? q.errorUpdatedAt : 0
+  if (pid && offlineAt > (lastUnavailable.get(pid) ?? 0)) lastUnavailable.set(pid, offlineAt)
+  const lastOfflineAt = lastUnavailable.get(pid) ?? 0
+  const showData = q.data !== undefined && !(lastOfflineAt && q.dataUpdatedAt <= lastOfflineAt)
+  const status: DeviceSummary['status'] = !enabled ? 'idle' : showData ? 'success' : q.isError ? 'error' : 'loading'
   return {
-    rows: enabled ? q.data ?? NO_ROWS : NO_ROWS,
+    rows: enabled && showData ? q.data ?? NO_ROWS : NO_ROWS,
     status,
     error: enabled ? asApiError(q.error) : null,
     fetching: enabled && q.isFetching,
     permitted,
-    updatedAt: q.dataUpdatedAt,
     check,
   }
 }
