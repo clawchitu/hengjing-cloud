@@ -22,6 +22,8 @@ import { __resetCurrentForTests, setStoredProjectId } from '../data/org/current'
 import { __resetSessionViewForTests } from '../data/session'
 import { __resetWritesForTests, LIMITS } from '../features/thermostat'
 import Layout from '../components/Layout'
+import { OrgGate } from '../app/OrgGate'
+import { __resetWriteLockForTests, acquire as acquireLock, release as releaseLock, STORAGE_PREFIX } from '../api/writeLock'
 import Thermostat from './Thermostat'
 
 beforeAll(() => {
@@ -34,8 +36,8 @@ beforeAll(() => {
 })
 
 type Handler = (call: Call, n: number) => Response | Promise<Response>
-const P1 = { id: '66cfd7959fb60d63c917fd0a', code: '240829001', name: '测试项目0829', app_code: '1', app_name: '通用版', online: true }
-const P2 = { id: 'p2', code: '261124009', name: '另一个项目', app_code: '1', app_name: '通用版', online: true }
+const P1 = { id: '66cfd7959fb60d63c917fd0a', code: '240829001', name: '测试项目0829', app_code: '1', app_name: '通用版', online: true, control_screen_id: 'SCREEN-T' }
+const P2 = { id: 'p2', code: '261124009', name: '另一个项目', app_code: '1', app_name: '通用版', online: true, control_screen_id: 'SCREEN-T' }
 const P12 = { id: 'p12', code: '260911001', name: '独立空气系统测试', app_code: '12', app_name: '独立空气系统', online: true }
 const POFF = { id: 'poff', code: '221031001', name: '科希家办公室', app_code: '1', app_name: '通用版' }
 const GROUPS = [{ id: 'g1', code: '2', name: '五恒集成项目', distributor_id: 'D1', project_ids: [P1.id, P2.id, P12.id, POFF.id] }]
@@ -87,7 +89,7 @@ function mount() {
     createElement(MemoryRouter, { initialEntries: ['/thermostat'] },
       createElement(Away),
       createElement(Routes, null,
-        createElement(Route, { element: createElement(Layout) },
+        createElement(Route, { element: createElement(OrgGate, null, createElement(Layout)) },
           createElement(Route, { path: '/thermostat', element: createElement(Thermostat) }),
           createElement(Route, { path: '/home', element: createElement('div', null, '首页内容') }),
         ))))))
@@ -135,7 +137,7 @@ beforeEach(() => {
   for (const k of ['success', 'error'] as const) vi.spyOn(sonner, k).mockImplementation((m) => { toastLog.push(String(m)); return 0 })
   setConfig({ apiBase: '/api', apiEnv: 'test', dataSource: 'real' })
   localStorage.clear(); sessionStorage.clear()
-  __resetHttpForTests(); __resetSessionForTests(); __resetSessionViewForTests(); __resetCurrentForTests(); __resetWritesForTests(); clearTokens()
+  __resetHttpForTests(); __resetSessionForTests(); __resetSessionViewForTests(); __resetCurrentForTests(); __resetWritesForTests(); __resetWriteLockForTests(); clearTokens()
 })
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.restoreAllMocks(); setConfig(null) })
 
@@ -169,14 +171,14 @@ describe('读取（ctrl 200）', () => {
     expect(be.callsTo('/ctrl/room-temperature-data-get')).toHaveLength(0)
   })
 
-  it('项目离线：显示空态，不读 ctrl 200', async () => {
+  it('项目离线：设备页不挂载（Layout 空态，S11），不读 ctrl 200', async () => {
     const be = backend()
     await open(POFF)
-    await screen.findByText('控制屏未连接')
+    await screen.findByText('项目离线，暂无数据')
     await flush(50)
     expect(be.callsTo('/ctrl/room-temperature-data-get')).toHaveLength(0)
+    expect(document.querySelector('[data-room]')).toBeNull()
   })
-
   it('控制屏 503：显示「控制屏未连接」', async () => {
     backend({ '/ctrl/room-temperature-data-get': () => json({ code: 14, message: '控制屏消息发送失败' }, 503) })
     await open()
@@ -516,7 +518,7 @@ describe('结果：失败、结果未知与回读', () => {
     expect(writes(be)).toHaveLength(1)
   })
 
-  it('504：结果未知（不说失败），回读进行中 → 已重新读取（只有读到才这么说），保留草稿；重试要再确认', async () => {
+  it('504：结果未知（不说失败）；写锁自动核对，回读进行中 → 读到与下发值不一致 → 保持暂停下发，草稿保留、没有重试', async () => {
     let wrote = false
     const slowRead = deferred(() => reply200(rooms))
     const be = backend({
@@ -526,18 +528,16 @@ describe('结果：失败、结果未知与回读', () => {
     await draftAndSend()
     await confirmOk()
     await waitFor(() => expect(card('客厅').textContent).toContain('正在重新读取面板当前值'))
-    expect(card('客厅').textContent).not.toContain('已重新读取')
     expect(toasts()).toContain('客厅 下发结果未知')
     expect(toasts()).not.toContain('下发失败')
     await slowRead.release()
-    await waitFor(() => expect(within(card('客厅')).getByRole('alert').textContent).toContain('已重新读取面板当前值：房间开启，设定温度 25.5°C'))
-    expect(writes(be)).toHaveLength(1)
-    fireEvent.click(btn(card('客厅'), '重试'))
-    fireEvent.click(within(await dialog()).getByRole('button', { name: '取消' }))
-    await flush(50)
+    await waitFor(() => expect(within(card('客厅')).getAllByRole('alert').map((a) => a.textContent).join()).toContain('与下发值不一致'))
+    expect(document.querySelector('[data-lock="unknown"]')).toBeTruthy()
+    expect(card('客厅').textContent).toContain('设定温度 25.5 → 26.0°C')
+    expect(within(card('客厅')).queryByRole('button', { name: '重试' })).toBeNull()
+    expect(btn(card('客厅'), '客厅 设定温度升高').disabled).toBe(true)
     expect(writes(be)).toHaveLength(1)
   })
-
   it('504 且回读失败：说明无法核对，不给重试', async () => {
     let fail = false
     backend({
@@ -559,7 +559,7 @@ describe('结果：失败、结果未知与回读', () => {
       expect(toasts()).not.toContain('下发失败')
       expect(writes(be)).toHaveLength(1)
       await waitFor(() => expect(card('客厅').textContent).toContain('设定温度 25.5 → 26.0°C'))
-      cleanup(); vi.unstubAllGlobals(); __resetWritesForTests(); toastLog = []
+      cleanup(); vi.unstubAllGlobals(); __resetWritesForTests(); __resetWriteLockForTests(); toastLog = []
       __resetHttpForTests(); __resetSessionForTests(); __resetSessionViewForTests(); __resetCurrentForTests(); clearTokens()
     }
   })
@@ -573,7 +573,7 @@ describe('结果：失败、结果未知与回读', () => {
       await waitFor(() => expect(within(card('客厅')).getByRole('alert').textContent).toContain('未下发'))
       expect(writes(be)).toHaveLength(0)
       expect(toasts()).not.toContain('已下发')
-      cleanup(); vi.unstubAllGlobals(); __resetWritesForTests(); toastLog = []
+      cleanup(); vi.unstubAllGlobals(); __resetWritesForTests(); __resetWriteLockForTests(); toastLog = []
       __resetHttpForTests(); __resetSessionForTests(); __resetSessionViewForTests(); __resetCurrentForTests(); clearTokens()
     }
   })
@@ -693,35 +693,26 @@ describe('下发状态机：确认后新读、写后新读、会话、期限', (
     expect(within(card('客厅')).getByLabelText('客厅 设定温度').textContent).toBe('26.0°C')
   })
 
-  it('超时 → 核对 → 原写迟到 → 第二次操作：原写未结束前核对只读不解锁；迟到结算后再核对才解锁，之后才能再下发', async () => {
+  it('等应答到期 → 结果未知、原写未结束：不能核对；原写迟到成功 → 写锁自动放开，之后才能再下发', async () => {
     const late = deferred(ok201)
     const be = backend({ '/ctrl/room-temperature-set': late.handler })
-    LIMITS.writeTotalMs = 150
+    LIMITS.writeDeadlineMs = 150
     await draftAndSend()
     await confirmOk()
-    const lockBar = () => document.querySelector('[data-lock="unknown-locked"]') as HTMLElement
+    const lockBar = () => document.querySelector('[data-lock="unknown"]') as HTMLElement
     await waitFor(() => expect(lockBar()).toBeTruthy())
     expect(lockBar().textContent).toContain('上次下发（客厅）结果未知')
     expect(lockBar().textContent).toContain('上一条指令尚未结束')
+    expect((within(lockBar()).getByRole('button', { name: '核对' }) as HTMLButtonElement).disabled).toBe(true)
     expect((screen.getByRole('button', { name: '全部开启' }) as HTMLButtonElement).disabled).toBe(true)
     expect(btn(card('主卧'), '主卧 设定温度升高').disabled).toBe(true)
-    // 核对：能读，但原写还没结束 → 不解锁
-    fireEvent.click(within(lockBar()).getByRole('button', { name: '核对' }))
-    await waitFor(() => expect(toasts()).toContain('上一条指令尚未结束，暂不能恢复下发'))
-    expect(lockBar()).toBeTruthy()
-    // 原写迟到（成功）
-    await late.release()
-    await waitFor(() => expect(lockBar().textContent).not.toContain('上一条指令尚未结束'))
-    fireEvent.click(within(lockBar()).getByRole('button', { name: '核对' }))
+    await late.release() // 原写迟到 success=true：生效证据
     await waitFor(() => expect(document.querySelector('[data-lock]')).toBeNull())
-    expect(toasts()).toContain('核对完成，已恢复下发')
-    // 第二次操作（客厅还有未下发草稿，开关禁用；用主卧的开关）
     fireEvent.click(within(card('主卧')).getByRole('switch', { name: '主卧 开关' }))
     await confirmOk()
     await waitFor(() => expect(writes(be)).toHaveLength(2))
   })
-
-  it('http 层超时会中止底层请求（AbortController），原写因此结算：超时后核对即可解锁', async () => {
+  it('http 层超时会中止底层请求（AbortController），原写因此结算：超时后核对一致即可解锁', async () => {
     setConfig({ apiBase: '/api', apiEnv: 'test', dataSource: 'real', ctrlTimeoutMs: 100 })
     let aborted = false
     const be = backend()
@@ -744,40 +735,39 @@ describe('下发状态机：确认后新读、写后新读、会话、期限', (
     await draftAndSend()
     await confirmOk()
     await waitFor(() => expect(toasts()).toContain('客厅 下发结果未知：未收到控制屏应答'))
-    expect(aborted).toBe(true) // 底层 fetch 确实被 abort
-    const bar = await waitFor(() => { const b = document.querySelector('[data-lock="unknown-locked"]') as HTMLElement; expect(b).toBeTruthy(); return b })
+    expect(aborted).toBe(true) // 底层 fetch 确实被 abort，原写因此结算
+    const bar = await waitFor(() => { const b = document.querySelector('[data-lock="unknown"]') as HTMLElement; expect(b).toBeTruthy(); expect(b.textContent).toContain('可点「核对」'); return b })
     expect(bar.textContent).not.toContain('上一条指令尚未结束')
+    // 自动核对读失败（503）→ 保持；读到与下发值一致 → 核对解锁
     wroteOnce = false
+    rooms = [{ ...ROOM, setTemp: 26 }, OFF_ROOM]
     fireEvent.click(within(bar).getByRole('button', { name: '核对' }))
     await waitFor(() => expect(document.querySelector('[data-lock]')).toBeNull())
+    expect(toasts()).toContain('核对一致，已恢复下发')
   })
 
-  it('核对读取途中换账号：读数丢弃，不解锁', async () => {
-    let wrote = false
-    const slowRead = deferred(() => reply200(rooms))
+  it('核对读取途中换账号：结果作废，不解锁，旧读数不写进新会话的缓存', async () => {
     let mode: 'normal' | 'fail' | 'slow' = 'normal'
+    const slowRead = deferred(() => reply200([{ ...ROOM, setTemp: 26 }, OFF_ROOM]))
     backend({
-      '/ctrl/room-temperature-set': () => { wrote = true; mode = 'fail'; return json({ code: 4, message: 'x' }, 504) },
-      '/ctrl/room-temperature-data-get': () => (mode === 'fail' && wrote ? json({ code: 14, message: 'x' }, 503) : mode === 'slow' ? slowRead.handler() : reply200(rooms)),
+      '/ctrl/room-temperature-set': () => { mode = 'fail'; return json({ code: 4, message: 'x' }, 504) },
+      '/ctrl/room-temperature-data-get': () => (mode === 'fail' ? json({ code: 14, message: 'x' }, 503) : mode === 'slow' ? slowRead.handler() : reply200(rooms)),
     })
     await draftAndSend()
     await confirmOk()
-    const bar = await waitFor(() => { const b = document.querySelector('[data-lock="unknown-locked"]') as HTMLElement; expect(b).toBeTruthy(); return b })
+    const bar = await waitFor(() => { const b = document.querySelector('[data-lock="unknown"]') as HTMLElement; expect(b).toBeTruthy(); expect(b.textContent).toContain('可点「核对」'); return b })
     mode = 'slow'
     fireEvent.click(within(bar).getByRole('button', { name: '核对' }))
     await flush()
     await act(async () => { await signOut() })
-    await act(async () => { await signIn('u2', 'pw', true) })
     mode = 'normal'
+    await act(async () => { await signIn('u2', 'pw', true) })
     await screen.findByText('客厅')
-    // 旧会话的读取返回了不同的值：不能写进新会话的缓存
-    rooms = [{ ...ROOM, setTemp: 29 }, OFF_ROOM]
     await slowRead.release()
     await flush(80)
-    expect(document.querySelector('[data-lock="unknown-locked"]')).toBeTruthy()
+    expect(document.querySelector('[data-lock="unknown"]')).toBeTruthy()
     expect(within(card('客厅')).getByLabelText('客厅 设定温度').textContent).toBe('25.5°C')
   })
-
   it('预检读取途中退出登录：读数丢弃、不写', async () => {
     const slowRead = deferred(() => reply200(rooms))
     let slow = false
@@ -796,48 +786,38 @@ describe('下发状态机：确认后新读、写后新读、会话、期限', (
     expect(document.querySelector('[data-lock]')).toBeNull()
   })
 
-  it('锁定后重新挂载，首次读取 503 / 空列表 / 项目离线：空态里也有锁提示和「核对」，核对失败保留锁可再试', async () => {
-    let mode: 'normal' | 'down' | 'empty' = 'normal'
-    let offline = false
+  it('锁定后重新挂载，首次读取 503 / 空列表：空态里也有锁提示和「核对」；503 按屏离线保持锁，读到一致才解锁', async () => {
+    let mode: 'normal' | 'down' | 'empty' | 'applied' = 'normal'
     let wrote = false
     backend({
-      '/ctrl/projects': () => json({ project_entities: [offline ? { ...P1, online: undefined } : P1, P2, P12, POFF] }),
       '/ctrl/room-temperature-set': () => { wrote = true; return json({ code: 4, message: 'x' }, 504) },
-      '/ctrl/room-temperature-data-get': () => (wrote && mode !== 'empty' ? json({ code: 14, message: '控制屏消息发送失败' }, 503) : reply200(mode === 'empty' ? [] : rooms)),
+      '/ctrl/room-temperature-data-get': () => (mode === 'applied' ? reply200([{ ...ROOM, setTemp: 26 }, OFF_ROOM])
+        : wrote && mode !== 'empty' ? json({ code: 14, message: '控制屏消息发送失败' }, 503) : reply200(mode === 'empty' ? [] : rooms)),
     })
     await draftAndSend()
     await confirmOk()
-    await waitFor(() => expect(document.querySelector('[data-lock="unknown-locked"]')).toBeTruthy())
-    const bar = () => document.querySelector('[data-lock="unknown-locked"]') as HTMLElement
-    const remount = async () => {
-      fireEvent.click(rawButton('去首页'))
-      await screen.findByText('首页内容')
-      await act(async () => { client.clear() })
-      fireEvent.click(rawButton('回温控'))
-    }
-    // 项目离线：整页空态
-    offline = true
-    await remount()
-    await screen.findByText(/项目离线，无法读取房间温控面板/)
-    expect(bar()).toBeTruthy()
-    // 503：空态
-    offline = false
+    await waitFor(() => expect(document.querySelector('[data-lock="unknown"]')).toBeTruthy())
+    const bar = () => document.querySelector('[data-lock="unknown"]') as HTMLElement
+    fireEvent.click(rawButton('去首页'))
+    await screen.findByText('首页内容')
+    await act(async () => { client.removeQueries({ queryKey: ['ctrl'] }) })
     mode = 'down'
-    await remount()
+    fireEvent.click(rawButton('回温控'))
     await screen.findByText('控制屏当前不在线，无法读取房间温控面板。', { exact: false })
     expect(bar()).toBeTruthy()
     fireEvent.click(within(bar()).getByRole('button', { name: '核对' }))
-    await waitFor(() => expect(toasts()).toContain('核对读取失败，仍暂停下发，可再次核对'))
+    await waitFor(() => expect(toasts()).toContain('控制屏离线，暂时无法核对，可稍后再试'))
     expect(bar()).toBeTruthy()
-    // 空列表：空态
     mode = 'empty'
     fireEvent.click(screen.getByRole('button', { name: '重试' }))
     await screen.findByText('未读到房间温控面板')
     expect(bar()).toBeTruthy()
     fireEvent.click(within(bar()).getByRole('button', { name: '核对' }))
+    await waitFor(() => expect(toasts()).toContain('面板当前值与下发值不一致，仍暂停下发'))
+    mode = 'applied'
+    fireEvent.click(within(bar()).getByRole('button', { name: '核对' }))
     await waitFor(() => expect(document.querySelector('[data-lock]')).toBeNull())
   })
-
   it('写的过程中退出登录：旧操作不回读、不提示；同账号重新登录后看不到旧结果，可以正常下发', async () => {
     const slow = deferred(ok201)
     const be = backend({ '/ctrl/room-temperature-set': slow.handler })
@@ -857,23 +837,28 @@ describe('下发状态机：确认后新读、写后新读、会话、期限', (
     expect(btn(card('客厅'), '客厅 设定温度升高').disabled).toBe(false)
   })
 
-  it('写的过程中换账号、结果未知：项目锁保留，新会话看到「不是本次登录发起的」和核对，看不到旧结果', async () => {
+  it('写的过程中换账号、结果未知：写锁保留，新账号只看到泛化提示（不带房间名），房间禁用', async () => {
     const slow = deferred(() => json({ code: 4, message: 'x' }, 504))
-    const be = backend({ '/ctrl/room-temperature-set': slow.handler })
+    let user = 'admin-1'
+    const be = backend({
+      '/ctrl/room-temperature-set': slow.handler,
+      '/me': () => json({ user_entity: { id: user, name: '测试' }, permission_paths: [] }),
+      '/ctrl/room-temperature-data-get': () => reply200(rooms), // 与下发值不一致：核对不会解锁
+    })
     await draftAndSend()
     await confirmOk()
     await waitFor(() => expect(writes(be)).toHaveLength(1))
     await act(async () => { await signOut() })
     await slow.release()
+    user = 'admin-2'
     await act(async () => { await signIn('u2', 'pw', true) })
     await screen.findByText('客厅')
-    const bar = document.querySelector('[data-lock="unknown-locked"]') as HTMLElement
-    expect(bar.textContent).toContain('不是本次登录发起的')
+    const bar = await waitFor(() => { const b = document.querySelector('[data-lock="unknown"]') as HTMLElement; expect(b).toBeTruthy(); return b })
+    expect(bar.textContent).toContain('上一账号的下发结果未知，请稍后再试或联系有权限的账号')
     expect(bar.textContent).not.toContain('客厅')
     expect(card('客厅').textContent).not.toContain('结果未知')
     expect(btn(card('客厅'), '客厅 设定温度升高').disabled).toBe(true)
   })
-
   it('206：确认后新读到的房间列表变了 → 取消，要求重新确认', async () => {
     const be = backend({ '/ctrl/project-room-switch-set': ok206 })
     await openRooms()
@@ -884,5 +869,33 @@ describe('下发状态机：确认后新读、写后新读、会话、期限', (
     await flush(80)
     expect(writes(be)).toHaveLength(0)
     expect(toasts()).toContain('房间列表已变化（现为 1 个）')
+  })
+})
+
+describe('共用写锁（按控制屏）', () => {
+  it('同一块控制屏的另一个项目在下发：本项目全部下发禁用，并提示；对方放锁后恢复', async () => {
+    backend()
+    await openRooms()
+    let r!: ReturnType<typeof acquireLock>
+    act(() => { r = acquireLock({ id: 'p2', controlScreenId: 'SCREEN-T' }, '全部开启') })
+    expect(r.ok).toBe(true)
+    await waitFor(() => expect((screen.getByRole('button', { name: '全部开启' }) as HTMLButtonElement).disabled).toBe(true))
+    expect(btn(card('客厅'), '客厅 设定温度升高').disabled).toBe(true)
+    expect(document.querySelector('[data-lock="held"]')?.textContent).toContain('同一控制屏上有一条下发正在进行')
+    act(() => { if (r.ok) releaseLock(r.token) })
+    await waitFor(() => expect((screen.getByRole('button', { name: '全部开启' }) as HTMLButtonElement).disabled).toBe(false))
+  })
+
+  it('别的标签页放锁（写锁按到期处理、发强制重读）：本页重读设备状态', async () => {
+    const be = backend()
+    await openRooms()
+    const key = 'screen:SCREEN-T'
+    const rec = { v: 1, op: 'other-tab', keys: [key, 'project:' + P1.id], projectId: P1.id, userId: 'admin-1', sentAt: Date.now() - 1000, msg: 201, deviceId: ROOM.id, target: { temperature: 26 } }
+    act(() => { window.dispatchEvent(new StorageEvent('storage', { key: STORAGE_PREFIX + key, newValue: JSON.stringify(rec) })) })
+    await waitFor(() => expect(document.querySelector('[data-lock="unknown"]')?.textContent).toContain('另一个标签页'))
+    const reads = be.callsTo('/ctrl/room-temperature-data-get').length
+    act(() => { window.dispatchEvent(new StorageEvent('storage', { key: STORAGE_PREFIX + key, newValue: null })) })
+    await waitFor(() => expect(be.callsTo('/ctrl/room-temperature-data-get').length).toBeGreaterThan(reads))
+    expect(document.querySelector('[data-lock]')).toBeNull()
   })
 })
