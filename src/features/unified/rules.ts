@@ -197,17 +197,18 @@ export function echoMismatches(q: WriteQuery<203>, after: UnifiedEcho | null | u
 /**
  * 回读结论（控制屏已应答 success=true 之后）：
  * - applied：下发的字段全部读到且一致（已生效）
- * - unchanged：有字段读到了、但和下发的不一样（未变化）
- * - unverifiable：没有不一致的，但有字段没回报 / 接口读不到（无法核对）
- * - unknown：没有不一致的，但有房间离线（读数不可信，结果未知）
+ * - unchanged：下发的字段全部读到，但有字段和下发的不一样（未变化）
+ * - unverifiable：有字段核对不了（没有房间条目、200 回包为空 {}、设备没回报、200 里根本没有这项读数如系统开关 / 运行模式）→ 无法核对
+ * - unknown：有房间离线（读数不可信，结果未知）
  */
 export type EchoVerdict = 'applied' | 'unchanged' | 'unverifiable' | 'unknown'
 /**
- * 优先级：读到的值有不一致 → 未变化（确定没全部生效，比「无法核对」信息更多）；否则有离线房间 → 结果未知；
- * 否则有字段读不到 → 无法核对；全部一致 → 已生效
+ * 下发核对口径（Fable 11/24）：一次下发里既有能核对的字段、又有不能核对的字段时，能核对的部分照常逐字段判（mismatches 里照常
+ * 列出 differ），整体结果按最不确定的那个算：结果未知（有房间离线）> 无法核对 > 未变化 > 已生效。
+ * 回读请求本身失败不走这里（状态机直接判「结果未知」，不并进无法核对）
  */
 export function echoVerdict(ms: readonly EchoMismatch[], after?: UnifiedEcho | null): EchoVerdict {
-  if (ms.some((m) => m.kind === 'differ')) return 'unchanged'
   if (after?.offline) return 'unknown'
-  return ms.length ? 'unverifiable' : 'applied'
+  if (ms.some((m) => m.kind === 'missing' || m.kind === 'unreadable')) return 'unverifiable'
+  return ms.length ? 'unchanged' : 'applied'
 }
