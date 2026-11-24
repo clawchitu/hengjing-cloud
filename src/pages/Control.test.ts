@@ -31,6 +31,8 @@ beforeAll(() => {
   globalThis.ResizeObserver ??= class { observe() {} unobserve() {} disconnect() {} } as unknown as typeof ResizeObserver
 })
 
+/** 带 sub 的 JWT 形状令牌（写请求要求能解析出 sub） */
+const J = (sub: string, n = 1) => `h.${btoa(JSON.stringify({ sub, n }))}.s`
 const PROJECTS = [
   { id: 'p1', code: '240829001', name: '测试项目0829', app_code: '1', online: true },
   { id: 'p3', code: '221031001', name: '科希家办公室', app_code: '1' }, // 离线（online 缺失）
@@ -48,7 +50,7 @@ const reply = (success: boolean, msg = '') => json({ body: encodeMessage(pb.Unif
 type Handler = (c: Call, n: number) => Response | Promise<Response>
 function backend(routes: Record<string, Handler> = {}) {
   return fakeBackend({
-    '/auth/login': () => json({ access_token: 'A1', refresh_token: 'R1', expires_in: 7200 }),
+    '/auth/login': () => json({ access_token: J('dealer-1'), refresh_token: 'R1', expires_in: 7200 }),
     '/me': () => json({ user_entity: { id: 'dealer-1', name: '测试', type: 1 } }),
     '/ctrl/projects': () => json({ project_entities: PROJECTS }),
     '/integrated-projects': () => json({ entities: GROUPS }),
@@ -251,7 +253,7 @@ describe('下发', () => {
     const be = backend({
       '/ctrl/room-temperature-data-get': () => rooms(0, 26),
       '/ctrl/unified-ctrl-set': h,
-      '/auth/refresh': () => json({ access_token: 'A2', refresh_token: 'R2', expires_in: 7200 }),
+      '/auth/refresh': () => json({ access_token: J('dealer-1', 2), refresh_token: 'R2', expires_in: 7200 }),
     })
     await click(okIn(await prepare()))
     await screen.findByText('失败（未执行）', { selector: '[data-slot=badge]' }, { timeout: 3000 })
@@ -317,12 +319,25 @@ describe('下发', () => {
     const dlg = await prepare()
     await click(okIn(dlg))
     await waitFor(() => expect(n).toBe(2)) // 确认后的强制刷新挂起
-    setCurrentUserId('someone-else') // 测试令牌不是 JWT，没有 sub，账号取 /me 的 user id
+    // 另一个标签页换了账号：存储里的令牌换成别的 sub
+    writeTokens({ accessToken: J('someone-else'), refreshToken: 'R9', expiresAt: Date.now() + 3600_000 })
     release()
     await waitFor(() => expect(screen.queryByRole('status')).toBeNull(), { timeout: 3000 })
     expect(be.callsTo('/ctrl/unified-ctrl-set')).toHaveLength(0)
     // 结果记在发起时的账号下（换账号后的页面看不到，符合按账号隔离）
     await waitFor(() => expect(sessionStorage.getItem('hjc-unified-last:real:dealer-1') ?? '').toMatch(/"status":"(not-sent|failure)"/), { timeout: 3000 })
+  })
+
+  it('确认时令牌解析不出 sub：整批不下发、不回读，失败（未执行），提示「登录状态异常，请重新登录后下发」', async () => {
+    const be = backend({ '/ctrl/room-temperature-data-get': () => rooms(1, 26), '/ctrl/unified-ctrl-set': () => reply(true) })
+    const dlg = await prepare()
+    const r0 = be.callsTo('/ctrl/room-temperature-data-get').length
+    writeTokens({ accessToken: 'not-a-jwt', refreshToken: 'R1', expiresAt: Date.now() + 3600_000 })
+    await click(okIn(dlg))
+    await screen.findByText('失败（未执行）', { selector: '[data-slot=badge]' }, { timeout: 3000 })
+    expect(be.callsTo('/ctrl/unified-ctrl-set')).toHaveLength(0)
+    expect(be.callsTo('/ctrl/room-temperature-data-get').length).toBe(r0)
+    expect(await openNotes()).toContain('登录状态异常，请重新登录后下发')
   })
 
   it('已有上一次结果时：下发进行中卡片仍显示上一次的四列结果、没有说明', async () => {

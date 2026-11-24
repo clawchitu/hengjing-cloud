@@ -97,7 +97,7 @@ describe('ctrl 编解码', () => {
 describe('callCtrl', () => {
   beforeEach(() => {
     __resetHttpForTests(); clearTokens()
-    writeTokens({ accessToken: 'A1', refreshToken: 'R1', expiresAt: Date.now() + 3600_000 })
+    writeTokens({ accessToken: `h.${btoa(JSON.stringify({ sub: 'u1' }))}.s`, refreshToken: 'R1', expiresAt: Date.now() + 3600_000 })
     setCurrentUserId('u1')
   })
   afterEach(() => { vi.unstubAllGlobals(); setConfig(null) })
@@ -174,7 +174,7 @@ describe('callCtrl', () => {
 describe('写防护按项目 code：201/203/204/206 与批量统一控制', () => {
   beforeEach(() => {
     __resetHttpForTests(); clearTokens()
-    writeTokens({ accessToken: 'A1', refreshToken: 'R1', expiresAt: Date.now() + 3600_000 })
+    writeTokens({ accessToken: `h.${btoa(JSON.stringify({ sub: 'u1' }))}.s`, refreshToken: 'R1', expiresAt: Date.now() + 3600_000 })
     setCurrentUserId('u1')
   })
   afterEach(() => { vi.unstubAllGlobals(); setConfig(null) })
@@ -358,7 +358,7 @@ describe('写消息不依赖 proto 默认值', () => {
 })
 
 describe('写接口只有一个入口', () => {
-  beforeEach(() => { writeTokens({ accessToken: 'A1', refreshToken: 'R1', expiresAt: Date.now() + 3600_000 }) })
+  beforeEach(() => { writeTokens({ accessToken: `h.${btoa(JSON.stringify({ sub: 'u1' }))}.s`, refreshToken: 'R1', expiresAt: Date.now() + 3600_000 }) })
   afterEach(() => { vi.unstubAllGlobals(); setConfig(null) })
 
   it('request() 直接请求写接口路径一律拒绝（测试环境也一样），不发请求', async () => {

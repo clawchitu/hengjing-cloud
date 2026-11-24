@@ -79,6 +79,8 @@ export interface BatchRow {
   at?: string
   /** 批次层面的说明（截止时间到了等）。有它时 status 以批次判定为准 */
   note?: string
+  /** 批次层面判定的失败且确定没执行（如登录状态异常） */
+  notExecuted?: boolean
   state: UnifiedState<UnifiedSnapshot>
 }
 export type BatchPhase = 'idle' | 'confirming' | 'running' | 'done'
@@ -111,6 +113,8 @@ export interface BatchDeps {
 
 export const REFRESH_FAILED_TEXT = '确认后刷新项目在线状态失败，整批未下发'
 export const ACCOUNT_CHANGED_TEXT = '登录账号已变化，未下发'
+/** 确认时取不到账号（令牌解析不出 sub）：整批不下发，记失败（未执行） */
+export const LOGIN_ABNORMAL_TEXT = '登录状态异常，请重新登录后下发'
 
 /**
  * 批次截止：从开始下发起 35 秒（方案 S12 验收「35 秒内给出最终结果」）。到截止时：
@@ -156,7 +160,7 @@ export function createUnifiedBatch(deps: BatchDeps) {
     /** 所属批次序号：旧批次里没结束的写请求不能借新批次的截止时间放行 */
     batch: number
     /** 截止时冻结的结果 */
-    final?: { status: 'not-sent' | 'unknown' | 'success' | 'failure'; note: string }
+    final?: { status: 'not-sent' | 'unknown' | 'success' | 'failure'; note: string; notExecuted?: boolean }
   }
   let entries: Entry[] = []
   let state: BatchState = { phase: 'idle', rows: [], errors: [], items: [] }
@@ -178,7 +182,7 @@ export function createUnifiedBatch(deps: BatchDeps) {
   const emit = (patch: Partial<BatchState>) => {
     const rows = entries.map((e): BatchRow => ({
       id: e.p.id, code: e.p.code, name: e.p.name, at: e.at, state: e.ctl.getState(),
-      status: e.final?.status ?? rowStatus(e.ctl.getState(), e.started), note: e.final?.note,
+      status: e.final?.status ?? rowStatus(e.ctl.getState(), e.started), note: e.final?.note, notExecuted: e.final?.notExecuted,
     }))
     state = { ...state, rows, ...patch }
     for (const fn of subs) fn()
@@ -307,6 +311,13 @@ export function createUnifiedBatch(deps: BatchDeps) {
       emit({ phase: 'running' })
       account = deps.getAccount ? deps.getAccount() : null
       const run = async () => {
+        // 确认时取不到账号：整批不下发（不刷新、不回读），记失败（未执行）
+        if (deps.getAccount && account === null) {
+          for (const e of entries) { e.final = { status: 'failure', note: LOGIN_ABNORMAL_TEXT, notExecuted: true }; e.started = true; e.at ??= stamp(now()); e.ctl.abort() }
+          clearTimeout(timer)
+          emit({ phase: 'done' })
+          return state
+        }
         // 确认后、整批开始前强制刷新一次在线状态（每批一次）
         if (deps.refreshProjects) {
           try {

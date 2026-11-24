@@ -125,7 +125,7 @@ function writeLast(key: string | null, rows: ResultRow[]) {
 
 const toResult = (r: BatchRow): ResultRow => ({
   name: r.name, code: r.code, at: r.at ?? '—', detail: rowDetail(r),
-  notExecuted: r.status === 'failure' && r.state.status === 'failure' && r.state.outcome === 'not-sent',
+  notExecuted: r.notExecuted === true || (r.status === 'failure' && r.state.status === 'failure' && r.state.outcome === 'not-sent'),
   status: r.status === 'waiting' || r.status === 'sending' ? 'not-sent' : r.status,
 })
 
@@ -171,7 +171,8 @@ export default function Control() {
     refreshProjects: (signal) => orgSource().projects({ user: session.user, dealerAccount: session.dealerAccount }, {}, signal),
     // 账号绑定：确认时记下，发送前核对
     // 真实模式以存储里令牌的 sub 为准（就是实际要用的令牌的账号），没有 sub 才用 /me 的 user id
-    getAccount: () => (mock ? user.username || null : jwtSub(readTokens()?.accessToken) || getCurrentUserId() || null),
+    // 真实模式只认存储里令牌的 sub（就是实际要用的令牌的账号）；解析不出 sub 一律不发（登录状态异常）
+    getAccount: () => (mock ? user.username || null : jwtSub(readTokens()?.accessToken) || null),
   })
   const busy = run.phase === 'confirming' || run.phase === 'running'
 
@@ -231,7 +232,8 @@ export default function Control() {
     setLastRun({ key: lastKey, rows })
     writeLast(lastKey, rows)
     setShowNotes(false)
-    void queryClient.invalidateQueries({ queryKey: ['unified-snap'] })
+    // 有项目真的发出过写请求才刷新房间状态
+    if (rows.some((r) => r.status !== 'not-sent' && !r.notExecuted)) void queryClient.invalidateQueries({ queryKey: ['unified-snap'] })
     batch.reset()
     const n = (st: ResultRow['status']) => rows.filter((r) => r.status === st).length
     if (n('success') === rows.length) toast(`${TEXT.success}（${rows.length} 个项目）`)

@@ -226,6 +226,8 @@ function plainWriteBody(body: unknown): Record<string, unknown> {
 
 /** 写请求收到未认证（401 / token err）时的提示：不重放，按「没执行」结束 */
 export const WRITE_AUTH_TEXT = '登录状态已更新，请重新下发'
+/** 令牌解析不出账号（sub）：无法绑定实际令牌的身份，一律不发 */
+export const WRITE_LOGIN_ABNORMAL_TEXT = '登录状态异常，请重新登录后下发'
 /** 发送前发现存储里已换成别的账号 */
 export const WRITE_ACCOUNT_TEXT = '登录账号已变化，未下发'
 /** 发送前取消信号已中止 */
@@ -284,7 +286,9 @@ async function writeOnce<T>(path: string, opts: WriteOptions & { method: 'POST';
     if (rest.signal?.aborted) throw new ApiError('write_blocked', WRITE_CANCELLED_TEXT)
     // 账号绑定：要用的令牌必须仍是存储里当前账号的令牌（续期期间别的标签页换了账号就不发）
     const cur = readTokens()?.accessToken
-    if (startSub !== null && jwtSub(token) !== startSub) throw new ApiError('write_blocked', WRITE_ACCOUNT_TEXT)
+    // 发起时或实际要用的令牌解析不出 sub：无法可靠绑定身份，不发（本地拦截，确定没执行）
+    if (startSub === null || jwtSub(token) === null) throw new ApiError('write_blocked', WRITE_LOGIN_ABNORMAL_TEXT)
+    if (jwtSub(token) !== startSub) throw new ApiError('write_blocked', WRITE_ACCOUNT_TEXT)
     if (cur !== token && (!cur || jwtSub(cur) !== jwtSub(token))) throw new ApiError('write_blocked', WRITE_ACCOUNT_TEXT)
     let ok = false
     try { ok = beforeSend ? beforeSend() === true : true } catch { ok = false }
