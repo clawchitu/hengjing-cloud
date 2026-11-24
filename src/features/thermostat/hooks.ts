@@ -27,6 +27,9 @@ export const canRead = (project: Pick<Project, 'id' | 'online'> | null, kind: 'r
  */
 type RoomsData = { list: RoomView[]; raw: Pick<CtrlReply<200>, 'data'>; seq: number }
 let readSeq = 0
+/** 每个查询键最近一次发起的读取序号（在途也算） */
+const startedSeq = new Map<string, number>()
+const nextSeq = (key: readonly unknown[]) => { const seq = ++readSeq; startedSeq.set(JSON.stringify(key), seq); return seq }
 /** 按序号写缓存：已有更新的读数就不覆盖 */
 const putNewer = (old: RoomsData | undefined, next: RoomsData) => (old && old.seq > next.seq ? old : next)
 const roomsQuery = (project: Project | null, enabled: boolean) => {
@@ -34,23 +37,27 @@ const roomsQuery = (project: Project | null, enabled: boolean) => {
   const id = project?.id ?? ''
   return {
     queryKey: roomsKey(src.kind, id),
-    queryFn: async ({ signal }: { signal: AbortSignal }): Promise<RoomsData> => { const seq = ++readSeq; return { ...(await src.roomsRaw(id, signal)), seq } },
+    queryFn: async ({ signal }: { signal: AbortSignal }): Promise<RoomsData> => { const seq = nextSeq(roomsKey(src.kind, id)); return { ...(await src.roomsRaw(id, signal)), seq } },
     enabled: enabled && canRead(project, src.kind),
     staleTime: src.kind === 'real' ? 10_000 : Infinity,
   }
 }
 
-export function useRooms(project: Project | null, enabled = true) {
+/** paused：写锁核对在途期间暂停 15 秒轮询（核对结束恢复），减少核对读数与轮询读数交错 */
+export function useRooms(project: Project | null, enabled = true, paused = false) {
   const src = thermostatSource()
-  return useQuery({ ...roomsQuery(project, enabled), select: (d: RoomsData) => d.list, refetchInterval: src.kind === 'real' ? ROOMS_POLL_MS : false })
+  return useQuery({ ...roomsQuery(project, enabled), select: (d: RoomsData) => d.list, refetchInterval: src.kind === 'real' && !paused ? ROOMS_POLL_MS : false })
 }
 /** 同一份缓存里的原始 200 回包（不另发请求、不另起轮询） */
 export function useRoomsRaw(project: Project | null, enabled = true) {
   return useQuery({ ...roomsQuery(project, enabled), select: (d: RoomsData) => d.raw })
 }
 
-/** 一次新读的结果；apply 把它写进查询缓存（缓存里已有更新的读数、或会话已变时不写） */
-export interface FreshRead { list: RoomView[]; raw: Pick<CtrlReply<200>, 'data'>; apply: () => void }
+/**
+ * 一次新读的结果；apply 把它写进查询缓存（缓存里已有更新的读数、或会话已变时不写）；
+ * latest()：这次读取仍是该项目最近发起的读取（之后没有更新序号的读取在途或已写入）
+ */
+export interface FreshRead { list: RoomView[]; raw: Pick<CtrlReply<200>, 'data'>; apply: () => void; latest: () => boolean }
 
 /**
  * 新读一次 200（下发流程的确认后预检、写后回读、核对都用它）：先取消该项目在途的 200（写前启动的轮询不算数），
@@ -69,7 +76,7 @@ export function useFreshRead(project: Project | null) {
     const src = thermostatSource()
     const key = roomsKey(src.kind, id)
     await qc.cancelQueries({ queryKey: key, exact: true })
-    const seq = ++readSeq
+    const seq = nextSeq(key)
     const r = await src.roomsRaw(id, signal)
     if (signal?.aborted) throw new Error('读取已中止，结果已丢弃')
     if (currentSessionKey() !== session) throw new Error('读取期间登录状态已变化，结果已丢弃')
@@ -78,7 +85,8 @@ export function useFreshRead(project: Project | null) {
       qc.setQueryData<RoomsData>(key, (old) => putNewer(old, { ...r, seq }))
     }
     if (!opts.defer) apply()
-    return { ...r, apply }
+    const latest = () => startedSeq.get(JSON.stringify(key)) === seq && !((qc.getQueryData<RoomsData>(key)?.seq ?? 0) > seq)
+    return { ...r, apply, latest }
   }, [qc, id])
 }
 /** 新读一次 200，只要页面用的房间列表 */

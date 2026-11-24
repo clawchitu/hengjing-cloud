@@ -168,7 +168,7 @@ function RoomCard({ room: r, ctx, range, selected, onSelect, draft, conflict, on
       send: (q, beforeSend) => thermostatSource().setRoom(p, q, beforeSend),
       record: record201,
       read: async (signal) => (await freshRead(signal)).raw,
-      readCandidate: async (signal) => { const x = await freshRead(signal, { defer: true }); return { data: x.raw, apply: x.apply } },
+      readCandidate: async (signal) => { const x = await freshRead(signal, { defer: true }); return { data: x.raw, apply: x.apply, latest: x.latest } },
       matches: match201,
     })
   }
@@ -388,10 +388,11 @@ export default function Thermostat() {
   const caps = useCapabilities(project)
   // 全部开关（206）与「放弃草稿」的确认在本组件发起
   const confirm = useConfirm()
-  const rooms = useRooms(project, caps.thermostat)
+  const writes = useWrites(project)
+  // 写锁核对在途期间暂停 15 秒轮询（核对结束恢复）：减少核对读数与轮询读数交错
+  const rooms = useRooms(project, caps.thermostat, writes.lock?.verifying === true)
   const rawRooms = useRoomsRaw(project, caps.thermostat)
   const freshRead = useFreshRead(project)
-  const writes = useWrites(project)
   const [sel, setSel] = useState('')
   const [range, setRange] = useState<StatsRange>('24小时')
   // 草稿带上所属项目：切换项目即作废（演示数据的房间编号在不同项目里重复）
@@ -528,7 +529,7 @@ export default function Thermostat() {
       send: (q, beforeSend) => thermostatSource().setAll(p, q.on, beforeSend),
       record: record206,
       read: async (signal) => (await freshRead(signal)).raw,
-      readCandidate: async (signal) => { const x = await freshRead(signal, { defer: true }); return { data: x.raw, apply: x.apply } },
+      readCandidate: async (signal) => { const x = await freshRead(signal, { defer: true }); return { data: x.raw, apply: x.apply, latest: x.latest } },
       matches: match206,
     })
   }

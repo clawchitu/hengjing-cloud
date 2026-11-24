@@ -137,7 +137,7 @@ export interface OpSpec<P, L> {
    * 写锁核对用的读取（可选）：只返回候选读数，apply 写缓存。写锁认可这次核对（一致时调了 commit，或不一致结论记进了锁的
    * lastFields）之后才调 apply；不给时用 read（读到即写缓存）
    */
-  readCandidate?: (signal: AbortSignal) => Promise<{ data: L; apply: () => void }>
+  readCandidate?: (signal: AbortSignal) => Promise<{ data: L; apply: () => void; latest?: () => boolean }>
   /** 读数与下发目标逐字段比对（writeLockVerify.ts 的四态结论） */
   matches: (payload: P, read: L) => MatchResult
   /** 写锁认可了一次全部一致的核对（之后的自动再核对一致也会调）：页面据此清草稿 */
@@ -218,13 +218,20 @@ export async function runOp<P, L>(o: OpSpec<P, L>): Promise<RunResult> {
       candidate = null
       const my = ++inv
       if (sameSession()) { const cur = results.get(key); if (cur && before === null) before = cur.readback; patch({ readback: 'pending' }) }
-      const got = o.readCandidate ? await o.readCandidate(signal) : { data: await o.read(signal), apply: () => {} }
+      const got: { data: L; apply: () => void; latest?: () => boolean } = o.readCandidate ? await o.readCandidate(signal) : { data: await o.read(signal), apply: () => {} }
       // 超时后迟到返回的旧核对（已有新一次核对开始）不留候选
       if (my === inv) candidate = got.apply
       const r = o.matches(payload, got.data)
       lastThrew = false
       const det: MatchDetail = typeof r === 'object' && r ? r : { verdict: (r === true ? 'applied' : r === 'unverifiable' ? 'unverifiable' : 'unchanged') as FieldResult, fields: {} }
       if (det.verdict !== 'applied') return r === false || r === 'unverifiable' ? r : det
+      // 读到一致，但这次读取之后该项目已有更新的读数（在途或已写入）：这份一致可能已过时，不算已生效——按未变化处理、
+      // 不写缓存，交给写锁的退避再核对（新读）
+      if (got.latest && !got.latest()) {
+        candidate = null
+        const fields = Object.fromEntries(Object.keys(det.fields).map((k) => [k, 'unchanged' as const]))
+        return { verdict: 'unchanged', fields: Object.keys(fields).length ? fields : { switch: 'unchanged' } } satisfies MatchDetail
+      }
       return {
         same: true,
         commit: () => {

@@ -1351,3 +1351,71 @@ describe('#35 第五轮：201 目标 ID 唯一、核对读数写缓存的时机'
   })
 })
 
+describe('#35 第六轮：较旧的一致读数被更新的不一致读数取代', () => {
+  it('核对 A 读到一致但返回晚、之后发起的 B 先返回不一致：不提示成功、不放锁、草稿保留；之后新读重核一致才放', async () => {
+    let wrote = false
+    let n = 0
+    const a = deferred(() => reply200([{ ...ROOM, setTemp: 26 }, OFF_ROOM]))
+    let later = [ROOM, OFF_ROOM]
+    backend({
+      '/ctrl/room-temperature-set': () => { wrote = true; return ok201NoApply() },
+      '/ctrl/room-temperature-data-get': () => (!wrote ? reply200(rooms) : ++n === 1 ? a.handler() : reply200(later)),
+    })
+    await draftAndSend()
+    await confirmOk()
+    await waitFor(() => expect(n).toBe(1)) // 写锁自动核对 A 已发出，卡住
+    await act(async () => { await client.refetchQueries({ type: 'active' }) }) // B 之后发起、先返回：仍是 25.5（不一致）
+    await flush()
+    await a.release() // A 这时返回：读到 26（一致），但已被 B 取代
+    await waitFor(() => expect(within(card('客厅')).getAllByRole('alert').map((x) => x.textContent).join()).toContain('指令已下发，设备状态暂未变化'))
+    expect(toasts()).not.toContain('已生效')
+    expect(document.querySelector('[data-lock="unknown"]')).toBeTruthy()
+    expect(card('客厅').querySelector('[data-pending]')?.textContent).toContain('设定温度 25.5 → 26.0°C')
+    // 之后按新读重核：设备确实生效了 → 一致、提示成功、放锁、清草稿
+    later = [{ ...ROOM, setTemp: 26 }, OFF_ROOM]
+    fireEvent.click(within(document.querySelector('[data-lock="unknown"]') as HTMLElement).getByRole('button', { name: '核对' }))
+    await waitFor(() => expect(document.querySelector('[data-lock]')).toBeNull())
+    await waitFor(() => expect(toasts()).toContain('客厅 已生效'))
+    expect(card('客厅').querySelector('[data-pending]')).toBeNull()
+  })
+  it('核对在途期间暂停该项目的 15 秒轮询，核对结束恢复', async () => {
+    let wrote = false
+    let n = 0
+    const a = deferred(() => reply200(rooms))
+    backend({
+      '/ctrl/room-temperature-set': () => { wrote = true; return ok201NoApply() },
+      '/ctrl/room-temperature-data-get': () => (!wrote ? reply200(rooms) : ++n === 1 ? a.handler() : reply200(rooms)),
+    })
+    // 温控房间查询的轮询间隔（看查询观察者当前的 refetchInterval；TanStack 的定时器不受假时钟控制，不靠等时间）
+    const interval = () => client.getQueryCache().find({ queryKey: ['ctrl', 200, P1.id], exact: false })?.observers.map((o) => o.options.refetchInterval)
+    await draftAndSend()
+    expect(interval()).toContain(15_000)
+    await confirmOk()
+    await waitFor(() => expect(n).toBe(1))
+    await waitFor(() => expect(interval()).not.toContain(15_000)) // 核对在途：暂停
+    await a.release()
+    await waitFor(() => expect(document.querySelector('[data-lock="unknown"]')).toBeTruthy())
+    await waitFor(() => expect(interval()).toContain(15_000)) // 核对结束：恢复
+  })
+  it('核对 A 读到一致时，之后发起的 B 还在途：A 同样不算已生效', async () => {
+    let wrote = false
+    let n = 0
+    const a = deferred(() => reply200([{ ...ROOM, setTemp: 26 }, OFF_ROOM]))
+    const b = deferred(() => reply200(rooms))
+    backend({
+      '/ctrl/room-temperature-set': () => { wrote = true; return ok201NoApply() },
+      '/ctrl/room-temperature-data-get': () => (!wrote ? reply200(rooms) : ++n === 1 ? a.handler() : n === 2 ? b.handler() : reply200(rooms)),
+    })
+    await draftAndSend()
+    await confirmOk()
+    await waitFor(() => expect(n).toBe(1))
+    void act(async () => { await client.refetchQueries({ type: 'active' }) }) // B 发起，卡住
+    await waitFor(() => expect(n).toBe(2))
+    await a.release()
+    await waitFor(() => expect(within(card('客厅')).getAllByRole('alert').map((x) => x.textContent).join()).toContain('指令已下发，设备状态暂未变化'))
+    expect(toasts()).not.toContain('已生效')
+    expect(document.querySelector('[data-lock="unknown"]')).toBeTruthy()
+    await b.release()
+  })
+})
+
