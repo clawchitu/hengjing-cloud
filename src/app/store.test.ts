@@ -228,10 +228,12 @@ describe('confirm()', () => {
     await open({ title: 'A', body: 'a', okText: '确认 A' })
     await flush()
     screen.getByRole('button', { name: '确认 A' }).focus()
-    await act(async () => { fireEvent.click(screen.getByRole('button', { name: '确认 A' })) }) // A 卸载，焦点还给触发器要等下一个宏任务
+    // 用同步的 act：渲染同步提交、不让出事件循环，Radix 把焦点还给触发器的 setTimeout(0) 一定还没执行（异步 act 在慢机器上可能先跑掉它）
+    act(() => { fireEvent.click(screen.getByRole('button', { name: '确认 A' })) }) // A 卸载，焦点还给触发器要等下一个宏任务
     expect(screen.queryByRole('alertdialog')).toBeNull()
     expect(document.activeElement).toBe(document.body)
-    const b = await open({ title: 'B', body: 'b' })
+    let b!: ReturnType<typeof track>
+    act(() => { b = track(confirm({ title: 'B', body: 'b' })) })
     await flush()
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: '取消' })) })
     await flush()
