@@ -1,6 +1,7 @@
 // 统一控制的 React hooks（只是状态机的薄封装，逻辑都在 machine.ts / rules.ts，便于单测）。
 // 当前项目信息先由页面通过参数注入；S6a 合并后改为从项目数据 hooks 取。
-import { useLayoutEffect, useState, useSyncExternalStore } from 'react'
+import { useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react'
+import { createUnifiedBatch, defaultBatchSender, readUnifiedSnapshot, type BatchDeps, type BatchState, type UnifiedBatch } from './batch'
 import { consoleLogger } from './log'
 import { createUnifiedController, defaultSender, type UnifiedController, type UnifiedDeps, type UnifiedState } from './machine'
 import { resolveTempRange, tempAvailability, type TempAvailability, type UnifiedContext } from './rules'
@@ -68,3 +69,22 @@ export function useUnifiedControl<S>(opts: UseUnifiedControlOptions<S>): Unified
     reset: ctl.reset,
   }
 }
+
+/**
+ * 统一控制页面用的批量控制器（S12b）：多个项目逐个走上面的单项目状态机。
+ * 控制器整个组件生命周期只建一次；getProjects 每次提交后换成最新值；卸载时在 layout effect 清理里同步 abort()
+ */
+export function useUnifiedBatch(deps: BatchDeps): UnifiedBatchControl {
+  const ref = useRef(deps)
+  useLayoutEffect(() => { ref.current = deps })
+  const [batch] = useState(() => createUnifiedBatch({
+    ...deps,
+    getProjects: () => ref.current.getProjects(),
+    readBack: (id, s) => (ref.current.readBack ?? readUnifiedSnapshot)(id, s),
+    send: (p, q) => (ref.current.send ?? defaultBatchSender)(p, q),
+  }))
+  useLayoutEffect(() => () => batch.abort(), [batch])
+  const state = useSyncExternalStore(batch.subscribe, batch.getState, batch.getState)
+  return { batch, state }
+}
+export interface UnifiedBatchControl { batch: UnifiedBatch; state: BatchState }

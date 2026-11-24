@@ -241,6 +241,8 @@ test.describe('焦点外圈兜底（模拟不支持 focusVisible）', () => {
     await login('dealer')
     await page.goto('/control')
     await settle(page)
+    // 温度区默认「保持不变」（禁用），先取消勾选才可调
+    await page.getByRole('checkbox', { name: '保持不变' }).click()
     const ring = () => page.locator('[data-slot=slider]').evaluate((n) => getComputedStyle(n, '::after').outlineStyle)
     await page.keyboard.press('Tab')
     const b = (await page.locator('[data-slot=slider]').boundingBox())!
@@ -257,6 +259,8 @@ test.describe('温度滑块', () => {
     await login('dealer')
     await page.goto('/control')
     await settle(page)
+    // 温度区默认「保持不变」（禁用），先取消勾选才可调
+    await page.getByRole('checkbox', { name: '保持不变' }).click()
     return page.getByRole('slider', { name: '房间温度设定' })
   }
   const shown = (page: Page) => page.locator('.temp-box .tv b')

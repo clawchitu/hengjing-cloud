@@ -88,7 +88,8 @@ test.describe('新风单机版 运行模式', () => {
 test.describe('统一控制', () => {
   const search = 'input[placeholder*="按项目名称检索"]'
 
-  test('混合选择（含新风单机版）与无房间布局', async ({ page, login }) => {
+  // 改动文档第 5 条：app_code 12（新风单机版）只禁用房间温度设定，房间开关仍在。截图名沿用 control-mixed / control-norooms
+  test('混合选择（含新风单机版）与只选新风单机版：温度设定禁用、房间开关仍可用', async ({ page, login }) => {
     await login('dealer')
     await page.goto('/control')
     await tick(page, 1500)
@@ -100,7 +101,9 @@ test.describe('统一控制', () => {
     await shot(page, 'control-mixed')
     for (const n of ['A栋', 'B栋', 'C栋', '会所']) await page.locator('.pick.on', { hasText: n }).click()
     await tick(page)
-    await expect(page.locator('.sec-h', { hasText: '房间开关' })).toHaveCount(0)
+    await expect(page.locator('.sec-h', { hasText: '房间开关' })).toHaveCount(1)
+    await expect(page.getByText(/该应用类型不支持温度设定/)).toBeVisible()
+    await expect(page.getByRole('slider', { name: '房间温度设定' })).toHaveAttribute('data-disabled', '')
     await shot(page, 'control-norooms')
   })
 })

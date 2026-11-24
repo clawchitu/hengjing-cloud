@@ -463,3 +463,69 @@ test.describe('Tabs（新风设备切换）', () => {
     })
   }
 })
+
+// S12b 统一控制（演示数据模式：回读与下发只改内存里的演示状态，不发任何请求）
+test.describe('统一控制下发', () => {
+  const slider = (page: Page) => page.getByRole('slider', { name: '房间温度设定' })
+  const shownT = (page: Page) => page.locator('.temp-box .tv b')
+
+  async function expectLocked(page: Page) {
+    const s = slider(page)
+    await expect(s).toHaveAttribute('data-disabled', '')
+    await expect(page.getByRole('button', { name: '降低温度' })).toBeDisabled()
+    await expect(page.getByRole('button', { name: '升高温度' })).toBeDisabled()
+    const before = await s.getAttribute('aria-valuenow')
+    // 滑钮不在 Tab 顺序里；强行聚焦后按键也改不了
+    await s.evaluate((n) => (n as HTMLElement).focus())
+    for (const k of ['ArrowRight', 'ArrowUp', 'ArrowLeft', 'End', 'Home', 'PageUp', 'PageDown', 'Shift+ArrowRight']) await page.keyboard.press(k)
+    await expect(s).toHaveAttribute('aria-valuenow', before!)
+    // Tab 走一遍整页也不会停在温度区的任何控件上
+    await page.locator('input[placeholder*="按项目名称检索"]').focus()
+    for (let i = 0; i < 40; i++) {
+      await page.keyboard.press('Tab')
+      expect(await page.evaluate(() => !!document.activeElement?.closest('.temp-box'))).toBe(false)
+    }
+  }
+
+  test('「保持不变」时温度区禁用：键盘和 ± 都改不了', async ({ page, login }) => {
+    await open(page, login, '/control')
+    await expect(page.getByRole('checkbox', { name: '保持不变' })).toHaveAttribute('aria-checked', 'true')
+    await expectLocked(page)
+    await expect(shownT(page)).toHaveText('26.0°C')
+  })
+
+  test('只选新风单机版（app_code 12）：温度设定禁用，键盘改不了；房间开关可用', async ({ page, login }) => {
+    await open(page, login, '/control')
+    await page.getByRole('checkbox', { name: '保持不变' }).click()
+    const search = page.locator('input[placeholder*="按项目名称检索"]')
+    await search.fill('地库')
+    await page.locator('.pick', { hasText: '地库' }).click()
+    await search.fill('')
+    for (const n of ['A栋', 'B栋', 'C栋', '会所']) await page.locator('.pick.on', { hasText: n }).click()
+    await expect(page.getByText(/该应用类型不支持温度设定/)).toBeVisible()
+    await expect(page.getByRole('checkbox', { name: '保持不变' })).toBeDisabled()
+    await expectLocked(page)
+    await expect(page.getByRole('group', { name: '房间开关' }).getByRole('button', { name: '全部开启' })).toBeEnabled()
+  })
+
+  test('二次确认 → 逐个下发 → 结果表（项目、项目ID、状态、操作时间）带回显', async ({ page, login }) => {
+    await open(page, login, '/control')
+    await page.getByRole('group', { name: '房间开关' }).getByRole('button', { name: '全部开启' }).click()
+    await page.getByRole('checkbox', { name: '保持不变' }).click()
+    await page.getByRole('button', { name: '升高温度' }).click()
+    await page.getByRole('button', { name: '确认下发' }).click()
+    await page.clock.runFor(50)
+    const dlg = page.getByRole('alertdialog')
+    await expect(dlg).toContainText('房间温度26.5°C')
+    await expect(dlg).toContainText('朝阳壹号院 A栋（PRJ-10241）')
+    await dlg.getByRole('button', { name: '确认下发' }).click()
+    await page.clock.runFor(50)
+    await expect(page.getByRole('status').filter({ hasText: '正在下发' })).toBeVisible()
+    await page.clock.runFor(6000)
+    const table = page.locator('table').filter({ hasText: '操作时间' })
+    await expect(table.locator('thead th')).toHaveText(['项目', '项目ID', '状态', '操作时间'])
+    await expect(table.locator('[data-slot=badge]', { hasText: '成功' })).toHaveCount(4)
+    await expect(table).toContainText('下发后 房间开 · 26.5°C')
+    await expectToast(page, '下发成功')
+  })
+})
