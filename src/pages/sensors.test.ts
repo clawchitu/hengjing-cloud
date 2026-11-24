@@ -173,6 +173,8 @@ describe('数据与统计', () => {
     expect(cells).toEqual(['温度 (°C)', '25.5', '28.0', '23.0', '24 – 27', '50%'])
     const heads = [...summaryTable().querySelectorAll('th')].map((th) => th.textContent)
     expect(heads).toEqual(['指标', '平均值', '最大值', '最小值', '标准范围', '达标率'])
+    // 达标率表头带口径说明（键盘可聚焦，读屏可读）
+    expect(within(summaryTable()).getByRole('img', { name: '达标率口径：有效小时中处于标准范围内的比例，7 日 / 30 日同样按小时计' }).tabIndex).toBe(0)
     expect(document.body.textContent).not.toMatch(/超标时长|超标天数/)
   })
 

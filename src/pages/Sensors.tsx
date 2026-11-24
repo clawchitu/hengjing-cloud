@@ -3,11 +3,12 @@
 // 只读页面，不调用任何写接口。无接口支撑的元素已去掉：楼层、离线传感器的「最后在线」、项目的最后在线时间、
 // 指标统计汇总的「超标时长 / 超标天数」（改动文档第 7 条）。
 import { useEffect, useState, type ReactNode } from 'react'
-import { faBuilding, faLocationDot, faRotate, faTemperatureHalf, faDroplet, faTemperatureLow, faSmog, faLeaf, faDownload, faPlugCircleXmark, faTriangleExclamation, faLock, type IconDefinition } from '@fortawesome/free-solid-svg-icons'
+import { faBuilding, faLocationDot, faRotate, faTemperatureHalf, faDroplet, faTemperatureLow, faSmog, faLeaf, faDownload, faPlugCircleXmark, faTriangleExclamation, faLock, faCircleInfo, type IconDefinition } from '@fortawesome/free-solid-svg-icons'
 import { Chart, Icon, Seg, axis, tooltip } from '../components/legacy'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { useApp } from '../app/store'
 import { defaultText } from '../api/errors'
@@ -30,6 +31,8 @@ export const METRICS: MetricDef[] = [
   { key: 'co2', tab: 'CO₂', label: 'CO₂ (ppm)', unit: 'ppm', kpiUnit: 'ppm', icon: faLeaf, color: '#f59e0b', bg: '#fffbeb', digits: 0, hi: 1000, rangeText: '≤ 1000' },
 ]
 const out = (m: MetricDef, v: number) => v > m.hi || (m.lo !== undefined && v < m.lo)
+/** 达标率口径（赤兔 11/24 确认保留，表头提示写清） */
+const PCT_HINT = '有效小时中处于标准范围内的比例，7 日 / 30 日同样按小时计'
 const fmtN = (v: number, d: number) => v.toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d })
 
 /** shared: fetch stats for one device through the 24h API or the shared daily API */
@@ -240,7 +243,7 @@ export default function Sensors() {
       <Card pad={false}>
         <CardHeader pad style={{ marginBottom: 0, paddingBottom: 14 }}><div><CardTitle>指标统计汇总</CardTitle><CardDescription>{cur?.name ?? '—'} · {range}</CardDescription></div><Button disabled={rows.length === 0} onClick={onExport}><Icon icon={faDownload} />导出</Button></CardHeader>
         <Table>
-          <TableHeader><TableRow><TableHead>指标</TableHead><TableHead className="text-right">平均值</TableHead><TableHead className="text-right">最大值</TableHead><TableHead className="text-right">最小值</TableHead><TableHead className="text-right">标准范围</TableHead><TableHead style={{ paddingLeft: 40 }}>达标率</TableHead></TableRow></TableHeader>
+          <TableHeader><TableRow><TableHead>指标</TableHead><TableHead className="text-right">平均值</TableHead><TableHead className="text-right">最大值</TableHead><TableHead className="text-right">最小值</TableHead><TableHead className="text-right">标准范围</TableHead><TableHead style={{ paddingLeft: 40 }}>达标率<Tooltip><TooltipTrigger asChild><span role="img" tabIndex={0} aria-label={`达标率口径：${PCT_HINT}`} className="faint" style={{ marginLeft: 4, cursor: 'help' }}><Icon icon={faCircleInfo} /></span></TooltipTrigger><TooltipContent side="top">{PCT_HINT}</TooltipContent></Tooltip></TableHead></TableRow></TableHeader>
           <TableBody>
             {tableMsg ? <TableRow><TableCell colSpan={6} className="muted" style={{ textAlign: 'center' }}>{tableMsg}</TableCell></TableRow>
               : rows.map((r) => {
