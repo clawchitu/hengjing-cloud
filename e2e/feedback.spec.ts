@@ -336,6 +336,11 @@ test.describe('文字提示', () => {
     await expect(tip(page)).toBeVisible()
     await expect(tip(page)).toHaveText(/^已选择 \d+ 次$/)
     await expect(card).toHaveAttribute('aria-describedby', /.+/)
+    // 键盘焦点还在卡片上时页面滚动（含 Tab 到视口外、浏览器自动滚动）：提示不被 Radix 的“祖先滚动即关闭”关掉
+    // （滚动事件由页面在下一帧派发；假时钟下帧回调不跑，这里直接派发一次 document 上的 scroll，与 Radix 监听的一致）
+    await page.evaluate(() => document.dispatchEvent(new Event('scroll')))
+    await tick(page)
+    await expect(tip(page)).toBeVisible()
     await page.keyboard.press('Escape')
     await tick(page)
     await expect(tip(page)).toHaveCount(0)
@@ -404,25 +409,35 @@ test.describe('轻提示', () => {
     await login('dealer')
     await page.goto('/home')
     await settle(page)
-    const city = page.getByRole('button', { name: '上海市 · 浦东新区' })
-    await city.click()
-    await tick(page, 100)
-    await page.locator('.demo-seg').getByRole('button', { name: '2', exact: true }).click()
+    // 两条不同的提示：先点「刷新天气」（800ms 后提示「天气已更新」），再点城市按钮（立即提示）
+    await page.locator('.page-head .actions button').nth(1).click()
+    await tick(page, 800)
+    await expectToast(page, '天气已更新')
+    await tick(page, 100) // 第二条晚 100ms 出现
+    await page.getByRole('button', { name: '上海市 · 浦东新区' }).click()
     await tick(page, 100)
     const toasts = page.locator('[data-sonner-toast]')
     await expect(toasts).toHaveCount(2)
     const [a, b] = await Promise.all([
+      page.locator('[data-sonner-toast]', { hasText: '天气已更新' }).boundingBox(),
       page.locator('[data-sonner-toast]', { hasText: '演示环境仅提供上海市浦东新区天气' }).boundingBox(),
-      page.locator('[data-sonner-toast]', { hasText: '常用项目计数已重置' }).boundingBox(),
     ])
-    expect(a!.y).toBe(72)
+    expect(a!.y).toBe(72) // 旧的在上
     expect(b!.y - (a!.y + a!.height)).toBe(8)
-    // 第一条在 2600ms 时消失（已过 200ms），第二条稍后
-    await tick(page, 2350)
-    await expect(page.locator('[data-sonner-toast]:visible', { hasText: '演示环境' })).toHaveCount(1)
-    await tick(page, 100)
-    await expect(page.locator('[data-sonner-toast]:visible', { hasText: '演示环境' })).toHaveCount(0)
-    await tick(page, 300)
+    // 推进到 2400ms，再每次 10ms，记下各自消失的时刻：第一条约 2600ms 后消失，第二条（晚点出现的）晚于第一条
+    const visible = (t: string) => page.locator('[data-sonner-toast]:visible', { hasText: t }).count()
+    await tick(page, 2200)
+    let elapsed = 2400, goneA = 0, goneB = 0
+    while ((!goneA || !goneB) && elapsed < 4000) {
+      await tick(page, 10)
+      elapsed += 10
+      if (!goneA && !(await visible('天气已更新'))) goneA = elapsed
+      if (!goneB && !(await visible('演示环境'))) goneB = elapsed
+    }
+    expect(goneA).toBeGreaterThanOrEqual(2550)
+    expect(goneA).toBeLessThanOrEqual(2700)
+    expect(goneB - goneA).toBeGreaterThanOrEqual(80)
+    expect(goneB - goneA).toBeLessThanOrEqual(120)
     await expect(page.locator('[data-sonner-toast]:visible')).toHaveCount(0)
   })
 })

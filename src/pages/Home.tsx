@@ -155,7 +155,7 @@ function Favorites({ favs, onOpen }: { favs: ReturnType<typeof useFrequentProjec
 function FavCard({ fav: { project: p, count }, onOpen }: { fav: FrequentProject; onOpen: (p: Project) => void }) {
   // 真实接口只有行政区划码，城市 / 区县名为空：只拼有值的部分
   const loc = [p.city, p.district, p.kind || p.appName].filter(Boolean).join(' · ')
-  // 原生 title= 换成 Tooltip（没有选择次数时不显示提示）；卡片补上键盘可达：Tab 聚焦、Enter / 空格打开（同点击；按住不连发），
+  // 原生 title= 换成 Tooltip；卡片补上键盘可达：Tab 聚焦、Enter / 空格打开（同点击；按住不连发），
   // 键盘聚焦时提示立即出现。可访问名称用项目名、在线状态和编号（不读整张卡的文字）
   const card = (
     <div className="proj-card" role="button" tabIndex={0} aria-label={`${p.name}，${p.online ? '在线' : '离线'}，${p.code}`} onClick={() => onOpen(p)}
@@ -165,11 +165,11 @@ function FavCard({ fav: { project: p, count }, onOpen }: { fav: FrequentProject;
       {loc && <div className="pc-loc">{loc}</div>}
     </div>
   )
-  if (count === undefined) return card
+  // 结构始终是 Tooltip 包着卡片：次数晚到时不换结构，卡片不重挂、键盘焦点不丢；没有次数时不显示提示
   return (
-    <Tooltip>
+    <Tooltip disabled={count === undefined}>
       <TooltipTrigger asChild>{card}</TooltipTrigger>
-      <TooltipContent side="bottom">已选择 {count} 次</TooltipContent>
+      {count !== undefined && <TooltipContent side="bottom">已选择 {count} 次</TooltipContent>}
     </Tooltip>
   )
 }
