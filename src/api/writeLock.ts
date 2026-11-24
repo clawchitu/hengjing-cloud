@@ -502,6 +502,8 @@ export async function verify(keyOrTarget: string | LockTarget, signal?: AbortSig
   }
   if (!sameAccount(currentAccount(), cur)) return 'account-changed'
   if (signal?.aborted) return 'aborted'
+  // 超时会先中止内部信号再报错：核对函数若一收到中止就同步返回结果，可能先于超时错误胜出。中止过的一律作废，不提交、不放锁
+  if (ac.signal.aborted && !err) return 'failed'
   if (err) return isApiError(err) && err.kind === 'unavailable' ? 'offline' : 'failed'
   if (!isLive(e)) return 'none'
   // 到这里这次核对仍然有效：先提交候选结果，再按结论放锁
