@@ -43,9 +43,12 @@ describe('transition（纯函数）', () => {
   const sending = transition<Snap>(confirming, { type: 'CONFIRM' })
   const sent = transition<Snap>(sending, { type: 'STEP', step: 'send', before: BEFORE })
   const reading = transition<Snap>(sent, { type: 'STEP', step: 'read-after' })
-  const success = transition<Snap>(reading, { type: 'SUCCEED', via: 'reply', verified: true, before: BEFORE, after: AFTER, mismatches: [] })
+  const success = transition<Snap>(reading, { type: 'SUCCEED', via: 'reply', before: BEFORE, after: AFTER })
+  const unapplied = transition<Snap>(reading, { type: 'UNAPPLIED', before: BEFORE, after: BEFORE, mismatches: [] })
+  const unverifiable = transition<Snap>(reading, { type: 'UNVERIFIABLE', before: BEFORE, after: AFTER, mismatches: [] })
   const failure = transition<Snap>(reading, { type: 'FAIL', outcome: 'rejected', error: 'x' })
-  const unknown = transition<Snap>(reading, { type: 'UNKNOWN', cause: 'timeout', before: BEFORE, after: null, mismatches: [] })
+  const unknown = transition<Snap>(reading, { type: 'UNKNOWN', replied: false, cause: 'timeout', before: BEFORE, after: null, mismatches: [] })
+  const sentUnknown = transition<Snap>(reading, { type: 'UNKNOWN', replied: true, cause: '', before: BEFORE, after: null, mismatches: [] })
 
   it('合法转移', () => {
     expect(transition<Snap>(idle, { type: 'REJECT', errors: ['e'] })).toEqual({ status: 'idle', errors: ['e'] })
@@ -56,25 +59,31 @@ describe('transition（纯函数）', () => {
     expect(transition(sending, { type: 'ABORT', errors: ['a'] })).toEqual({ status: 'idle', errors: ['a'] })
     expect(sent).toMatchObject({ step: 'send', before: BEFORE })
     expect(reading).toMatchObject({ step: 'read-after', before: BEFORE })
-    expect(success).toMatchObject({ status: 'success', via: 'reply', verified: true, before: BEFORE, after: AFTER })
+    expect(success).toMatchObject({ status: 'success', via: 'reply', before: BEFORE, after: AFTER })
+    expect(unapplied).toMatchObject({ status: 'unapplied', before: BEFORE, after: BEFORE })
+    expect(unverifiable).toMatchObject({ status: 'unverifiable', before: BEFORE, after: AFTER })
+    expect(sentUnknown).toMatchObject({ status: 'unknown', replied: true, error: TEXT.sentUnknown })
     expect(failure).toMatchObject({ status: 'failure', outcome: 'rejected', error: 'x' })
     expect(unknown).toMatchObject({ status: 'unknown', error: TEXT.unconfirmed, cause: 'timeout' })
-    for (const end of [success, failure, unknown]) expect(transition(end, { type: 'RESET' })).toEqual({ status: 'idle', errors: [] })
+    for (const end of [success, unapplied, unverifiable, failure, unknown]) expect(transition(end, { type: 'RESET' })).toEqual({ status: 'idle', errors: [] })
   })
 
   it('不合法的事件原样返回（同一引用）', () => {
     const all: UnifiedEvent<Snap>[] = [
       { type: 'REJECT', errors: [] }, { type: 'REQUEST', target: T, draft: {}, query: Q }, { type: 'CANCEL' }, { type: 'CONFIRM' },
-      { type: 'ABORT', errors: [] }, { type: 'STEP', step: 'send' }, { type: 'SUCCEED', via: 'reply', verified: false, before: BEFORE, after: null, mismatches: [] },
-      { type: 'FAIL', outcome: 'not-sent', error: '' }, { type: 'UNKNOWN', cause: '', before: BEFORE, after: null, mismatches: [] }, { type: 'RESET' },
+      { type: 'ABORT', errors: [] }, { type: 'STEP', step: 'send' }, { type: 'SUCCEED', via: 'reply', before: BEFORE, after: AFTER },
+      { type: 'UNAPPLIED', before: BEFORE, after: BEFORE, mismatches: [] }, { type: 'UNVERIFIABLE', before: BEFORE, after: AFTER, mismatches: [] },
+      { type: 'FAIL', outcome: 'not-sent', error: '' }, { type: 'UNKNOWN', replied: false, cause: '', before: BEFORE, after: null, mismatches: [] }, { type: 'RESET' },
     ]
     const cases: Array<[UnifiedState<Snap>, string, string[]]> = [
       [idle, 'idle', ['REJECT', 'REQUEST']],
       [confirming, 'confirming', ['CANCEL', 'CONFIRM', 'ABORT']],
-      [sending, 'sending:read-before', ['ABORT', 'STEP', 'SUCCEED', 'FAIL', 'UNKNOWN']],
-      [sent, 'sending:send', ['STEP', 'SUCCEED', 'FAIL', 'UNKNOWN']],
-      [reading, 'sending:read-after', ['STEP', 'SUCCEED', 'FAIL', 'UNKNOWN']],
+      [sending, 'sending:read-before', ['ABORT', 'STEP', 'SUCCEED', 'UNAPPLIED', 'UNVERIFIABLE', 'FAIL', 'UNKNOWN']],
+      [sent, 'sending:send', ['STEP', 'SUCCEED', 'UNAPPLIED', 'UNVERIFIABLE', 'FAIL', 'UNKNOWN']],
+      [reading, 'sending:read-after', ['STEP', 'SUCCEED', 'UNAPPLIED', 'UNVERIFIABLE', 'FAIL', 'UNKNOWN']],
       [success, 'success', ['RESET']],
+      [unapplied, 'unapplied', ['RESET']],
+      [unverifiable, 'unverifiable', ['RESET']],
       [failure, 'failure', ['RESET']],
       [unknown, 'unknown', ['RESET']],
     ]
@@ -102,7 +111,7 @@ describe('控制器：正常流程', () => {
     expect(ctl.request({ roomTemp: 24 })).toMatchObject({ status: 'confirming', target: T, query: Q })
     expect(send).not.toHaveBeenCalled()
     const end = await ctl.confirm()
-    expect(end).toEqual({ status: 'success', target: T, query: Q, via: 'reply', verified: true, before: BEFORE, after: AFTER, afterError: undefined, mismatches: [] })
+    expect(end).toEqual({ status: 'success', target: T, query: Q, via: 'reply', before: BEFORE, after: AFTER })
     expect(seen).toEqual(['confirming', 'sending:read-before', 'sending:send', 'sending:read-after', 'success'])
     expect(readBack).toHaveBeenCalledTimes(2)
     expect(readBack.mock.calls[0][0]).toBe(CTX.projectId)
@@ -112,6 +121,7 @@ describe('控制器：正常流程', () => {
     expect(readBack.mock.invocationCallOrder[0]).toBeLessThan(send.mock.invocationCallOrder[0])
     expect(send.mock.invocationCallOrder[0]).toBeLessThan(readBack.mock.invocationCallOrder[1])
     expect(logs.map((l) => l.event)).toEqual(['confirm', 'read-before', 'send', 'read-after', 'success'])
+    expect(logs.at(-1)).toMatchObject({ codes: ['REPLY_OK', 'VERIFIED'], fields: ['roomTemp'] })
     ctl.reset()
     expect(ctl.getState()).toEqual({ status: 'idle', errors: [] })
   })
@@ -133,23 +143,61 @@ describe('控制器：正常流程', () => {
     expect(ctl.request({ systemSwitch: 0 })).toBe(confirming)
   })
 
-  it('Reply 成功但回读不一致：success、verified=false，带逐字段不一致项', async () => {
-    const { ctl } = setup({ readBack: vi.fn(async () => BEFORE) })
+  // 下发结果口径（Fable 11/24 裁定）：success=true 只算「已下发」，以回读为准
+  it('Reply 成功且回读一致 → success（已生效）', async () => {
+    const { ctl } = setup()
     ctl.request({ roomTemp: 24 })
-    expect(await ctl.confirm()).toMatchObject({ status: 'success', via: 'reply', verified: false, mismatches: [{ field: 'roomTemp', kind: 'differ' }] })
+    expect(await ctl.confirm()).toMatchObject({ status: 'success', via: 'reply', after: AFTER })
   })
 
-  it('Reply 成功但下发后回读失败：仍是 success（已生效），verified=false，带 afterError', async () => {
+  it('Reply 成功但读到的值不一致 → unapplied（未变化），不报成功；日志 unapplied + ECHO_MISMATCH', async () => {
+    const { ctl, logs } = setup({ readBack: vi.fn(async () => BEFORE) })
+    ctl.request({ roomTemp: 24 })
+    expect(await ctl.confirm()).toMatchObject({ status: 'unapplied', after: BEFORE, mismatches: [{ field: 'roomTemp', kind: 'differ' }] })
+    expect(logs.at(-1)).toMatchObject({ event: 'unapplied', codes: ['REPLY_OK', 'ECHO_MISMATCH'], fields: ['roomTemp'] })
+  })
+
+  it('部分字段一致：房间开关一致、温度不一致 → unapplied，只列温度', async () => {
+    const { ctl } = setup({ readBack: vi.fn().mockResolvedValueOnce(BEFORE).mockResolvedValue({ roomTemp: 22, roomSwitch: 1 }) })
+    ctl.request({ roomTemp: 24, roomSwitch: 1 })
+    const end = await ctl.confirm()
+    expect(end).toMatchObject({ status: 'unapplied' })
+    expect(end.status === 'unapplied' && end.mismatches.map((m) => [m.field, m.kind])).toEqual([['roomTemp', 'differ']])
+  })
+
+  it('部分字段一致：房间开关一致、系统开关回读接口读不到 → unverifiable（无法核对），系统开关记「未核对」', async () => {
+    const { ctl, logs } = setup()
+    ctl.request({ roomSwitch: 1, systemSwitch: 1 })
+    const end = await ctl.confirm()
+    expect(end).toMatchObject({ status: 'unverifiable', mismatches: [{ field: 'systemSwitch', kind: 'unreadable', message: TEXT.echoUnreadable(TEXT.systemSwitch) }] })
+    expect(logs.at(-1)).toMatchObject({ event: 'unverifiable', codes: ['REPLY_OK', 'NOT_VERIFIED'], fields: ['systemSwitch'] })
+  })
+
+  it('部分字段不一致、部分没回报：以不一致为准 → unapplied', async () => {
+    const { ctl } = setup({ toEcho: (s) => ({ roomTemp: s.roomTemp, roomSwitch: null }), readBack: vi.fn(async () => BEFORE) })
+    ctl.request({ roomTemp: 24, roomSwitch: 1 })
+    const end = await ctl.confirm()
+    expect(end.status === 'unapplied' && end.mismatches.map((m) => [m.field, m.kind])).toEqual([['roomSwitch', 'missing'], ['roomTemp', 'differ']])
+  })
+
+  it('Reply 成功但字段没回报（null）→ unverifiable（无法核对），不能判不一致', async () => {
+    const { ctl } = setup({ toEcho: (s) => ({ roomTemp: s.roomTemp, roomSwitch: null }) })
+    ctl.request({ roomSwitch: 1 })
+    expect(await ctl.confirm()).toMatchObject({ status: 'unverifiable', mismatches: [{ field: 'roomSwitch', kind: 'missing', message: TEXT.echoMissing(TEXT.roomSwitch) }] })
+  })
+
+  it('Reply 成功但下发后回读失败 → unknown（已下发，结果未知），不算成功', async () => {
     let n = 0
-    const { ctl } = setup({ readBack: vi.fn(async () => { if (n++) throw new ApiError('unavailable', '控制屏未连接'); return BEFORE }) })
+    const { ctl, logs } = setup({ readBack: vi.fn(async () => { if (n++) throw new ApiError('unavailable', '控制屏未连接'); return BEFORE }) })
     ctl.request({ roomTemp: 24 })
-    expect(await ctl.confirm()).toMatchObject({ status: 'success', verified: false, after: null, afterError: `${TEXT.readAfterFailed}：控制屏未连接`, mismatches: [{ field: 'roomTemp', kind: 'missing' }] })
+    expect(await ctl.confirm()).toMatchObject({ status: 'unknown', replied: true, error: TEXT.sentUnknown, after: null, afterError: `${TEXT.readAfterFailedUnknown}：控制屏未连接`, mismatches: [{ field: 'roomTemp', kind: 'missing' }] })
+    expect(logs.at(-1)).toMatchObject({ event: 'unknown', codes: ['REPLY_OK', 'READ_FAILED'] })
   })
 
-  it('toEcho 抛错按没读到处理', async () => {
+  it('toEcho 抛错按没回报处理 → unverifiable', async () => {
     const { ctl } = setup({ toEcho: () => { throw new Error('映射失败') } })
     ctl.request({ roomTemp: 24 })
-    expect(await ctl.confirm()).toMatchObject({ status: 'success', verified: false, mismatches: [{ field: 'roomTemp', kind: 'missing' }] })
+    expect(await ctl.confirm()).toMatchObject({ status: 'unverifiable', mismatches: [{ field: 'roomTemp', kind: 'missing' }] })
   })
 })
 
@@ -242,7 +290,7 @@ describe('控制器：abort（页面卸载、切换项目）', () => {
 
   it('abort 后立即开始新一轮：旧一轮的读取晚到不影响新一轮，只下发新一轮', async () => {
     const g1 = deferred<Snap>()
-    const readBack = vi.fn().mockReturnValueOnce(g1.promise).mockResolvedValue(AFTER)
+    const readBack = vi.fn().mockReturnValueOnce(g1.promise).mockResolvedValue({ roomTemp: 22, roomSwitch: 0 })
     const { ctl, send } = setup({ readBack })
     ctl.request({ roomSwitch: 1 })
     const p1 = ctl.confirm()
@@ -267,7 +315,7 @@ describe('控制器：abort（页面卸载、切换项目）', () => {
     ctl.abort()
     expect(ctl.getState()).toMatchObject({ status: 'sending', step: 'send' })
     gate.resolve({ success: true, msg: '' })
-    expect(await p).toMatchObject({ status: 'success', verified: true })
+    expect(await p).toMatchObject({ status: 'success' })
     expect(readBack).toHaveBeenCalledTimes(2)
   })
 
@@ -328,7 +376,7 @@ describe('控制器：abort（页面卸载、切换项目）', () => {
     expect(fired).toBe(true)
     expect(send).toHaveBeenCalledTimes(1)
     expect(readBack).toHaveBeenCalledTimes(2)
-    expect(end).toMatchObject({ status: 'success', verified: true })
+    expect(end).toMatchObject({ status: 'success' })
   })
 
   it('send 内部同步调用 abort：已视为发出，abort 无效', async () => {
@@ -409,7 +457,7 @@ describe('控制器：结果未知（unknown）', () => {
     const send = vi.fn(async () => { throw new ApiError(kind, msg) })
     const { ctl, readBack, logs } = setup({ send })
     ctl.request({ roomTemp: 24 })
-    expect(await ctl.confirm()).toMatchObject({ status: 'success', via: 'readback', verified: true, after: AFTER, mismatches: [] })
+    expect(await ctl.confirm()).toMatchObject({ status: 'success', via: 'readback', after: AFTER })
     expect(send).toHaveBeenCalledTimes(1)
     expect(readBack).toHaveBeenCalledTimes(2)
     expect(logs.at(-1)).toMatchObject({ event: 'success', codes: ['UNKNOWN', 'VERIFIED'], errorKind: kind })

@@ -1,10 +1,14 @@
 // 统一控制下发流程的显式状态机：
 //
-//   idle ──request(校验通过)──▶ confirming ──confirm──▶ sending ──▶ success（Reply success=true 即已生效；
-//    ▲  ◀──request(校验不过，带 errors)  │   │            │          或结果未知但回读逐字段一致，verified）
-//    │  ◀──cancel / abort──────────────┘   │            ├──▶ failure（没发出 / 明确被拒）
-//    │  ◀──abort 或发送前复核不过──────────────┘            └──▶ unknown（结果未知且回读不一致或读不到：结果未确认）
-//    └────────────────reset───────────── success / failure / unknown
+//   idle ──request(校验通过)──▶ confirming ──confirm──▶ sending ──▶ success（已生效：下发后回读逐字段一致）
+//    ▲  ◀──request(校验不过，带 errors)  │   │            ├──▶ unapplied（未变化：success=true，但读到的值和下发的不一样）
+//    │  ◀──cancel / abort──────────────┘   │            ├──▶ unverifiable（无法核对：success=true，没有不一致的，但有字段没回报 / 读不到）
+//    │                                      │            ├──▶ failure（没发出 / 明确被拒）
+//    │  ◀──abort 或发送前复核不过──────────────┘            └──▶ unknown（结果未知：应答未知且回读没核对一致，或 success=true 但回读失败）
+//    └────────────────reset───────────── success / unapplied / unverifiable / failure / unknown
+//
+// 下发结果口径（Fable 11/24 裁定）：控制屏 success=true 只算「已下发，待核对」，以下发后回读为准。只有回读逐字段一致才是 success；
+// 应答结果未知（超时等）但回读一致也升为 success（via='readback'）。
 //
 // - transition() 是纯函数：不合法的事件原样返回当前状态（比如 sending 期间再点确认）。
 // - createUnifiedController() 负责副作用：确认时按最新上下文复核、下发前读一次、真正发送前再核对
@@ -17,7 +21,7 @@ import { ApiError, isApiError, type ApiErrorKind } from '@/api/errors'
 import type { WriteProject } from '@/api/guard'
 import { TEXT } from './constants'
 import { consoleLogger, makeEntry, type EntryInput, type UnifiedLogEvent, type UnifiedLogger } from './log'
-import { changedFields, describeQuery, echoMismatches, validateUnified, type EchoMismatch, type Issue, type UnifiedContext, type UnifiedDraft, type UnifiedEcho } from './rules'
+import { changedFields, describeQuery, echoMismatches, echoVerdict, validateUnified, type EchoMismatch, type Issue, type UnifiedContext, type UnifiedDraft, type UnifiedEcho } from './rules'
 
 export interface UnifiedTarget { projectId: string; projectCode: string; projectName: string }
 export type SendingStep = 'read-before' | 'send' | 'read-after'
@@ -35,11 +39,18 @@ export type UnifiedState<S = unknown> =
   | { status: 'idle'; errors: string[] }
   | ({ status: 'confirming'; draft: UnifiedDraft; items: Array<{ label: string; value: string }> } & Base)
   | ({ status: 'sending'; step: SendingStep; before?: S } & Base)
-  /** via='reply'：Reply success=true；via='readback'：结果未知，但回读逐字段一致。verified：回读逐字段一致 */
-  | ({ status: 'success'; via: 'reply' | 'readback'; verified: boolean; before: S; after: S | null; afterError?: string; mismatches: EchoMismatch[] } & Base)
+  /** 已生效：回读逐字段一致。via='reply'：Reply success=true；via='readback'：应答结果未知，但回读逐字段一致 */
+  | ({ status: 'success'; via: 'reply' | 'readback'; before: S; after: S } & Base)
+  /** 未变化：Reply success=true，但读到的值和下发的不一样（mismatches 里至少一条 differ） */
+  | ({ status: 'unapplied'; before: S; after: S; mismatches: EchoMismatch[] } & Base)
+  /** 无法核对：Reply success=true，没有不一致的，但有字段设备没回报或回读接口读不到 */
+  | ({ status: 'unverifiable'; before: S; after: S; mismatches: EchoMismatch[] } & Base)
   | ({ status: 'failure'; outcome: FailureOutcome; error: string; before?: S; after?: S | null; afterError?: string } & Base)
-  /** 结果未知且没能核对一致：提示「结果未确认，请刷新查看」，不重试 */
-  | ({ status: 'unknown'; error: string; cause: string; before: S; after: S | null; afterError?: string; mismatches: EchoMismatch[] } & Base)
+  /**
+   * 结果未知：应答结果未知且回读没核对一致（replied=false，「结果未确认，请刷新查看」），
+   * 或 Reply success=true 但下发后回读失败（replied=true，「已下发，结果未知」）。不重试
+   */
+  | ({ status: 'unknown'; replied: boolean; error: string; cause: string; before: S; after: S | null; afterError?: string; mismatches: EchoMismatch[] } & Base)
 
 export type UnifiedEvent<S = unknown> =
   | { type: 'REJECT'; errors: string[] }
@@ -49,12 +60,18 @@ export type UnifiedEvent<S = unknown> =
   /** 页面卸载、切换项目或发送前复核不过：confirming / 发送前的 sending → idle */
   | { type: 'ABORT'; errors: string[] }
   | { type: 'STEP'; step: SendingStep; before?: S }
-  | { type: 'SUCCEED'; via: 'reply' | 'readback'; verified: boolean; before: S; after: S | null; afterError?: string; mismatches: EchoMismatch[] }
+  | { type: 'SUCCEED'; via: 'reply' | 'readback'; before: S; after: S }
+  | { type: 'UNAPPLIED'; before: S; after: S; mismatches: EchoMismatch[] }
+  | { type: 'UNVERIFIABLE'; before: S; after: S; mismatches: EchoMismatch[] }
   | { type: 'FAIL'; outcome: FailureOutcome; error: string; before?: S; after?: S | null; afterError?: string }
-  | { type: 'UNKNOWN'; cause: string; before: S; after: S | null; afterError?: string; mismatches: EchoMismatch[] }
+  | { type: 'UNKNOWN'; replied: boolean; cause: string; before: S; after: S | null; afterError?: string; mismatches: EchoMismatch[] }
   | { type: 'RESET' }
 
 export const INITIAL: UnifiedState<never> = Object.freeze({ status: 'idle', errors: [] as string[] }) as UnifiedState<never>
+
+/** 结束状态（success / unapplied / unverifiable / failure / unknown） */
+export const isDone = (s: UnifiedState<unknown>): boolean =>
+  s.status === 'success' || s.status === 'unapplied' || s.status === 'unverifiable' || s.status === 'failure' || s.status === 'unknown'
 
 /** 纯状态转移；不合法的事件返回原状态（同一引用） */
 export function transition<S>(s: UnifiedState<S>, e: UnifiedEvent<S>): UnifiedState<S> {
@@ -74,18 +91,22 @@ export function transition<S>(s: UnifiedState<S>, e: UnifiedEvent<S>): UnifiedSt
       return s.status === 'sending' ? { ...s, step: e.step, before: e.before ?? s.before } : s
     case 'SUCCEED':
       return s.status === 'sending'
-        ? { status: 'success', target: s.target, query: s.query, via: e.via, verified: e.verified, before: e.before, after: e.after, afterError: e.afterError, mismatches: e.mismatches }
+        ? { status: 'success', target: s.target, query: s.query, via: e.via, before: e.before, after: e.after }
         : s
+    case 'UNAPPLIED':
+      return s.status === 'sending' ? { status: 'unapplied', target: s.target, query: s.query, before: e.before, after: e.after, mismatches: e.mismatches } : s
+    case 'UNVERIFIABLE':
+      return s.status === 'sending' ? { status: 'unverifiable', target: s.target, query: s.query, before: e.before, after: e.after, mismatches: e.mismatches } : s
     case 'FAIL':
       return s.status === 'sending'
         ? { status: 'failure', target: s.target, query: s.query, outcome: e.outcome, error: e.error, before: e.before, after: e.after, afterError: e.afterError }
         : s
     case 'UNKNOWN':
       return s.status === 'sending'
-        ? { status: 'unknown', target: s.target, query: s.query, error: TEXT.unconfirmed, cause: e.cause, before: e.before, after: e.after, afterError: e.afterError, mismatches: e.mismatches }
+        ? { status: 'unknown', target: s.target, query: s.query, replied: e.replied, error: e.replied ? TEXT.sentUnknown : TEXT.unconfirmed, cause: e.cause, before: e.before, after: e.after, afterError: e.afterError, mismatches: e.mismatches }
         : s
     case 'RESET':
-      return s.status === 'success' || s.status === 'failure' || s.status === 'unknown' ? { status: 'idle', errors: [] } : s
+      return isDone(s) ? { status: 'idle', errors: [] } : s
   }
 }
 
@@ -249,13 +270,27 @@ export function createUnifiedController<S>(deps: UnifiedDeps<S>): UnifiedControl
       write('read-after', target, { codes: ['READ_FAILED'], error: e })
     }
     const mismatches = verify(query, after)
-    const verified = after !== null && mismatches.length === 0
-    const mismatchFields = mismatches.map((m) => m.field)
+    const verdict = after === null ? null : echoVerdict(mismatches)
+    const byKind = (...kinds: EchoMismatch['kind'][]) => mismatches.filter((m) => kinds.includes(m.kind)).map((m) => m.field)
 
     if (outcome === null) {
-      const afterError = readErr === null ? undefined : `${TEXT.readAfterFailed}：${errText(readErr)}`
-      write('success', target, { codes: [verified ? 'VERIFIED' : readErr ? 'NOT_VERIFIED' : 'ECHO_MISMATCH'], fields: verified ? fields : mismatchFields })
-      dispatch({ type: 'SUCCEED', via: 'reply', verified, before, after, afterError, mismatches })
+      // Reply success=true 只算「已下发」，以回读为准
+      if (after === null) {
+        // 回读失败：结果未知（不算成功）
+        write('unknown', target, { codes: ['REPLY_OK', 'READ_FAILED'], error: readErr, fields })
+        dispatch({ type: 'UNKNOWN', replied: true, cause: '', before, after: null, afterError: `${TEXT.readAfterFailedUnknown}：${errText(readErr)}`, mismatches })
+        return state
+      }
+      if (verdict === 'applied') {
+        write('success', target, { codes: ['REPLY_OK', 'VERIFIED'], fields })
+        dispatch({ type: 'SUCCEED', via: 'reply', before, after })
+      } else if (verdict === 'unchanged') {
+        write('unapplied', target, { codes: ['REPLY_OK', 'ECHO_MISMATCH'], fields: byKind('differ') })
+        dispatch({ type: 'UNAPPLIED', before, after, mismatches })
+      } else {
+        write('unverifiable', target, { codes: ['REPLY_OK', 'NOT_VERIFIED'], fields: byKind('missing', 'unreadable') })
+        dispatch({ type: 'UNVERIFIABLE', before, after, mismatches })
+      }
       return state
     }
     if (outcome === 'rejected') {
@@ -264,15 +299,15 @@ export function createUnifiedController<S>(deps: UnifiedDeps<S>): UnifiedControl
       dispatch({ type: 'FAIL', outcome: 'rejected', error: `${TEXT.failure}：${errText(sendError)}`, before, after, afterError })
       return state
     }
-    // 结果未知：回读逐字段一致就算成功（已核对），否则停在 unknown，不重试
-    if (verified) {
+    // 应答结果未知：回读逐字段一致就算成功（已核对），否则停在 unknown，不重试
+    if (after !== null && verdict === 'applied') {
       write('success', target, { codes: ['UNKNOWN', 'VERIFIED'], error: sendError, fields })
-      dispatch({ type: 'SUCCEED', via: 'readback', verified: true, before, after, mismatches: [] })
+      dispatch({ type: 'SUCCEED', via: 'readback', before, after })
       return state
     }
     const afterError = readErr === null ? undefined : `${TEXT.readAfterFailedUnknown}：${errText(readErr)}`
-    write('unknown', target, { codes: ['UNKNOWN', readErr ? 'READ_FAILED' : 'ECHO_MISMATCH'], error: sendError, fields: mismatchFields })
-    dispatch({ type: 'UNKNOWN', cause: errText(sendError), before, after, afterError, mismatches })
+    write('unknown', target, { codes: ['UNKNOWN', readErr ? 'READ_FAILED' : verdict === 'unchanged' ? 'ECHO_MISMATCH' : 'NOT_VERIFIED'], error: sendError, fields: mismatches.map((m) => m.field) })
+    dispatch({ type: 'UNKNOWN', replied: false, cause: errText(sendError), before, after, afterError, mismatches })
     return state
   }
 

@@ -34,7 +34,7 @@ describe('useUnifiedControl（StrictMode）', () => {
     act(() => { result.current.request({ roomSwitch: 1 }) })
     expect(result.current.state.status).toBe('confirming')
     await act(async () => { await result.current.confirm() })
-    expect(result.current.state).toMatchObject({ status: 'success', verified: true })
+    expect(result.current.state).toMatchObject({ status: 'success', via: 'reply' })
     expect(o.send).toHaveBeenCalledTimes(1)
   })
 

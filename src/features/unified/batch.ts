@@ -8,14 +8,16 @@
 // - 写入口：控制器给出的 {id, code} 先在最新项目列表里找回整个 Project，id 与 code 都对得上才把 Project 交给写入口；
 //   对不上（项目被移除或 code 变了）按本地拦截处理（write_blocked，肯定没发出）。
 // - 写锁（src/api/writeLock.ts，接入见 lock.ts）：每个项目发送前 acquire（同一块控制屏 / DTU / 项目被占 → 不发，提示「上一条下发还在
-//   处理中」）；beforeSend 链里 claim(token) 放在最后；拿到写 Promise 立刻 markSent；结果出来后 settle（成功 ok、明确被拒或没发出 fail、
-//   结果未知 unknown：锁到回读核对一致或有效期到期）。批次截止时间只影响界面上的标注，不放锁。
+//   处理中」）；beforeSend 链里 claim(token) 放在最后；拿到写 Promise 立刻 markSent。结算口径（Fable 11/24 裁定）：
+//   明确被拒或没发出 → fail；应答 success=true 只算「已下发」，不立刻放锁，等状态机下发后回读：逐字段一致（已生效）→ ok 放锁，
+//   未变化 / 无法核对 / 结果未知 → unknown，交给写锁核对，核对一致或有效期到期才放；应答结果未知 → unknown。
+//   批次截止时间只影响界面上的标注，不放锁。
 import { callCtrl, writeCtrl, type CtrlReply, type WriteQuery } from '@/api/ctrl'
 import { ApiError } from '@/api/errors'
 import type { WriteProject } from '@/api/guard'
 import { TEXT } from './constants'
 import { consoleLogger, type UnifiedLogger } from './log'
-import { createUnifiedController, outcomeOf, type UnifiedController, type UnifiedState } from './machine'
+import { createUnifiedController, isDone, outcomeOf, type UnifiedController, type UnifiedState } from './machine'
 import { describeQuery, type UnifiedContext, type UnifiedDraft, type UnifiedEcho } from './rules'
 import { acquire, claim, lockOf, markOverdue, markSent, OTHER_ACCOUNT_TEXT, settle, verify, type LockToken } from '@/api/writeLock'
 import { LOCK_BUSY_TEXT, lockTargetOf, recordOf } from './lock'
@@ -54,11 +56,15 @@ const INVALID = 65536
 const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) && v !== INVALID && v !== -1 ? v : null)
 const same = (xs: Array<number | null>): number | null => (xs.length && xs.every((x) => x !== null && x === xs[0]) ? xs[0] : null)
 
-/** 200 的房间列表 → 快照。全部房间一致才给值，不一致或没读到为 null（核对时算「未回读到」）；系统开关 / 运行模式没有读接口 */
+/**
+ * 200 的房间列表 → 快照。汇总值：全部房间读到且一致才给值，否则为 null；perRoom 留逐房间读数，核对按房间逐个比。
+ * switch / set_temp 是 optional：设备没回报（undefined）记 null（无法核对），不能当成 0（关）。
+ * 系统开关 / 运行模式没有读接口，不给这两个键（核对时记「未核对」）
+ */
 export function summarizeRooms(rooms: ReadonlyArray<{ switch?: number; setTemp?: number }>): UnifiedSnapshot {
-  const sw = same(rooms.map((r) => num(r.switch)))
-  const t = same(rooms.map((r) => { const v = num(r.setTemp); return v === null ? null : Math.round(v * 100) / 100 }))
-  return { rooms: rooms.length, roomSwitch: sw, roomTemp: t }
+  const sws = rooms.map((r) => num(r.switch))
+  const ts = rooms.map((r) => { const v = num(r.setTemp); return v === null ? null : Math.round(v * 100) / 100 })
+  return { rooms: rooms.length, roomSwitch: same(sws), roomTemp: same(ts), perRoom: { roomSwitch: sws, roomTemp: ts } }
 }
 
 /** 真实回读：ctrl 200（只读） */
@@ -77,7 +83,8 @@ export type BatchSender = (project: BatchProject, query: WriteQuery<203>, opts: 
 // 取消在发出前由 beforeSend 最先检查（recheck 第一行），效果等同 http 层的信号检查
 export const defaultBatchSender: BatchSender = (project, query, opts) => writeCtrl(203, project, query, { beforeSend: opts.beforeSend })
 
-export type RowStatus = 'waiting' | 'sending' | 'success' | 'failure' | 'unknown' | 'not-sent'
+/** success 已生效、unapplied 未变化、unverifiable 无法核对、unknown 结果未知 */
+export type RowStatus = 'waiting' | 'sending' | 'success' | 'unapplied' | 'unverifiable' | 'failure' | 'unknown' | 'not-sent'
 export interface BatchRow {
   id: string
   code: string
@@ -133,7 +140,7 @@ export const LOGIN_ABNORMAL_TEXT = '登录状态异常，请重新登录后下�
 export const BATCH_DEADLINE_MS = 35_000
 export const DEADLINE_NOT_SENT = '超过 35 秒截止时间，未下发（超时）'
 export const DEADLINE_UNKNOWN = '超过 35 秒截止时间仍未收到应答，结果未确认，请刷新查看；未自动重试'
-export const DEADLINE_REPLIED_OK = '控制屏已确认生效；下发后回读在 35 秒截止前未完成，未核对'
+export const DEADLINE_REPLIED_OK = '已下发，结果未知：下发后回读在 35 秒截止前未完成，请稍后刷新确认；未自动重试'
 export const DEADLINE_REPLIED_FAIL = '控制屏明确拒绝（未自动重试）；下发后回读在 35 秒截止前未完成'
 /** 下发前读到房间全部关着，这次又要设温度（且没同时开房间）：不发（后端答复⑦） */
 export const ROOMS_OFF_TEXT = '下发前读到房间都关着，不能设定温度，未下发'
@@ -143,6 +150,8 @@ export function rowStatus(s: UnifiedState<unknown>, started: boolean): RowStatus
     case 'confirming': return 'waiting'
     case 'sending': return 'sending'
     case 'success': return 'success'
+    case 'unapplied': return 'unapplied'
+    case 'unverifiable': return 'unverifiable'
     case 'failure': return 'failure'
     case 'unknown': return 'unknown'
     case 'idle': return started ? 'not-sent' : 'waiting'
@@ -171,7 +180,7 @@ export function createUnifiedBatch(deps: BatchDeps) {
     /** 写锁令牌（acquire 成功后才有） */
     token?: LockToken
     /** 截止时冻结的结果 */
-    final?: { status: 'not-sent' | 'unknown' | 'success' | 'failure'; note: string; notExecuted?: boolean }
+    final?: { status: 'not-sent' | 'unknown' | 'failure'; note: string; notExecuted?: boolean }
   }
   let entries: Entry[] = []
   let state: BatchState = { phase: 'idle', rows: [], errors: [], items: [] }
@@ -239,8 +248,10 @@ export function createUnifiedBatch(deps: BatchDeps) {
     try { out = send(p, q, { beforeSend, signal: ac.signal }) } catch (x) { settle(token, 'fail'); return Promise.reject(x) }
     markSent(token, out, recordOf(q))
     out.then((r) => {
-      if (e.sent) e.reply = r?.success === true ? 'ok' : 'rejected'
-      settle(token, r?.success === true ? 'ok' : 'fail')
+      const ok = r?.success === true
+      if (e.sent) e.reply = ok ? 'ok' : 'rejected'
+      // success=true 只算「已下发」：已认领的不在这里放锁，等下发后回读的结论（见 settleByReadback）
+      if (!ok || !e.sent) settle(token, ok ? 'ok' : 'fail')
     }, (err) => {
       const o = outcomeOf(err)
       if (e.sent) e.reply = o === 'unknown' ? 'error' : 'rejected'
@@ -248,6 +259,16 @@ export function createUnifiedBatch(deps: BatchDeps) {
       settle(token, o === 'unknown' ? 'unknown' : 'fail')
     })
     return out
+  }
+
+  /**
+   * 状态机结束后按回读结论结算写锁：已生效 → ok（放锁），并让锁再核对一次（应答未知、锁已是 unknown 的，核对一致即放开）；
+   * 应答 success=true 但未变化 / 无法核对 / 回读失败 → unknown（锁等核对一致或到期）。被拒、没发出的已在写 Promise 上结算过
+   */
+  const settleByReadback = (e: Entry, st: UnifiedState<UnifiedSnapshot>) => {
+    if (!e.token || !e.sent) return
+    if (st.status === 'success') { settle(e.token, 'ok'); void verify(e.token.key); return }
+    if (e.reply === 'ok' && (st.status === 'unapplied' || st.status === 'unverifiable' || st.status === 'unknown')) settle(e.token, 'unknown')
   }
 
   function clear() {
@@ -289,7 +310,8 @@ export function createUnifiedBatch(deps: BatchDeps) {
         if (s.status === 'idle') for (const m of s.errors) errs.push({ name: p.name, msg: m })
         entry.unsub = ctl.subscribe(() => {
           const st = ctl.getState()
-          if (entry.started && !entry.at && (st.status === 'success' || st.status === 'failure' || st.status === 'unknown' || st.status === 'idle')) entry.at = stamp(now())
+          if (entry.started && !entry.at && (isDone(st) || st.status === 'idle')) entry.at = stamp(now())
+          if (isDone(st)) settleByReadback(entry, st)
           if (state.phase === 'running') emit({})
         })
         entries.push(entry)
@@ -327,19 +349,19 @@ export function createUnifiedBatch(deps: BatchDeps) {
         // 截止：先置 expired（之后 beforeSend 一律拒绝），再冻结每个项目的结果
         expired = true
         for (const e of entries) {
-          const st = e.ctl.getState().status
-          if (st === 'success' || st === 'failure' || st === 'unknown') continue
-          if (st === 'idle' && e.started) continue
-          // 已发出：有应答的按应答（只是回读没做完），没应答的结果未确认；没发出：未下发（超时）
+          const cur = e.ctl.getState()
+          if (isDone(cur)) continue
+          if (cur.status === 'idle' && e.started) continue
+          // 已发出：被拒的按应答；success=true 但回读没做完、或没应答的 → 结果未知；没发出：未下发（超时）
           e.final = !e.sent ? { status: 'not-sent', note: DEADLINE_NOT_SENT }
-            : e.reply === 'ok' ? { status: 'success', note: DEADLINE_REPLIED_OK }
+            : e.reply === 'ok' ? { status: 'unknown', note: DEADLINE_REPLIED_OK }
             : e.reply === 'rejected' ? { status: 'failure', note: DEADLINE_REPLIED_FAIL }
             : { status: 'unknown', note: DEADLINE_UNKNOWN }
           e.started = true
           e.at ??= stamp(now())
           e.ctl.abort()
-          // 写锁只改标记（已过截止），不放锁
-          if (e.token) markOverdue(e.token)
+          // 写锁只改标记（已过截止），不放锁；success=true 还没回读完的按结果未知结算（回读之后一致再由 settleByReadback 核对放开）
+          if (e.token) { markOverdue(e.token); if (e.reply === 'ok') settle(e.token, 'unknown') }
         }
         onDeadline()
       }, Math.max(0, deadlineAt - now().getTime()))
@@ -372,9 +394,6 @@ export function createUnifiedBatch(deps: BatchDeps) {
           // 截止时不再等在途的项目
           if (await Promise.race([e.ctl.confirm().then(() => 'done' as const), deadline]) === 'deadline') break
           if (!e.at) e.at = stamp(now())
-          // 状态机下发后回读逐字段一致：让写锁再核对一次（结果未知的锁一致即放开；已放开的无影响）
-          const st = e.ctl.getState()
-          if (e.token && st.status === 'success' && st.verified) void verify(e.token.key)
           emit({})
         }
         clearTimeout(timer)

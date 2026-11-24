@@ -18,7 +18,8 @@ const sameTemp = (a: number, b: number) => Math.abs(a - b) < 0.05
 
 /** 201 字段 → 200 字段；不改的字段（-1）不比 */
 const ROOM_FIELDS: Record<string, (r: Rooms['data'][number], v: number) => boolean> = {
-  temperature: (r, v) => sameTemp(r.setTemp, v),
+  // set_temp / switch 是 optional：设备没回报（undefined）一律不一致（无法核对）
+  temperature: (r, v) => r.setTemp !== undefined && sameTemp(r.setTemp, v),
   eco: (r, v) => r.eco === v,
   switch: (r, v) => r.switch === v,
 }

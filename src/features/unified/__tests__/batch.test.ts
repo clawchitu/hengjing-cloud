@@ -32,10 +32,16 @@ const gated = () => { let release!: () => void; const gate = new Promise<void>((
 
 describe('summarizeRooms（ctrl 200 → 回读快照）', () => {
   it('全部房间一致才给值；65536 / -1 视为没读到；不一致为 null', () => {
-    expect(summarizeRooms([{ switch: 1, setTemp: 25.5 }, { switch: 1, setTemp: 25.5 }])).toEqual({ rooms: 2, roomSwitch: 1, roomTemp: 25.5 })
-    expect(summarizeRooms([{ switch: 1, setTemp: 25.5 }, { switch: 0, setTemp: 26 }])).toEqual({ rooms: 2, roomSwitch: null, roomTemp: null })
-    expect(summarizeRooms([{ switch: 65536, setTemp: 65536 }])).toEqual({ rooms: 1, roomSwitch: null, roomTemp: null })
-    expect(summarizeRooms([])).toEqual({ rooms: 0, roomSwitch: null, roomTemp: null })
+    expect(summarizeRooms([{ switch: 1, setTemp: 25.5 }, { switch: 1, setTemp: 25.5 }])).toEqual({ rooms: 2, roomSwitch: 1, roomTemp: 25.5, perRoom: { roomSwitch: [1, 1], roomTemp: [25.5, 25.5] } })
+    expect(summarizeRooms([{ switch: 1, setTemp: 25.5 }, { switch: 0, setTemp: 26 }])).toEqual({ rooms: 2, roomSwitch: null, roomTemp: null, perRoom: { roomSwitch: [1, 0], roomTemp: [25.5, 26] } })
+    expect(summarizeRooms([{ switch: 65536, setTemp: 65536 }])).toEqual({ rooms: 1, roomSwitch: null, roomTemp: null, perRoom: { roomSwitch: [null], roomTemp: [null] } })
+    expect(summarizeRooms([])).toEqual({ rooms: 0, roomSwitch: null, roomTemp: null, perRoom: { roomSwitch: [], roomTemp: [] } })
+  })
+
+  it('switch / set_temp 缺失（设备没回报，optional 解码为 undefined）记 null，不当成 0（关）；系统开关 / 运行模式不给键', () => {
+    const s = summarizeRooms([{ setTemp: 21.5 }, { switch: 1, setTemp: 24.5 }])
+    expect(s).toEqual({ rooms: 2, roomSwitch: null, roomTemp: null, perRoom: { roomSwitch: [null, 1], roomTemp: [21.5, 24.5] } })
+    expect('systemSwitch' in s || 'systemMode' in s).toBe(false)
   })
 })
 
@@ -104,14 +110,14 @@ describe('start：逐个下发，三种结果，不重试', () => {
     expect(done.phase).toBe('done')
     expect(done.rows.map((r) => r.status)).toEqual(['success', 'success'])
     const s = done.rows[0].state
-    expect(s.status === 'success' && [s.before, s.after, s.verified]).toEqual([{ rooms: 2, roomSwitch: 0, roomTemp: 26 }, { rooms: 2, roomSwitch: 1, roomTemp: 26 }, true])
+    expect(s.status === 'success' && [s.before, s.after]).toEqual([{ rooms: 2, roomSwitch: 0, roomTemp: 26 }, { rooms: 2, roomSwitch: 1, roomTemp: 26 }])
     expect(done.rows[0].at).toBe('2026-11-24 10:00:00')
   })
 
   it('控制屏拒绝 → 失败，只发一次，不重试；下一个项目照常', async () => {
     let n = 0
     const { batch, send } = setup([P('a', '1'), P('b', '2')], { send: async () => (n++ === 0 ? { success: false, msg: '设备忙' } : { success: true, msg: '' }) })
-    batch.prepare(['a', 'b'], { roomSwitch: 0 })
+    batch.prepare(['a', 'b'], { roomSwitch: 1 })
     const done = await batch.start()
     expect(send).toHaveBeenCalledTimes(2)
     expect(done.rows.map((r) => r.status)).toEqual(['failure', 'success'])
@@ -277,9 +283,9 @@ describe('start：逐个下发，三种结果，不重试', () => {
   })
 
   it.each([
-    ['成功', { success: true, msg: '' }, 'success'],
+    ['成功（只算已下发，回读没完成 → 结果未知）', { success: true, msg: '' }, 'unknown'],
     ['明确拒绝', { success: false, msg: '设备忙' }, 'failure'],
-  ] as const)('截止时 203 已%s、只是下发后回读没完成：按应答记，不误标「结果未确认」', async (_n, reply, status) => {
+  ] as const)('截止时 203 已%s、只是下发后回读没完成', async (_n, reply, status) => {
     const slow = gated()
     let reads = 0
     const t = setup([P('a', '1')], { send: async (_p, _q, o) => { if (!o.beforeSend()) throw new ApiError('write_blocked', 'x'); return reply }, deadlineMs: 60, realNow: true })
@@ -309,7 +315,7 @@ describe('start：逐个下发，三种结果，不重试', () => {
     const a = P('a', '1'), b = P('b', '2')
     const refresh = vi.fn(async () => [{ ...a, online: false }, b])
     const w = fakeWire()
-    const batch = createUnifiedBatch({ getProjects: () => [a, b], readBack: async () => ({ rooms: 1, roomSwitch: 0, roomTemp: 26 }), send: w.send, log: () => {}, refreshProjects: refresh })
+    const batch = createUnifiedBatch({ getProjects: () => [a, b], readBack: async () => ({ rooms: 1, roomSwitch: 1, roomTemp: 26 }), send: w.send, log: () => {}, refreshProjects: refresh })
     batch.prepare(['a', 'b'], { roomSwitch: 1 })
     const done = await batch.start()
     expect(refresh).toHaveBeenCalledTimes(1)

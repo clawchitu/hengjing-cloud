@@ -127,16 +127,28 @@ export function describeQuery(q: WriteQuery<203>): Array<{ label: string; value:
   return out
 }
 
-/** 回读整理后的统一控制相关值（页面把 200/210 等读数映射成这个形状）；缺失或 null 表示没读到 */
+/**
+ * 回读整理后的统一控制相关值（页面把 200/210 等读数映射成这个形状）。
+ * - undefined（不给这个键）：回读接口根本没有这项读数（如 200 里没有系统开关、运行模式）→ 未核对
+ * - null：接口有这项读数，但设备没回报（protobuf 里字段缺失）、取值无效或没有房间 → 无法核对，不能当成 0（关）
+ */
 export interface UnifiedEcho {
   systemSwitch?: number | null
   systemMode?: number | null
   roomSwitch?: number | null
   roomTemp?: number | null
+  /** 逐房间读数（null = 该房间没回报或取值无效）。给了就按房间逐个核对，不看上面的汇总值 */
+  perRoom?: { roomSwitch?: ReadonlyArray<number | null>; roomTemp?: ReadonlyArray<number | null> }
 }
-export type EchoField = keyof UnifiedEcho
+export type EchoField = Exclude<keyof UnifiedEcho, 'perRoom'>
 export const ECHO_FIELDS: readonly EchoField[] = ['systemSwitch', 'systemMode', 'roomSwitch', 'roomTemp']
-export interface EchoMismatch { field: EchoField; kind: 'missing' | 'differ'; message: string }
+/**
+ * 逐字段核对结论（只列没核对一致的字段）：
+ * - differ：读到了、但值和下发的不一样（未变化）
+ * - missing：接口有这项读数，但设备没回报 / 回读失败（无法核对）
+ * - unreadable：回读接口没有这项读数（未核对）
+ */
+export interface EchoMismatch { field: EchoField; kind: 'missing' | 'differ' | 'unreadable'; message: string }
 
 /** 本次下发改了哪些字段（-1 / 模式 0 的不算） */
 export function changedFields(q: WriteQuery<203>): EchoField[] {
@@ -145,23 +157,49 @@ export function changedFields(q: WriteQuery<203>): EchoField[] {
 
 const FIELD_LABEL: Record<EchoField, string> = { systemSwitch: TEXT.systemSwitch, systemMode: TEXT.systemMode, roomSwitch: TEXT.roomSwitch, roomTemp: TEXT.roomTemp }
 const NONE: WriteQuery<203> = { systemSwitch: UNCHANGED, systemMode: Mode.OPERATION_MODE_NONE, roomSwitch: UNCHANGED, roomTemp: UNCHANGED }
+const valid = (v: number | null | undefined): v is number => typeof v === 'number' && Number.isFinite(v)
 
-/** 逐字段核对：只核对下发了的字段；温度按 0.01 容差比较（float32）。空数组 = 全部一致 */
+/**
+ * 逐字段核对：只核对下发了的字段；温度按 0.01 容差比较（float32）。空数组 = 全部一致。
+ * after 为 null（回读失败）时每个字段都是 missing
+ */
 export function echoMismatches(q: WriteQuery<203>, after: UnifiedEcho | null | undefined): EchoMismatch[] {
   const out: EchoMismatch[] = []
   for (const k of changedFields(q)) {
-    const got = after?.[k]
-    if (got === null || got === undefined || !Number.isFinite(got)) {
-      out.push({ field: k, kind: 'missing', message: TEXT.echoMissing(FIELD_LABEL[k]) })
+    const label = FIELD_LABEL[k]
+    const perRoom = k === 'roomSwitch' || k === 'roomTemp' ? after?.perRoom?.[k] : undefined
+    if (after && !(k in after) && perRoom === undefined) {
+      out.push({ field: k, kind: 'unreadable', message: TEXT.echoUnreadable(label) })
       continue
     }
-    const same = k === 'roomTemp' ? Math.abs(got - q.roomTemp) < 0.01 : got === q[k]
-    if (same) continue
-    const sentText = describeQuery({ ...NONE, [k]: q[k] })[0]?.value ?? String(q[k])
-    const isSw = k === 'systemSwitch' || k === 'roomSwitch'
-    // 开关回读到 0/1 以外的值时直接显示原始数字，避免「下发 关闭，回读 关闭」这种矛盾文案
-    const gotText = isSw && got !== SWITCH_ON && got !== SWITCH_OFF ? String(got) : describeQuery({ ...NONE, [k]: got })[0]?.value ?? String(got)
-    out.push({ field: k, kind: 'differ', message: TEXT.echoDiffer(FIELD_LABEL[k], sentText, gotText) })
+    const vals: ReadonlyArray<number | null | undefined> = perRoom ?? (after ? [after[k]] : [])
+    const same = (got: number) => (k === 'roomTemp' ? Math.abs(got - q.roomTemp) < 0.01 : got === q[k])
+    const present = vals.filter(valid)
+    const bad = present.filter((v) => !same(v))
+    if (bad.length) {
+      const got = bad[0]
+      const sentText = describeQuery({ ...NONE, [k]: q[k] })[0]?.value ?? String(q[k])
+      const isSw = k === 'systemSwitch' || k === 'roomSwitch'
+      // 开关回读到 0/1 以外的值时直接显示原始数字，避免「下发 关闭，回读 关闭」这种矛盾文案
+      const gotText = isSw && got !== SWITCH_ON && got !== SWITCH_OFF ? String(got) : describeQuery({ ...NONE, [k]: got })[0]?.value ?? String(got)
+      const part = perRoom && bad.length < perRoom.length ? TEXT.echoPart(perRoom.length, bad.length) : ''
+      out.push({ field: k, kind: 'differ', message: TEXT.echoDiffer(label, sentText, gotText) + part })
+      continue
+    }
+    // 没有任何读数（回读失败、没有房间），或有房间没回报：无法核对
+    if (!vals.length || present.length < vals.length) out.push({ field: k, kind: 'missing', message: TEXT.echoMissing(label) })
   }
   return out
+}
+
+/**
+ * 回读结论（控制屏已应答 success=true 之后）：
+ * - applied：下发的字段全部读到且一致（已生效）
+ * - unchanged：有字段读到了、但和下发的不一样（未变化）
+ * - unverifiable：没有不一致的，但有字段没回报 / 接口读不到（无法核对）
+ */
+export type EchoVerdict = 'applied' | 'unchanged' | 'unverifiable'
+export function echoVerdict(ms: readonly EchoMismatch[]): EchoVerdict {
+  if (ms.some((m) => m.kind === 'differ')) return 'unchanged'
+  return ms.length ? 'unverifiable' : 'applied'
 }

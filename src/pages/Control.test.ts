@@ -22,6 +22,7 @@ import { __resetMockUnifiedForTests, mockUnifiedRead, mockUnifiedSend } from '..
 import Control, { lastResultKey } from './Control'
 import { setCurrentUserId } from '../api/auth'
 import { __resetWriteLockForTests, OTHER_ACCOUNT_TEXT, STORAGE_PREFIX } from '../api/writeLock'
+import { TEXT } from '../features/unified/constants'
 
 beforeAll(() => {
   const proto = Element.prototype as unknown as Record<string, unknown>
@@ -212,7 +213,7 @@ describe('下发', () => {
     expect(be.callsTo('/ctrl/unified-ctrl-set')).toHaveLength(0) // 确认前不发
     const r0 = reads(be)
     await click(okIn(dlg))
-    const badge = await screen.findByText('成功', { selector: '[data-slot=badge]' }, { timeout: 3000 })
+    const badge = await screen.findByText('已生效', { selector: '[data-slot=badge]' }, { timeout: 3000 })
     // 下发前读一次（203 发出时已读 1 次）、下发后读一次；之后页面再刷新一次房间状态
     expect(readsAtSend - r0).toBe(1)
     expect(reads(be) - r0).toBe(3)
@@ -291,7 +292,8 @@ describe('下发', () => {
   it('下发还没返回时：结果卡片仍是上一次的内容、没有说明；进度在卡片外；按钮「下发中…」禁用', async () => {
     let release!: () => void
     const gate = new Promise<void>((r) => { release = r })
-    const be = backend({ '/ctrl/room-temperature-data-get': () => rooms(1, 26), '/ctrl/unified-ctrl-set': async () => { await gate; return reply(true) } })
+    let be!: ReturnType<typeof backend>
+    be = backend({ '/ctrl/room-temperature-data-get': room200(() => be, [1, 26], [1, 26.5]), '/ctrl/unified-ctrl-set': async () => { await gate; return reply(true) } })
     const dlg = await prepare()
     const card = () => document.querySelector<HTMLElement>('[aria-label="最近一次执行结果"]')!
     const cardBefore = card().textContent
@@ -305,7 +307,7 @@ describe('下发', () => {
     const btn = screen.getByRole('button', { name: '下发中…' })
     expect(btn.hasAttribute('disabled')).toBe(true)
     release()
-    await screen.findByText('成功', { selector: '[data-slot=badge]' }, { timeout: 3000 })
+    await screen.findByText('已生效', { selector: '[data-slot=badge]' }, { timeout: 3000 })
     expect(screen.queryByRole('status')).toBeNull()
   })
 
@@ -346,9 +348,14 @@ describe('下发', () => {
     let gateNext = false
     let release!: () => void
     const gate = new Promise<void>((r) => { release = r })
-    const be = backend({ '/ctrl/room-temperature-data-get': () => rooms(1, 26), '/ctrl/unified-ctrl-set': async () => { if (gateNext) await gate; return reply(true) } })
+    // 第一轮升到 26.5、第二轮降回 26：每轮下发后回读都一致
+    let be!: ReturnType<typeof backend>
+    be = backend({
+      '/ctrl/room-temperature-data-get': () => { const n = be.callsTo('/ctrl/unified-ctrl-set').length; return rooms(1, n === 1 ? 26.5 : 26) },
+      '/ctrl/unified-ctrl-set': async () => { if (gateNext) await gate; return reply(true) },
+    })
     await click(okIn(await prepare()))
-    await screen.findByText('成功', { selector: '[data-slot=badge]' }, { timeout: 3000 })
+    await screen.findByText('已生效', { selector: '[data-slot=badge]' }, { timeout: 3000 })
     const card = () => document.querySelector<HTMLElement>('[aria-label="最近一次执行结果"]')!
     const prev = card().textContent
     expect(prev).toContain('测试项目0829')
@@ -364,10 +371,46 @@ describe('下发', () => {
     await waitFor(() => expect(screen.queryByRole('status')).toBeNull(), { timeout: 3000 })
   })
 
-  it('500 且回读不一致 → 结果未确认，提示刷新查看，不重试', async () => {
+  // 下发结果口径（Fable 11/24 裁定）：success=true 只算「已下发」，以回读为准
+  it('203 success=true 但回读房间开关仍是关 → 未变化（不报成功），说明里给出不一致字段', async () => {
+    const be = backend({ '/ctrl/room-temperature-data-get': () => rooms(0, 26), '/ctrl/unified-ctrl-set': () => reply(true) })
+    await click(okIn(await prepare()))
+    const badge = await screen.findByText('未变化', { selector: '[data-slot=badge]' }, { timeout: 3000 })
+    expectFourCells(badge)
+    expect(screen.queryByText('已生效', { selector: '[data-slot=badge]' })).toBeNull()
+    const notes = await openNotes()
+    expect(notes).toContain(TEXT.unapplied)
+    expect(notes).toContain('房间开关下发 开启，回读 关闭')
+    expect(notes).not.toContain(TEXT.success)
+    expect(be.callsTo('/ctrl/unified-ctrl-set')).toHaveLength(1)
+  })
+
+  it('部分字段一致：房间开关已开、温度没变 → 未变化，只列温度', async () => {
+    let be!: ReturnType<typeof backend>
+    be = backend({ '/ctrl/room-temperature-data-get': room200(() => be, [0, 26], [1, 26]), '/ctrl/unified-ctrl-set': () => reply(true) })
+    await click(okIn(await prepare()))
+    await screen.findByText('未变化', { selector: '[data-slot=badge]' }, { timeout: 3000 })
+    const notes = await openNotes()
+    expect(notes).toContain('房间温度下发 26.5°C，回读 26°C')
+    expect(notes).not.toContain('房间开关下发')
+  })
+
+  it('200 里房间没有 switch 字段 → 无法核对，回读显示「开关未知」而不是「关」', async () => {
+    const noSwitch = (t: number) => json({ body: encodeMessage(pb.RoomTemperatureDataGetReplySchema, { data: [{ id: 1, name: '客厅', setTemp: t }, { id: 2, name: '主卧', setTemp: t }] }) })
+    let be!: ReturnType<typeof backend>
+    be = backend({ '/ctrl/room-temperature-data-get': () => noSwitch(be.callsTo('/ctrl/unified-ctrl-set').length ? 26.5 : 26), '/ctrl/unified-ctrl-set': () => reply(true) })
+    await click(okIn(await prepare()))
+    await screen.findByText('无法核对', { selector: '[data-slot=badge]' }, { timeout: 3000 })
+    const notes = await openNotes()
+    expect(notes).toContain(TEXT.unverifiable)
+    expect(notes).toContain('房间开关未知')
+    expect(notes).not.toMatch(/房间关|回读 关闭/)
+  })
+
+  it('500 且回读不一致 → 结果未知，提示刷新查看，不重试', async () => {
     const be = backend({ '/ctrl/room-temperature-data-get': () => rooms(0, 26), '/ctrl/unified-ctrl-set': () => text('oops', 500) })
     await click(okIn(await prepare()))
-    const badge = await screen.findByText('结果未确认', { selector: '[data-slot=badge]' }, { timeout: 3000 })
+    const badge = await screen.findByText('结果未知', { selector: '[data-slot=badge]' }, { timeout: 3000 })
     expectFourCells(badge)
     expect(await openNotes()).toContain('结果未确认，请刷新查看')
     expect(be.callsTo('/ctrl/unified-ctrl-set')).toHaveLength(1)
@@ -376,11 +419,11 @@ describe('下发', () => {
   it('结果在本标签页保留：卸载后重新进入页面仍显示（同一账号、同一数据源）', async () => {
     backend({ '/ctrl/room-temperature-data-get': () => rooms(1, 26.5), '/ctrl/unified-ctrl-set': () => reply(true) })
     await click(okIn(await prepare()))
-    await screen.findByText('成功', { selector: '[data-slot=badge]' }, { timeout: 3000 })
+    await screen.findByText('已生效', { selector: '[data-slot=badge]' }, { timeout: 3000 })
     expect(sessionStorage.getItem('hjc-unified-last:real:dealer-1')).toContain('240829001')
     cleanup()
     await mount(false)
-    expect(await screen.findByText('成功', { selector: '[data-slot=badge]' })).toBeTruthy()
+    expect(await screen.findByText('已生效', { selector: '[data-slot=badge]' })).toBeTruthy()
   })
 
   it('确认弹窗打开时页面卸载：确认失效，不再读、不写', async () => {

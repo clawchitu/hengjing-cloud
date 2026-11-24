@@ -62,18 +62,24 @@ export interface ResultRow {
   detail?: string
 }
 
-const STATUS: Record<ResultRow['status'], { label: string; variant: 'green' | 'red' | 'orange' | 'gray' }> = {
-  success: { label: '成功', variant: 'green' },
+const STATUS: Record<ResultRow['status'], { label: string; variant: 'green' | 'red' | 'orange' | 'amber' | 'gray' }> = {
+  // 下发结果口径（Fable 11/24 裁定）：控制屏 success=true 只算「已下发」，以回读为准，分已生效 / 未变化 / 结果未知 / 无法核对
+  success: { label: '已生效', variant: 'green' },
+  unapplied: { label: '未变化', variant: 'orange' },
+  unverifiable: { label: '无法核对', variant: 'amber' },
   failure: { label: '失败', variant: 'red' },
-  unknown: { label: '结果未确认', variant: 'orange' },
+  unknown: { label: '结果未知', variant: 'orange' },
   'not-sent': { label: '未下发', variant: 'gray' },
 }
 
+/** 汇总值为 null 时：有房间没回报 → 未知（不能显示成「关」）；都回报了但不一样 → 不一致 */
+const unreported = (vals: ReadonlyArray<number | null> | undefined) => !vals || vals.some((v) => v === null)
 const fmtSnap = (s: UnifiedSnapshot | null | undefined) => {
   if (!s) return '未读到'
   if (!s.rooms) return '无房间'
-  const sw = s.roomSwitch === 1 ? '开' : s.roomSwitch === 0 ? '关' : '不一致'
-  return `房间${sw} · ${s.roomTemp == null ? '温度不一致' : s.roomTemp.toFixed(1) + '°C'}`
+  const sw = s.roomSwitch === 1 ? '开' : s.roomSwitch === 0 ? '关' : unreported(s.perRoom?.roomSwitch) ? '开关未知' : '开关不一致'
+  const t = s.roomTemp != null ? s.roomTemp.toFixed(1) + '°C' : unreported(s.perRoom?.roomTemp) ? '温度未知' : '温度不一致'
+  return `房间${sw} · ${t}`
 }
 
 /** 每行的说明：结果原因 + 下发前后回读的回显 */
@@ -83,11 +89,12 @@ function rowDetail(r: BatchRow): string {
   if (r.note) return [r.note, 'before' in s && s.before ? `回读：下发前 ${fmtSnap(s.before as UnifiedSnapshot)}` : ''].filter(Boolean).join('；')
   const echo = (before?: UnifiedSnapshot, after?: UnifiedSnapshot | null) => `回读：下发前 ${fmtSnap(before)}，下发后 ${fmtSnap(after)}`
   switch (s.status) {
-    case 'success': {
-      const head = s.via === 'reply' ? TEXT.success : `${TEXT.success}（${TEXT.verified}）`
-      const notes = [s.afterError, ...s.mismatches.map((m) => m.message)].filter(Boolean)
-      return [head, ...notes, echo(s.before, s.after)].join('；')
-    }
+    case 'success':
+      return [s.via === 'reply' ? TEXT.success : `${TEXT.success}（${TEXT.verified}）`, echo(s.before, s.after)].join('；')
+    case 'unapplied':
+      return [TEXT.unapplied, ...s.mismatches.map((m) => m.message), TEXT.retryHint, echo(s.before, s.after)].join('；')
+    case 'unverifiable':
+      return [TEXT.unverifiable, ...s.mismatches.map((m) => m.message), TEXT.retryHint, echo(s.before, s.after)].join('；')
     case 'failure':
       return [s.error, s.afterError, TEXT.retryHint, s.before ? echo(s.before, s.after) : ''].filter(Boolean).join('；')
     case 'unknown':
@@ -247,8 +254,12 @@ export default function Control() {
     if (rows.some((r) => r.status !== 'not-sent' && !r.notExecuted)) void queryClient.invalidateQueries({ queryKey: ['unified-snap'] })
     batch.reset()
     const n = (st: ResultRow['status']) => rows.filter((r) => r.status === st).length
+    // 只有全部回读一致（已生效）才弹成功提示
     if (n('success') === rows.length) toast(`${TEXT.success}（${rows.length} 个项目）`)
-    else toast([n('success') && `成功 ${n('success')} 个`, n('failure') && `失败 ${n('failure')} 个`, n('unknown') && `结果未确认 ${n('unknown')} 个，请刷新查看`, n('not-sent') && `未下发 ${n('not-sent')} 个`].filter(Boolean).join('，') + '。未自动重试', true)
+    else toast([
+      n('success') && `已生效 ${n('success')} 个`, n('unapplied') && `未变化 ${n('unapplied')} 个`, n('unverifiable') && `无法核对 ${n('unverifiable')} 个`,
+      n('unknown') && `结果未知 ${n('unknown')} 个`, n('failure') && `失败 ${n('failure')} 个`, n('not-sent') && `未下发 ${n('not-sent')} 个`,
+    ].filter(Boolean).join('，') + '。请稍后刷新确认，未自动重试', true)
   }
 
   const opt = <T,>(cur: T, v: T, set: (v: T) => void, label: ReactNode, key: string) =>
@@ -350,7 +361,7 @@ export default function Control() {
       {/* 下发进度在结果卡片外面；卡片里继续显示上一次的结果 */}
       {run.phase === 'running' && (
         <div className="muted unified-progress" role="status" style={{ margin: '0 0 12px', fontSize: 13 }}>
-          <Icon icon={faSpinner} spin /> {TEXT.sending}全部完成后更新下方结果
+          <Icon icon={faSpinner} spin /> {run.rows.some((r) => r.state.status === 'sending' && r.state.step === 'read-after') ? TEXT.verifying : TEXT.sending}全部完成后更新下方结果
         </div>
       )}
       {/* 改动 6：结果卡片只有 项目、项目ID、状态、操作时间 四项，不放任何说明 */}

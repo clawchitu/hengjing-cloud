@@ -34,6 +34,17 @@ const ROOM = {
 }
 
 describe('ctrl 编解码', () => {
+  it('200 的 switch / set_temp 是 optional：没回报（字段缺失）解码为 undefined，回报 0 才是 0', () => {
+    const missing = encodeMessage(pb.RoomTemperatureDataGetReplySchema, { data: [{ id: 1, name: '房间11', temperature: 22 }] })
+    const r1 = decodeReply(pb.RoomTemperatureDataGetReplySchema, missing) as { data: Array<Record<string, unknown>> }
+    expect(r1.data[0].switch).toBeUndefined()
+    expect(r1.data[0].setTemp).toBeUndefined()
+    const zero = encodeMessage(pb.RoomTemperatureDataGetReplySchema, { data: [{ id: 1, name: '房间11', switch: 0, setTemp: 0 }] })
+    const r0 = decodeReply(pb.RoomTemperatureDataGetReplySchema, zero) as { data: Array<Record<string, unknown>> }
+    expect(r0.data[0].switch).toBe(0)
+    expect(r0.data[0].setTemp).toBe(0)
+  })
+
   it('11 条消息都有路由和 Query/Reply；写消息正好是 201/203/204/206', () => {
     expect(Object.keys(CTRL)).toEqual(['200', '201', '202', '203', '204', '205', '206', '207', '208', '209', '210'])
     expect(Object.entries(CTRL).filter(([, d]) => 'write' in d).map(([k]) => k)).toEqual(['201', '203', '204', '206'])

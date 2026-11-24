@@ -67,7 +67,12 @@ export const TEXT = {
   confirmOk: '确认下发',
   confirmCancel: '取消',
   sending: '正在下发…',
-  success: '下发成功，已生效',
+  /** 下发结果口径（Fable 11/24 裁定）：控制屏 success=true 只算「已下发」，以回读为准 */
+  verifying: '已下发，正在核对…',
+  success: '已生效',
+  unapplied: '已下发，设备状态尚未变化，请稍后刷新确认',
+  sentUnknown: '已下发，结果未知',
+  unverifiable: '已下发，设备未回报开关状态，无法确认是否生效',
   failure: '下发失败',
   retryHint: '未自动重试，请核对设备状态后再决定是否重新下发',
   // 校验
@@ -87,9 +92,10 @@ export const TEXT = {
   unconfirmed: '结果未确认，请刷新查看',
   verified: '已核对',
   readBeforeFailed: '下发前读取当前状态失败，未下发',
-  readAfterFailed: '下发已生效，但回读失败，请稍后刷新核对',
   readAfterFailedUnknown: '下发后回读失败，请稍后刷新核对',
   echoMismatch: '回读结果与下发值不一致，请核对',
-  echoMissing: (label: string) => `${label}未回读到`,
+  echoMissing: (label: string) => `${label}设备未回报，无法核对`,
+  echoUnreadable: (label: string) => `${label}无法回读（未核对）`,
+  echoPart: (total: number, bad: number) => `（${total} 个房间中 ${bad} 个）`,
   echoDiffer: (label: string, sent: string, got: string) => `${label}下发 ${sent}，回读 ${got}`,
 } as const

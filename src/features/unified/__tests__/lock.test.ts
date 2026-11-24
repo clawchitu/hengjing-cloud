@@ -212,6 +212,75 @@ describe('注册了 203 核对器时', () => {
     expect(L.lockOf('screen:SW')).toBeNull()
   })
 
+  // 下发结果口径（Fable 11/24 裁定）：success=true 只算「已下发」，只有回读一致才放锁；未变化 / 无法核对 / 结果未知都锁着，等核对一致或到期
+  describe('203 success=true 后按回读结算写锁', () => {
+    const okSend: BatchSender = async (_p, _q, o) => { if (!o.beforeSend()) throw new ApiError('write_blocked', 'x'); return { success: true, msg: '' } }
+    const batchWith = (id: string, reads: Array<Record<string, unknown>>, readFail = false) => createUnifiedBatch({
+      getProjects: () => [P(id, 'S' + id)], send: okSend, log: () => {}, now: () => new Date(),
+      readBack: async () => { const r = reads.shift(); if (!r && readFail) throw new ApiError('unavailable', '控制屏未连接'); return (r ?? snap) as never },
+    })
+    const off = { rooms: 3, roomSwitch: 0, roomTemp: 24.5, perRoom: { roomSwitch: [0, 0, 0], roomTemp: [21.5, 24.5, 24.5] } }
+
+    it('成功且一致 → 已生效，放锁', async () => {
+      const b = batchWith('a1', [off, { rooms: 3, roomSwitch: 1, roomTemp: null, perRoom: { roomSwitch: [1, 1, 1], roomTemp: [21.5, 24.5, 24.5] } }])
+      const done = await runOnce(b, ['a1'])
+      await flush()
+      expect(done.rows[0].status).toBe('success')
+      expect(L.lockOf('screen:Sa1')).toBeNull()
+    })
+
+    it('成功但读到的值不一致（下发开启、回读关闭）→ 未变化，锁按结果未知保持，到期才放', async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true })
+      try {
+        L.registerVerifier(203, async () => false)
+        const b = batchWith('a2', [off, off])
+        const done = await runOnce(b, ['a2'])
+        await flush()
+        expect(done.rows[0].status).toBe('unapplied')
+        const st = done.rows[0].state
+        expect(st.status === 'unapplied' && st.mismatches.map((m) => m.message)).toEqual(['房间开关下发 开启，回读 关闭'])
+        expect(L.lockOf('screen:Sa2')?.phase).toBe('unknown')
+        vi.advanceTimersByTime(L.DEFAULT_TTL_MS + 10)
+        expect(L.lockOf('screen:Sa2')).toBeNull()
+      } finally { vi.useRealTimers() }
+    })
+
+    it('部分房间一致（3 个里 1 个开）→ 未变化，标出几个房间不一致；锁保持', async () => {
+      const b = batchWith('a3', [off, { rooms: 3, roomSwitch: null, roomTemp: null, perRoom: { roomSwitch: [1, 0, 0], roomTemp: [21.5, 24.5, 24.5] } }])
+      const done = await runOnce(b, ['a3'])
+      await flush()
+      const st = done.rows[0].state
+      expect(st.status === 'unapplied' && st.mismatches[0].message).toBe('房间开关下发 开启，回读 关闭（3 个房间中 2 个）')
+      expect(L.lockOf('screen:Sa3')?.phase).toBe('unknown')
+    })
+
+    it('成功但房间没回报 switch（200 里缺字段）→ 无法核对，不判不一致；锁保持', async () => {
+      const b = batchWith('a4', [off, { rooms: 3, roomSwitch: null, roomTemp: null, perRoom: { roomSwitch: [null, null, null], roomTemp: [21.5, 24.5, 24.5] } }])
+      const done = await runOnce(b, ['a4'])
+      await flush()
+      expect(done.rows[0].status).toBe('unverifiable')
+      expect(L.lockOf('screen:Sa4')?.phase).toBe('unknown')
+    })
+
+    it('成功但下发后回读失败 → 结果未知，锁保持', async () => {
+      const b = batchWith('a5', [off], true)
+      const done = await runOnce(b, ['a5'])
+      await flush()
+      expect(done.rows[0].status).toBe('unknown')
+      expect(L.lockOf('screen:Sa5')?.phase).toBe('unknown')
+    })
+
+    it('锁按结果未知保持后，核对器回读一致 → 提前放锁', async () => {
+      L.configureWriteLock({ resolveProject: (id) => (id === 'a6' ? { id: 'a6', controlScreenId: 'Sa6' } : null) })
+      L.registerVerifier(203, async () => true)
+      const b = batchWith('a6', [off, off])
+      const done = await runOnce(b, ['a6'])
+      await flush()
+      expect(done.rows[0].status).toBe('unapplied')
+      expect(L.lockOf('screen:Sa6')).toBeNull()
+    })
+  })
+
   it('批次截止调 markOverdue：锁标记已过截止，但不放', async () => {
     const send: BatchSender = (_p, _q, o) => { if (!o.beforeSend()) return Promise.reject(new ApiError('write_blocked', 'x')); return new Promise(() => {}) }
     const b = createUnifiedBatch({ getProjects: () => [P('d', 'SD')], readBack: async () => snap, send, log: () => {}, deadlineMs: 20 })
