@@ -5,6 +5,7 @@ import { Chart, Icon, axis, tooltip, useAsync } from '../components/legacy'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { useApp } from '../app/store'
 import { useFrequentProjects, useOrgStat, whenProjectSet, type FrequentProject, type Project } from '../data/org'
 import { defaultText } from '../api/errors'
@@ -154,11 +155,21 @@ function Favorites({ favs, onOpen }: { favs: ReturnType<typeof useFrequentProjec
 function FavCard({ fav: { project: p, count }, onOpen }: { fav: FrequentProject; onOpen: (p: Project) => void }) {
   // 真实接口只有行政区划码，城市 / 区县名为空：只拼有值的部分
   const loc = [p.city, p.district, p.kind || p.appName].filter(Boolean).join(' · ')
-  return (
-    <div className="proj-card" title={count === undefined ? undefined : `已选择 ${count} 次`} onClick={() => onOpen(p)}>
+  // 原生 title= 换成 Tooltip（没有选择次数时不显示提示）；卡片补上键盘可达：Tab 聚焦、Enter / 空格打开（同点击；按住不连发），
+  // 键盘聚焦时提示立即出现。可访问名称用项目名、在线状态和编号（不读整张卡的文字）
+  const card = (
+    <div className="proj-card" role="button" tabIndex={0} aria-label={`${p.name}，${p.online ? '在线' : '离线'}，${p.code}`} onClick={() => onOpen(p)}
+      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); if (!e.repeat) onOpen(p) } }}>
       <div className="pc-h"><Badge variant={p.online ? 'green' : 'gray'} style={{ color: p.online ? undefined : 'var(--muted)' }}>{p.online ? '在线' : '离线'}</Badge><span className="faint num" style={{ fontSize: 12 }}>{p.code}</span></div>
       <h4>{p.name}</h4>
       {loc && <div className="pc-loc">{loc}</div>}
     </div>
+  )
+  if (count === undefined) return card
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>{card}</TooltipTrigger>
+      <TooltipContent side="bottom">已选择 {count} 次</TooltipContent>
+    </Tooltip>
   )
 }

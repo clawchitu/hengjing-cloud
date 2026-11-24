@@ -4,6 +4,7 @@ import { Icon, useAsync, useClock } from '../components/legacy'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardHeader, CardTitle } from '@/components/ui/card'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { Switch } from '@/components/ui/switch'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
@@ -150,7 +151,16 @@ export default function FreshAir() {
                 <CardHeader style={{ marginBottom: 12 }}><CardTitle>运行设置</CardTitle><span className="row muted" style={{ fontSize: 13 }}>开关 <Switch checked={draft.on} onCheckedChange={(v) => setDraft({ ...draft, on: v })} aria-label="开关" /></span></CardHeader>
                 <h4>控制类型设置</h4><div className="faint" style={{ fontSize: 11.5 }}>露点设定与湿度设定二选一</div>
                 <div className="ctl-type">
-                  <button className={'opt-btn' + (dewOn ? ' on' : '')} disabled={!canDew} title={canDew ? undefined : '当前模式固定为湿度控制'} onClick={() => canDew && setDraft({ ...draft, control: 'dew' })}><Icon icon={faTemperatureLow} />露点控制</button>
+                  {canDew ? <button className={'opt-btn' + (dewOn ? ' on' : '')} onClick={() => setDraft({ ...draft, control: 'dew' })}><Icon icon={faTemperatureLow} />露点控制</button> : (
+                    // 原生 title= 换成 Tooltip。禁用按钮收不到指针事件、也不能聚焦，所以包一层可聚焦的 span 作触发器（Radix 推荐写法）；
+                    // span 用 grid 让按钮照旧撑满网格单元，.ctl-type .opt-btn 的后代选择器不受影响
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <span className="grid" tabIndex={0}><button className={'opt-btn' + (dewOn ? ' on' : '')} disabled><Icon icon={faTemperatureLow} />露点控制</button></span>
+                      </TooltipTrigger>
+                      <TooltipContent>当前模式固定为湿度控制</TooltipContent>
+                    </Tooltip>
+                  )}
                   <button className={'opt-btn' + (!dewOn ? ' on' : '')} disabled={!canDew} onClick={() => canDew && setDraft({ ...draft, control: 'hum' })}><Icon icon={!canDew ? faLock : faDroplet} />湿度控制</button>
                 </div>
                 {!canDew && <div className="ctl-hint"><Icon icon={faLock} />当前模式（{u.mode}）固定为湿度控制，不可修改</div>}
