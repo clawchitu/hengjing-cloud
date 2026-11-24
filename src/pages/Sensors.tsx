@@ -14,25 +14,25 @@ import { useApp } from '../app/store'
 import { defaultText } from '../api/errors'
 import { useCurrentProject, type Project } from '../data/org'
 import {
-  chartSeries, kpiOf, pickSensor, sensorTag, summarize, timeLabel, useAirSensors, useSensorHours,
-  type AirSensor, type ChartSeries, type HoursView, type Limits, type MetricKey, type SensorRange, type SummaryRow,
+  chartSeries, dateTimeLabel, expectedHours, kpiOf, limitsOf, limitsText, minuteLabel, pickSensor, safeFileName, sensorTag, summarize, timeLabel, toCsv, useAirSensors, useSensorHours,
+  type AirSensor, type ChartSeries, type CsvCell, type HoursView, type Limits, type MetricKey, type SensorRange, type SummaryRow,
 } from '../data/sensors'
 import type { DayPoint, HourPoint } from '../api'
 
 export type Range = '24小时' | '7日' | '30日'
 
-interface MetricDef extends Limits { key: MetricKey; tab: string; label: string; unit: string; kpiUnit: string; icon: IconDefinition; color: string; bg: string; digits: number; rangeText: string }
-/** 指标与标准范围（前端常量，沿用演示版阈值） */
+interface MetricDef { key: MetricKey; tab: string; label: string; unit: string; kpiUnit: string; icon: IconDefinition; color: string; bg: string; digits: number }
+/** 指标（标准范围见 data/sensors/stats.ts limitsOf，按季节切换温度） */
 export const METRICS: MetricDef[] = [
-  { key: 'temp', tab: '温度', label: '温度 (°C)', unit: '°C', kpiUnit: '°C', icon: faTemperatureHalf, color: '#f97316', bg: '#fff7ed', digits: 1, lo: 24, hi: 27, rangeText: '24 – 27' },
-  { key: 'hum', tab: '湿度', label: '湿度 (%RH)', unit: '%', kpiUnit: '%RH', icon: faDroplet, color: '#0891b2', bg: '#ecfeff', digits: 0, lo: 40, hi: 60, rangeText: '40 – 60' },
-  { key: 'dew', tab: '露点', label: '露点 (°C)', unit: '°C', kpiUnit: '°C', icon: faTemperatureLow, color: '#6366f1', bg: '#eef2ff', digits: 1, hi: 17, rangeText: '≤ 17.0' },
-  { key: 'pm25', tab: 'PM2.5', label: 'PM2.5 (μg/m³)', unit: '', kpiUnit: 'μg/m³', icon: faSmog, color: '#10b981', bg: '#ecfdf5', digits: 0, hi: 35, rangeText: '≤ 35' },
-  { key: 'co2', tab: 'CO₂', label: 'CO₂ (ppm)', unit: 'ppm', kpiUnit: 'ppm', icon: faLeaf, color: '#f59e0b', bg: '#fffbeb', digits: 0, hi: 1000, rangeText: '≤ 1000' },
+  { key: 'temp', tab: '温度', label: '温度 (°C)', unit: '°C', kpiUnit: '°C', icon: faTemperatureHalf, color: '#f97316', bg: '#fff7ed', digits: 1 },
+  { key: 'hum', tab: '湿度', label: '湿度 (%RH)', unit: '%', kpiUnit: '%RH', icon: faDroplet, color: '#0891b2', bg: '#ecfeff', digits: 0 },
+  { key: 'dew', tab: '露点', label: '露点 (°C)', unit: '°C', kpiUnit: '°C', icon: faTemperatureLow, color: '#6366f1', bg: '#eef2ff', digits: 1 },
+  { key: 'pm25', tab: 'PM2.5', label: 'PM2.5 (μg/m³)', unit: '', kpiUnit: 'μg/m³', icon: faSmog, color: '#10b981', bg: '#ecfdf5', digits: 0 },
+  { key: 'co2', tab: 'CO₂', label: 'CO₂ (ppm)', unit: 'ppm', kpiUnit: 'ppm', icon: faLeaf, color: '#f59e0b', bg: '#fffbeb', digits: 0 },
 ]
-const out = (m: MetricDef, v: number) => v > m.hi || (m.lo !== undefined && v < m.lo)
-/** 达标率口径（赤兔 11/24 确认保留，表头提示写清） */
-const PCT_HINT = '有效小时中处于标准范围内的比例，7 日 / 30 日同样按小时计'
+const out = (l: Limits, v: number) => v > l.hi || (l.lo !== undefined && v < l.lo)
+/** 达标率口径（经 Fable 复核，11/24）：落在标准范围内的有效小时数 ÷ 有效小时数，三档都按小时值算 */
+const PCT_HINT = '统计时段内，小时读数落在标准范围内的时间占比；无数据的小时不计入。'
 const fmtN = (v: number, d: number) => v.toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d })
 
 /** shared: fetch stats for one device through the 24h API or the shared daily API */
@@ -48,15 +48,27 @@ export function useStats(range: Range, fetch24: () => Promise<HourPoint[]>, fetc
   return data?.range === range ? data : undefined
 }
 
-/** 指标统计汇总导出为 CSV（带 BOM，Excel 直接打开不乱码） */
-function summaryCsv(rows: readonly SummaryRow[]): string {
-  const esc = (s: string) => (/[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s)
-  const lines = [['指标', '平均值', '最大值', '最小值', '标准范围', '达标率', '有效小时数']]
-  for (const r of rows) {
-    const m = METRICS.find((x) => x.key === r.key)!
-    lines.push([m.label, r.avg.toFixed(m.digits), r.max.toFixed(m.digits), r.min.toFixed(m.digits), m.rangeText, `${r.pct}%`, String(r.n)])
+/**
+ * 指标统计汇总导出为 CSV：前几行说明项目、传感器、时间窗口与数据时间（208 刷新失败时注明），空一行后是汇总表。
+ */
+/** 汇总表的一行：r 为 null 表示装了该探头但统计时段内没有有效小时（显示「—」） */
+interface StatRow { m: MetricDef; lim: Limits; r: SummaryRow | null }
+
+function summaryCsv(o: { project: Project | null; sensor: AirSensor | undefined; range: SensorRange; start: number; end: number; stale: boolean; rows: readonly StatRow[]; expected: number }): string {
+  const lines: CsvCell[][] = [
+    ['项目', o.project ? `${o.project.name}（${o.project.code}）` : ''],
+    ['传感器', o.sensor ? `${o.sensor.name}（${o.sensor.id}）` : ''],
+    ['时间窗口', `${o.range}：${dateTimeLabel(o.start)} 至 ${dateTimeLabel(o.end)}（北京时间）`],
+    ['数据时间', `${dateTimeLabel(o.end)}${o.stale ? '（统计刷新失败，为该时刻的数据）' : ''}`],
+    ['达标率口径', PCT_HINT],
+    [],
+    ['指标', '平均值', '最大值', '最小值', '标准范围', '达标率', '有效小时数', '应有小时数'],
+  ]
+  for (const { m, lim, r } of o.rows) {
+    const f = (v: number | undefined) => (v === undefined ? '—' : v.toFixed(m.digits))
+    lines.push([m.label, f(r?.avg), f(r?.max), f(r?.min), limitsText(lim, m.digits), r ? `${r.pct}%` : '—', r?.n ?? 0, o.expected])
   }
-  return '﻿' + lines.map((l) => l.map(esc).join(',')).join('\r\n')
+  return toCsv(lines)
 }
 
 function download(name: string, text: string) {
@@ -72,14 +84,14 @@ function download(name: string, text: string) {
 const withIsolated = (vs: readonly (number | null)[]) =>
   vs.map((v, i) => (v !== null && (vs[i - 1] ?? null) === null && (vs[i + 1] ?? null) === null ? { value: v, symbol: 'circle', symbolSize: 6 } : v))
 
-function chartOption(m: MetricDef, s: ChartSeries) {
+function chartOption(m: MetricDef, l: Limits, s: ChartSeries) {
   const isDaily = !!s.daily
   const xs = s.labels
   // comfort thresholds drawn as flat dashed series (markLine collapses on a category axis)
-  const thresholdSeries = [m.lo, m.hi].filter((v): v is number => v !== undefined).map((y) => ({
-    name: y === m.hi ? `上限 ${y}` : `下限 ${y}`, type: 'line' as const, silent: true, showSymbol: false, data: xs.map(() => y), tooltip: { show: false },
+  const thresholdSeries = [l.lo, l.hi].filter((v): v is number => v !== undefined).map((y) => ({
+    name: y === l.hi ? `上限 ${y}` : `下限 ${y}`, type: 'line' as const, silent: true, showSymbol: false, data: xs.map(() => y), tooltip: { show: false },
     lineStyle: { color: '#94a3b8', type: [6, 6] as unknown as 'dashed', width: 1.2 }, itemStyle: { color: '#94a3b8' },
-    endLabel: { show: true, formatter: y === m.hi ? `上限 ${y}` : `下限 ${y}`, color: '#64748b', fontSize: 11 },
+    endLabel: { show: true, formatter: y === l.hi ? `上限 ${y}` : `下限 ${y}`, color: '#64748b', fontSize: 11 },
   }))
   const line = (name: string, data: (number | null)[], color: string, width: number, dashed = false) => ({
     name, type: 'line' as const, smooth: isDaily ? true : 0.5, showSymbol: true, symbol: 'none', data: withIsolated(data),
@@ -92,8 +104,8 @@ function chartOption(m: MetricDef, s: ChartSeries) {
     xAxis: { type: 'category' as const, boundaryGap: false, data: xs, axisLabel: { ...axis.label, interval: isDaily ? 'auto' as const : 2 }, axisLine: { show: false }, axisTick: { show: false } },
     yAxis: { type: 'value' as const, scale: true,
       // keep the comfort thresholds inside the plotted range so the dashed lines are always visible
-      min: (v: { min: number; max: number }) => { const lo = Math.min(v.min, m.lo ?? v.min); const pad = (Math.max(v.max, m.hi) - lo) * 0.08; return +(lo - pad).toFixed(m.digits) },
-      max: (v: { min: number; max: number }) => { const hi = Math.max(v.max, m.hi); const pad = (hi - Math.min(v.min, m.lo ?? v.min)) * 0.08; return +(hi + pad).toFixed(m.digits) },
+      min: (v: { min: number; max: number }) => { const lo = Math.min(v.min, l.lo ?? v.min); const pad = (Math.max(v.max, l.hi) - lo) * 0.08; return +(lo - pad).toFixed(m.digits) },
+      max: (v: { min: number; max: number }) => { const hi = Math.max(v.max, l.hi); const pad = (hi - Math.min(v.min, l.lo ?? v.min)) * 0.08; return +(hi + pad).toFixed(m.digits) },
       axisLabel: axis.label, axisLine: { show: false }, axisTick: { show: false }, splitLine: { show: false } },
     series: s.daily ? [
       line('日均值', s.daily.avg, '#f28c38', 2.6),
@@ -150,12 +162,18 @@ export default function Sensors() {
   const cur = pickSensor(sensors, selRaw)
   const hours = useSensorHours(project, cur, range)
 
-  const curMetrics = cur ? METRICS.filter((m) => cur[m.key] !== null) : []
-  const metric = curMetrics.find((m) => m.key === metricRaw) ?? curMetrics[0]
-  // 统计都是几百个点以内的纯计算，每次渲染直接算
+  // 统计都是几百个点以内的纯计算，每次渲染直接算。
+  // 统计区的指标：装了该探头（207 有读数）或 208 里有过有效数据的（207 的 65536 只决定实时卡片，历史数据照样能看）；
+  // 两边都没有（没装该探头）的指标整行隐藏。装了但统计时段内没有有效小时的，汇总显示「—」。
   const ready = hours.kind === 'ready' ? hours : null
+  // 标准范围（温度按季节）用取数时刻判定：统计区用窗口结束时刻，卡片和 KPI 用 207 取数时刻
+  const at = ready?.window.end ?? (view.kind === 'ready' ? view.updatedAt : 0)
+  const statMetrics = ready && cur ? METRICS.filter((m) => cur[m.key] !== null || ready.points.some((p) => p[m.key] !== null)) : []
+  const metric = statMetrics.find((m) => m.key === metricRaw) ?? statMetrics[0]
   const series = ready && metric ? chartSeries(ready.points, metric.key, ready.window) : null
-  const rows = ready ? curMetrics.map((m) => summarize(ready.points, m.key, m)).filter((r): r is SummaryRow => r !== null) : []
+  const rows: StatRow[] = ready ? statMetrics.map((m) => { const lim = limitsOf(m.key, at); return { m, lim, r: summarize(ready.points, m.key, lim) } }) : []
+  const expected = ready ? expectedHours(ready.window) : 0
+  const liveAt = view.kind === 'ready' ? view.updatedAt : at
 
   const hasList = view.kind === 'ready'
   const updated = view.kind === 'ready' || view.kind === 'empty'
@@ -182,11 +200,12 @@ export default function Sensors() {
   const kpis = METRICS.map((m) => ({ m, s: kpiOf(sensors, m.key) })).filter((k): k is { m: MetricDef; s: NonNullable<ReturnType<typeof kpiOf>> } => k.s !== null)
   const tag = (t: string) => t === '良好' ? 'green' as const : t === '离线' ? 'gray' as const : 'orange' as const
   const msg = hoursMessage(hours, cur)
-  const chartMsg = msg ?? (!metric ? '该传感器暂无可统计的指标' : series && !series.hasData ? '该时段暂无数据' : null)
-  const tableMsg = msg ?? (rows.length === 0 ? '该时段暂无统计数据' : null)
+  const chartMsg = msg ?? (!metric || (series && !series.hasData) ? '该时段暂无数据' : null)
+  const tableMsg = msg ?? (rows.every((x) => x.r === null) ? '该时段暂无统计数据' : null)
   const onExport = () => {
-    const name = `空气质量统计_${cur?.name ?? ''}_${range}.csv`
-    download(name, summaryCsv(rows))
+    if (!ready) return
+    const name = safeFileName(`空气质量统计_${cur?.name ?? ''}_${range}`, 'csv')
+    download(name, summaryCsv({ project, sensor: cur, range, start: ready.window.start, end: ready.window.end, stale: !!ready.staleError, rows, expected }))
     toast(`已导出：${name}`)
   }
 
@@ -198,7 +217,7 @@ export default function Sensors() {
           <Card key={m.key} className="kpi">
             <div className="k-label">平均 {m.tab}<span className="k-ico" style={{ background: m.bg, color: m.color }}><Icon icon={m.icon} /></span></div>
             <div className="k-val num">{fmtN(s.avg, m.digits)}<small>{m.kpiUnit}</small></div>
-            <div className="k-foot" style={{ color: 'var(--text-2)' }}>最高 <span className={s.max > m.hi ? 'red' : ''}>{fmtN(s.max, m.digits)}</span> · 最低 {fmtN(s.min, m.digits)}{s.n < on.length && <span className="faint"> · {s.n}/{on.length} 台具备</span>}</div>
+            <div className="k-foot" style={{ color: 'var(--text-2)' }}>最高 <span className={s.max > limitsOf(m.key, liveAt).hi ? 'red' : ''}>{fmtN(s.max, m.digits)}</span> · 最低 {fmtN(s.min, m.digits)}{s.n < on.length && <span className="faint"> · {s.n}/{on.length} 台具备</span>}</div>
           </Card>
         ))}
       </div>}
@@ -207,7 +226,7 @@ export default function Sensors() {
           <div className="legend-dots"><span><span className="dot green" style={{ width: 7, height: 7 }} />良好</span><span><span className="dot" style={{ color: '#f59e0b', width: 7, height: 7 }} />超标</span><span><span className="dot" style={{ color: '#cbd5e1', width: 7, height: 7 }} />离线</span></div></CardHeader>
         <div className="hj-grid g4">
           {sensors.map((s) => {
-            const t = sensorTag(s)
+            const t = sensorTag(s, liveAt)
             const pick = () => (s.online ? setSel(s.key) : toast(`${s.name} 离线，暂无实时数据`, true))
             return (
               <div key={s.key} role="button" tabIndex={0} aria-pressed={s.key === cur?.key} className={'sensor' + (s.key === cur?.key ? ' on' : '') + (!s.online ? ' off' : '')}
@@ -218,8 +237,8 @@ export default function Sensors() {
                     {s.temp !== null && <div><span>温度</span><b>{s.temp.toFixed(1)}°</b></div>}
                     {s.hum !== null && <div><span>湿度</span><b>{Math.round(s.hum)}%</b></div>}
                     {s.dew !== null && <div><span>露点</span><b>{s.dew.toFixed(1)}°</b></div>}
-                    {s.pm25 !== null && <div><span>PM2.5</span><b className={s.pm25 > 20 ? 'orange' : ''}>{Math.round(s.pm25)}</b></div>}
-                    {s.co2 !== null && <div style={{ gridColumn: 'span 2' }}><span>CO₂</span><b className={s.co2 > 1000 ? 'orange' : ''}>{Math.round(s.co2).toLocaleString()}<small>ppm</small></b></div>}
+                    {s.pm25 !== null && <div><span>PM2.5</span><b className={s.pm25 > limitsOf('pm25', liveAt).hi ? 'orange' : ''}>{Math.round(s.pm25)}</b></div>}
+                    {s.co2 !== null && <div style={{ gridColumn: 'span 2' }}><span>CO₂</span><b className={s.co2 > limitsOf('co2', liveAt).hi ? 'orange' : ''}>{Math.round(s.co2).toLocaleString()}<small>ppm</small></b></div>}
                     {s.pm25 === null && s.co2 === null && <div className="nocap" style={{ gridColumn: 'span 3' }}>该型号无 PM2.5 / CO₂ 探头</div>}
                   </> : <>
                     <div><span>温度</span><b>—</b></div>
@@ -234,27 +253,30 @@ export default function Sensors() {
       </Card>
       <Card style={{ marginBottom: 20 }}>
         <CardHeader><div><CardTitle>数据统计 · {cur?.name ?? '—'}</CardTitle><CardDescription>{range === '24小时' ? '24 小时趋势（逐时）' : `近${range === '7日' ? ' 7 ' : ' 30 '}日趋势（日均 / 日最高 / 日最低）`}，虚线为舒适区阈值</CardDescription></div>
-          {metric && <Seg value={metric.tab} options={curMetrics.map((m) => m.tab)} onChange={(t) => setMetric(METRICS.find((m) => m.tab === t)!.key)} />}</CardHeader>
-        {!chartMsg && metric && series ? <Chart option={chartOption(metric, series)} height={300} />
+          {metric && <Seg value={metric.tab} options={statMetrics.map((m) => m.tab)} onChange={(t) => setMetric(METRICS.find((m) => m.tab === t)!.key)} />}</CardHeader>
+        {ready?.staleError && <div role="alert" className="row" style={{ gap: 10, marginBottom: 10, fontSize: 12.5, color: 'var(--amber)' }}><Icon icon={faTriangleExclamation} />统计刷新失败，显示 {minuteLabel(ready.window.end)} 的数据<Button onClick={ready.retry}>重试</Button></div>}
+        {!chartMsg && metric && series ? <Chart option={chartOption(metric, limitsOf(metric.key, at), series)} height={300} />
           : <div style={{ height: 300 }} className="chart-loading" role={hours.kind === 'error' ? 'alert' : 'status'}>
             <div style={{ textAlign: 'center' }}>{chartMsg}{hours.kind === 'error' && <div style={{ marginTop: 12 }}><Button onClick={hours.retry}>重试</Button></div>}</div>
           </div>}
       </Card>
       <Card pad={false}>
-        <CardHeader pad style={{ marginBottom: 0, paddingBottom: 14 }}><div><CardTitle>指标统计汇总</CardTitle><CardDescription>{cur?.name ?? '—'} · {range}</CardDescription></div><Button disabled={rows.length === 0} onClick={onExport}><Icon icon={faDownload} />导出</Button></CardHeader>
+        <CardHeader pad style={{ marginBottom: 0, paddingBottom: 14 }}><div><CardTitle>指标统计汇总</CardTitle><CardDescription>{cur?.name ?? '—'} · {range}</CardDescription></div><Button disabled={!!tableMsg} onClick={onExport}><Icon icon={faDownload} />导出</Button></CardHeader>
         <Table>
           <TableHeader><TableRow><TableHead>指标</TableHead><TableHead className="text-right">平均值</TableHead><TableHead className="text-right">最大值</TableHead><TableHead className="text-right">最小值</TableHead><TableHead className="text-right">标准范围</TableHead><TableHead style={{ paddingLeft: 40 }}>达标率<Tooltip><TooltipTrigger asChild><span role="img" tabIndex={0} aria-label={`达标率口径：${PCT_HINT}`} className="faint" style={{ marginLeft: 4, cursor: 'help' }}><Icon icon={faCircleInfo} /></span></TooltipTrigger><TooltipContent side="top">{PCT_HINT}</TooltipContent></Tooltip></TableHead></TableRow></TableHeader>
           <TableBody>
             {tableMsg ? <TableRow><TableCell colSpan={6} className="muted" style={{ textAlign: 'center' }}>{tableMsg}</TableCell></TableRow>
-              : rows.map((r) => {
-                const m = METRICS.find((x) => x.key === r.key)!
-                return (
-                  <TableRow key={r.key}>
-                    <TableCell>{m.label}</TableCell><TableCell className="num text-right">{fmtN(r.avg, m.digits)}</TableCell><TableCell className={'num text-right ' + (out(m, r.max) ? 'red' : '')}>{fmtN(r.max, m.digits)}</TableCell><TableCell className="num text-right">{fmtN(r.min, m.digits)}</TableCell><TableCell className="num text-right muted">{m.rangeText}</TableCell>
-                    <TableCell style={{ paddingLeft: 40, width: 240 }}><div className="row" style={{ gap: 10 }}><div className="bar"><i style={{ width: r.pct + '%', background: r.pct < 95 ? '#f59e0b' : undefined }} /></div><span className="num" style={{ width: 36, textAlign: 'right' }}>{r.pct}%</span></div></TableCell>
-                  </TableRow>
-                )
-              })}
+              : rows.map(({ m, lim, r }) => (
+                <TableRow key={m.key}>
+                  <TableCell>{m.label}</TableCell><TableCell className="num text-right">{r ? fmtN(r.avg, m.digits) : '—'}</TableCell><TableCell className={'num text-right ' + (r && out(lim, r.max) ? 'red' : '')}>{r ? fmtN(r.max, m.digits) : '—'}</TableCell><TableCell className="num text-right">{r ? fmtN(r.min, m.digits) : '—'}</TableCell><TableCell className="num text-right muted">{limitsText(lim, m.digits)}</TableCell>
+                  <TableCell style={{ paddingLeft: 40, width: 240 }}>
+                    {r ? <div className="row" style={{ gap: 10 }}><div className="bar"><i style={{ width: r.pct + '%', background: r.pct < 95 ? '#f59e0b' : undefined }} /></div><span className="num" style={{ width: 36, textAlign: 'right' }}>{r.pct}%</span></div>
+                      : <span className="num muted">—</span>}
+                    {/* 有效小时不到应有小时数一半：照样显示达标率，提示数据不全 */}
+                    {r && r.n * 2 < expected && <div className="faint num" style={{ fontSize: 11.5, marginTop: 4 }}>有效 {r.n}/{expected} 小时</div>}
+                  </TableCell>
+                </TableRow>
+              ))}
           </TableBody>
         </Table>
       </Card>

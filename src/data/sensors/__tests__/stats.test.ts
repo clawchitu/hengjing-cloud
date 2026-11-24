@@ -1,7 +1,9 @@
 // 208 小时数据的统计计算：取数窗口（毫秒、北京时间分时分天）、无效值（65536 / -100 / 缺失）、平均 / 最值 / 达标率、按天聚合。
 import { describe, expect, it } from 'vitest'
+import { decodeReply, encodeMessage } from '../../../api/ctrl'
+import * as pb from '../../../api/gen/ctrl200_pb.js'
 import {
-  aggregate, chartSeries, cstDayStart, dayLabel, DAY_MS, hourLabel, HOUR_MS, readingsOf, summarize, timeLabel, toHourPoints, windowOf,
+  aggregate, chartSeries, cstDayStart, dayLabel, DAY_MS, expectedHours, hourLabel, HOUR_MS, limitsOf, limitsText, readingsOf, seasonOf, summarize, timeLabel, toHourPoints, windowOf,
   type HourRecord,
 } from '../stats'
 
@@ -9,6 +11,7 @@ import {
 const cst = (s: string) => Date.parse(s + '+08:00')
 // 实测记录：date 1795474800000 = 11/24 07:00 CST，hour = 7
 const NOW = cst('2026-11-24T07:42:10')
+const M = { temp: { lo: 24, hi: 27 }, co2: { hi: 1000 }, pm25: { hi: 35 } }
 const rec = (date: number, v: Partial<HourRecord> = {}): Partial<HourRecord> => ({
   id: 9, date, hour: new Date(date + 8 * HOUR_MS).getUTCHours(), temperature: 25, humidity: 50, dewPoint: 14, co2: 600, pm25: 10, ...v,
 })
@@ -54,9 +57,25 @@ describe('时间：毫秒、北京时间', () => {
 })
 
 describe('无效值', () => {
-  it('65536（无数据）、-100（无效）、NaN、缺失都是 null；0 和负数是有效读数', () => {
-    expect(readingsOf({ temperature: 65536, humidity: -100, dewPoint: NaN, co2: undefined, pm25: 0 })).toEqual({ temp: null, hum: null, dew: null, co2: null, pm25: 0 })
-    expect(readingsOf({ temperature: -5.5, humidity: 65535 })).toMatchObject({ temp: -5.5, hum: 65535 })
+  it('65536（无数据）、-100（无效）、NaN、缺失都是 null；温度 / 露点的负数是有效读数', () => {
+    expect(readingsOf({ temperature: 65536, humidity: -100, dewPoint: NaN, co2: undefined, pm25: 65536 })).toEqual({ temp: null, hum: null, dew: null, co2: null, pm25: null })
+    expect(readingsOf({ temperature: -5.5, dewPoint: -2, humidity: 65535 })).toMatchObject({ temp: -5.5, dew: -2, hum: 65535 })
+  })
+
+  it('缺字段解码出的 0 一律无效（所有指标，含温度）；湿度、CO₂ 的负数也无效', () => {
+    expect(readingsOf({ temperature: 0, humidity: 0, dewPoint: 0, co2: 0, pm25: 0 })).toEqual({ temp: null, hum: null, dew: null, co2: null, pm25: null })
+    expect(readingsOf({ humidity: -3, co2: -1 })).toMatchObject({ hum: null, co2: null })
+    expect(readingsOf({ humidity: 1, co2: 1, pm25: 1, temperature: 0.1 })).toMatchObject({ hum: 1, co2: 1, pm25: 1, temp: 0.1 })
+  })
+
+  it('真实 protobuf：缺省的 co2 / humidity 解码成 0，按无效处理，不拉低均值', () => {
+    const date = cst('2026-11-24T05:00:00')
+    const body = encodeMessage(pb.TPAirSensorDataHourGetReplySchema, { data: [{ id: 9, date, hour: 5, temperature: 25, dewPoint: 14, pm25: 10 }, { id: 9, date: date + HOUR_MS, hour: 6, temperature: 25, humidity: 50, co2: 600, dewPoint: 14, pm25: 10 }] })
+    const r = decodeReply(pb.TPAirSensorDataHourGetReplySchema, body) as { data: Partial<HourRecord>[] }
+    expect(r.data[0].co2).toBe(0)
+    const pts = toHourPoints(r.data, 9, windowOf('24小时', NOW))
+    expect(summarize(pts, 'co2', M.co2)).toMatchObject({ avg: 600, min: 600, n: 1 })
+    expect(summarize(pts, 'hum', { lo: 40, hi: 60 })).toMatchObject({ avg: 50, n: 1 })
   })
 
   it('无效值不参与平均 / 最值', () => {
@@ -86,15 +105,28 @@ describe('toHourPoints：208 记录 → 窗口内的小时点', () => {
     expect(toHourPoints([rec(1795474800)], 9, w)).toEqual([])
   })
 
-  it('同一小时多条：后到的覆盖，不重复计入；date 不在整点的取整到整点', () => {
+  it('同一小时多条：只计一次；date 不在整点的取整到整点；同字段多个有效值取平均', () => {
     const t = cst('2026-11-24T05:00:00')
     const pts = toHourPoints([rec(t, { temperature: 20 }), rec(t + 60_000, { temperature: 26 })], 9, w)
     expect(pts).toHaveLength(1)
-    expect(pts[0]).toMatchObject({ ts: t, temp: 26 })
+    expect(pts[0]).toMatchObject({ ts: t, temp: 23 })
+  })
+
+  it('同一小时多条：无效值（65536 / -100 / 缺省 0）不覆盖有效值，按字段合并；与记录顺序无关', () => {
+    const t = cst('2026-11-24T05:00:00')
+    const a = rec(t, { temperature: 25, humidity: 65536, co2: 600, pm25: 65536 })
+    const b = rec(t, { temperature: -100, humidity: 55, co2: 0, pm25: 12 })
+    const ab = toHourPoints([a, b], 9, w)
+    const ba = toHourPoints([b, a], 9, w)
+    expect(ab).toEqual([{ ts: t, temp: 25, hum: 55, dew: 14, co2: 600, pm25: 12 }])
+    expect(ba).toEqual(ab)
+    // 有效值冲突也与顺序无关（取平均）
+    const c = rec(t, { temperature: 21 })
+    expect(toHourPoints([a, c], 9, w)).toEqual(toHourPoints([c, a], 9, w))
+    expect(toHourPoints([a, c], 9, w)[0].temp).toBe(23)
   })
 })
 
-const M = { temp: { lo: 24, hi: 27 }, co2: { hi: 1000 }, pm25: { hi: 35 } }
 
 describe('summarize：指标统计汇总（平均 / 最大 / 最小 / 达标率）', () => {
   const w = windowOf('24小时', NOW)
@@ -121,6 +153,14 @@ describe('summarize：指标统计汇总（平均 / 最大 / 最小 / 达标率�
     const pts = toHourPoints([rec(at(1), { temperature: 24, co2: 1000 }), rec(at(2), { temperature: 27, co2: 1001 })], 9, w)
     expect(summarize(pts, 'temp', M.temp)!.pct).toBe(100)
     expect(summarize(pts, 'co2', M.co2)!.pct).toBe(50)
+  })
+
+  it('达标率：只有全部达标才是 100%，否则向下取整（199/200 → 99%）', () => {
+    const pts = Array.from({ length: 200 }, (_, i) => ({ ts: i, temp: i === 0 ? 30 : 25, hum: null, dew: null, pm25: null, co2: null }))
+    expect(summarize(pts, 'temp', M.temp)!.pct).toBe(99)
+    expect(summarize(pts.slice(1), 'temp', M.temp)!.pct).toBe(100)
+    const third = [25, 25, 30].map((v, i) => ({ ts: i, temp: v, hum: null, dew: null, pm25: null, co2: null }))
+    expect(summarize(third, 'temp', M.temp)!.pct).toBe(66)
   })
 
   it('全是 65536（无探头）→ 该指标没有汇总行', () => {
@@ -172,5 +212,35 @@ describe('chartSeries：24 小时逐时 / 7、30 日按天聚合', () => {
     expect(s.labels).toHaveLength(30)
     expect(s.hasData).toBe(false)
     expect(chartSeries([], 'co2', windowOf('24小时', NOW)).hasData).toBe(false)
+  })
+})
+
+describe('标准范围（五恒指南）与应有小时数', () => {
+  it('温度按北京时间月份切换：5–10 月夏季 24–26，其余冬季 18–22；月界按北京时间', () => {
+    expect(seasonOf(cst('2026-05-01T00:00:00'))).toBe('summer')
+    expect(seasonOf(cst('2026-10-31T23:59:59'))).toBe('summer')
+    expect(seasonOf(cst('2026-11-01T00:00:00'))).toBe('winter')
+    expect(seasonOf(cst('2026-04-30T23:59:59'))).toBe('winter')
+    // UTC 还在 4 月 30 日 16:00，北京时间已是 5 月 1 日 0 点
+    expect(seasonOf(Date.parse('2026-04-30T16:00:00Z'))).toBe('summer')
+    expect(limitsOf('temp', cst('2026-07-01T12:00:00'))).toEqual({ lo: 24, hi: 26 })
+    expect(limitsOf('temp', cst('2026-01-15T10:00:00'))).toEqual({ lo: 18, hi: 22 })
+  })
+
+  it('湿度 40–60、CO₂ ≤ 800、PM2.5 ≤ 35、露点 ≤ 17.0；「标准范围」列文字同源', () => {
+    expect(limitsOf('hum', NOW)).toEqual({ lo: 40, hi: 60 })
+    expect(limitsOf('co2', NOW)).toEqual({ hi: 800 })
+    expect(limitsOf('pm25', NOW)).toEqual({ hi: 35 })
+    expect(limitsText(limitsOf('temp', NOW), 1)).toBe('18 – 22')
+    expect(limitsText(limitsOf('co2', NOW), 0)).toBe('≤ 800')
+    expect(limitsText(limitsOf('dew', NOW), 1)).toBe('≤ 17.0')
+  })
+
+  it('应有小时数按实际窗口：24 小时档 24；7 / 30 日到当前小时为止', () => {
+    expect(expectedHours(windowOf('24小时', NOW))).toBe(24)
+    expect(expectedHours(windowOf('7日', NOW))).toBe(6 * 24 + 8) // 今天 00:00–07:00 共 8 个整点
+    expect(expectedHours(windowOf('30日', NOW))).toBe(29 * 24 + 8)
+    expect(expectedHours(windowOf('7日', cst('2026-11-24T23:59:59')))).toBe(168)
+    expect(expectedHours(windowOf('30日', cst('2026-11-24T23:00:00')))).toBe(720)
   })
 })

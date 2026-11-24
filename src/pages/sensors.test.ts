@@ -21,7 +21,7 @@ import { AppProvider } from '../app/store'
 import Layout from '../components/Layout'
 import { __resetCurrentForTests } from '../data/org/current'
 import { __resetSessionViewForTests } from '../data/session'
-import { HOUR_MS, SENSOR_ROUTES, useAirSensors, useSensorHours } from '../data/sensors'
+import { __resetSensorsForTests, HOUR_MS, HOURS_POLL_MS, SENSOR_POLL_MS, SENSOR_ROUTES, SENSOR_UNAVAILABLE_POLL_MS, useAirSensors, useSensorHours } from '../data/sensors'
 import Sensors from './Sensors'
 
 // ECharts 在 jsdom 里量不到尺寸：换成一个把 option 挂在属性上的占位，断言系列数据
@@ -100,7 +100,7 @@ beforeEach(() => {
   vi.setSystemTime(NOW)
   setConfig({ apiBase: '/api', dataSource: 'real' })
   localStorage.clear(); sessionStorage.clear()
-  __resetHttpForTests(); __resetSessionForTests(); __resetSessionViewForTests(); __resetCurrentForTests(); clearTokens()
+  __resetHttpForTests(); __resetSessionForTests(); __resetSessionViewForTests(); __resetCurrentForTests(); __resetSensorsForTests(); clearTokens()
 })
 afterEach(() => { cleanup(); vi.useRealTimers(); vi.unstubAllGlobals(); setConfig(null) })
 
@@ -170,12 +170,33 @@ describe('数据与统计', () => {
     mount()
     const row = (await within(await screen.findByText('指标统计汇总').then((e) => e.closest('[data-slot=card]') as HTMLElement)).findByText('温度 (°C)')).closest('tr')!
     const cells = [...row.querySelectorAll('td')].map((td) => td.textContent)
-    expect(cells).toEqual(['温度 (°C)', '25.5', '28.0', '23.0', '24 – 27', '50%'])
+    // 11 月是冬季：温度标准范围 18 – 22，23 / 25 / 26 / 28 都不达标
+    // 有效 4 小时不到应有 24 小时的一半：照样显示达标率，下面加灰字「有效 4/24 小时」
+    expect(cells).toEqual(['温度 (°C)', '25.5', '28.0', '23.0', '18 – 22', '0%有效 4/24 小时'])
     const heads = [...summaryTable().querySelectorAll('th')].map((th) => th.textContent)
     expect(heads).toEqual(['指标', '平均值', '最大值', '最小值', '标准范围', '达标率'])
     // 达标率表头带口径说明（键盘可聚焦，读屏可读）
-    expect(within(summaryTable()).getByRole('img', { name: '达标率口径：有效小时中处于标准范围内的比例，7 日 / 30 日同样按小时计' }).tabIndex).toBe(0)
+    expect(within(summaryTable()).getByRole('img', { name: '达标率口径：统计时段内，小时读数落在标准范围内的时间占比；无数据的小时不计入。' }).tabIndex).toBe(0)
     expect(document.body.textContent).not.toMatch(/超标时长|超标天数/)
+  })
+
+  it('达标率：夏季按 24 – 26；有效小时为 0 显示「—」；数据过半不显示「有效 N/M」；没装探头的指标整行隐藏', async () => {
+    vi.setSystemTime(cst('2026-07-10T12:30:00'))
+    const at = (back: number, v: object) => ({ ...hourRec(KC2.id, 0, v), date: cst('2026-07-10T12:00:00') - back * HOUR_MS })
+    backend({
+      // 207：PM2.5 无探头（65536）；CO₂ 有探头
+      '/ctrl/air-sensor-get': () => body207([{ ...KC2, pm25: 65536 }]),
+      // 208：13 个有效小时（过半）；CO₂ 全部无效（缺省 0）；PM2.5 也全无效
+      '/ctrl/air-sensor-data-hour-get': () => body208(Array.from({ length: 13 }, (_, i) => at(i, { temperature: i < 3 ? 27 : 25, co2: 0, pm25: 65536 }))),
+    })
+    await signIn('u', 'pw', true)
+    mount()
+    const t = await within(await screen.findByText('指标统计汇总').then((e) => e.closest('[data-slot=card]') as HTMLElement)).findByText('温度 (°C)')
+    const cells = [...t.closest('tr')!.querySelectorAll('td')].map((td) => td.textContent)
+    expect(cells).toEqual(['温度 (°C)', '25.5', '27.0', '25.0', '24 – 26', '76%'])
+    const co2 = [...within(summaryTable()).getByText('CO₂ (ppm)').closest('tr')!.querySelectorAll('td')].map((td) => td.textContent)
+    expect(co2).toEqual(['CO₂ (ppm)', '—', '—', '—', '≤ 800', '—'])
+    expect(within(summaryTable()).queryByText('PM2.5 (μg/m³)')).toBeNull()
   })
 
   it('24 小时图：24 个整点，没有数据和无效值的小时是断点（null）；孤立的点单独画出来', async () => {
@@ -242,11 +263,52 @@ describe('数据与统计', () => {
     expect(click).toHaveBeenCalledTimes(1)
     const bytes = new Uint8Array(await blob!.arrayBuffer())
     expect([...bytes.slice(0, 3)]).toEqual([0xef, 0xbb, 0xbf]) // BOM：Excel 直接打开不乱码
-    const csv = await blob!.text()
-    expect(csv.replace(/^﻿/, '').split('\r\n')[0]).toBe('指标,平均值,最大值,最小值,标准范围,达标率,有效小时数')
-    expect(csv).toContain('温度 (°C),25.0,25.0,25.0,24 – 27,100%,1')
-    expect(csv).toContain('CO₂ (ppm),900,900,900,≤ 1000,100%,1')
+    const lines = (await blob!.text()).replace(/^﻿/, '').split('\r\n')
+    // 说明行：项目（名称 + code）、传感器（名称 + 设备 ID）、时间窗口与数据时间（北京时间）
+    expect(lines.slice(0, 4)).toEqual([
+      '项目,测试项目0829（240829001）',
+      `传感器,KC2（${KC2.id}）`,
+      '时间窗口,24小时：2026-11-23 08:00 至 2026-11-24 07:42（北京时间）',
+      '数据时间,2026-11-24 07:42',
+    ])
+    const csv = lines.join('\n')
+    expect(csv).toContain('温度 (°C),25.0,25.0,25.0,18 – 22,0%,1,24')
+    expect(csv).toContain('CO₂ (ppm),900,900,900,≤ 800,0%,1,24')
+    expect(csv).toContain('达标率口径,统计时段内，小时读数落在标准范围内的时间占比；无数据的小时不计入。')
+    expect(lines).toContain('指标,平均值,最大值,最小值,标准范围,达标率,有效小时数,应有小时数')
     expect(csv).not.toContain('超标')
+  })
+
+  it('统计指标由 208 的有效数据决定：207 的 PM2.5 为 65536（卡片隐藏），208 有历史值时统计照样显示', async () => {
+    backend({ '/ctrl/air-sensor-get': () => body207([{ ...KC2, pm25: 65536 }]), '/ctrl/air-sensor-data-hour-get': () => body208([hourRec(KC2.id, 1, { pm25: 12 })]) })
+    await signIn('u', 'pw', true)
+    mount()
+    const card = (await screen.findByText('KC2', { selector: 'b' })).closest('.sensor') as HTMLElement
+    expect(within(card).queryByText('PM2.5')).toBeNull()
+    await waitFor(() => expect(within(summaryTable()).getByText('PM2.5 (μg/m³)')).toBeTruthy())
+    expect(screen.getByRole('button', { name: 'PM2.5' })).toBeTruthy()
+  })
+
+  it('208 先成功后刷新失败：统计区提示「统计刷新失败，显示 HH:MM 的数据」并可重试；导出注明', async () => {
+    let blob: Blob | undefined
+    vi.stubGlobal('URL', Object.assign(URL, { createObjectURL: (b: Blob) => { blob = b; return 'blob:x' }, revokeObjectURL: () => {} }))
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+    let n = 0
+    backend({ '/ctrl/air-sensor-get': () => body207([KC2]), '/ctrl/air-sensor-data-hour-get': () => (++n === 1 ? body208([hourRec(KC2.id, 0, { temperature: 25 })]) : n === 2 ? json({ code: 3, message: '参数错误' }, 400) : body208([hourRec(KC2.id, 0, { temperature: 26 })])) })
+    await signIn('u', 'pw', true)
+    const client = mount()
+    await screen.findByTestId('chart')
+    vi.setSystemTime(NOW + 5 * 60_000)
+    await act(async () => { await client.refetchQueries({ queryKey: ['ctrl', 208] }) })
+    const alert = await screen.findByText(/统计刷新失败，显示 07:42 的数据/)
+    // 旧统计仍显示（标明时间）
+    expect(screen.getByTestId('chart')).toBeTruthy()
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: '导出' })) })
+    expect(await blob!.text()).toContain('数据时间,2026-11-24 07:42（统计刷新失败，为该时刻的数据）')
+    await act(async () => { fireEvent.click(within(alert.closest('[role=alert]') as HTMLElement).getByRole('button', { name: '重试' })) })
+    await waitFor(() => expect(screen.queryByText(/统计刷新失败/)).toBeNull())
+    const row = within(summaryTable()).getByText('温度 (°C)').closest('tr')!
+    expect(row.querySelectorAll('td')[1].textContent).toBe('26.0')
   })
 })
 
@@ -383,6 +445,118 @@ describe('项目离线 / 无项目 / 无权限 / 控制屏未连接', () => {
     await act(async () => { await client.refetchQueries({ queryKey: ['ctrl', 207] }) })
     await screen.findByText(/刷新失败，显示 07:42:10 的数据/)
     expect(screen.getByText('KC2', { selector: 'b' })).toBeTruthy()
+  })
+})
+
+describe('503 之后不显示旧数据（请求序号）', () => {
+  const r503 = () => json({ code: 14, message: '控制屏消息发送失败' }, 503)
+  const r500 = () => json({ code: 13, message: '内部错误' }, 500)
+
+  it('207：成功 → 503 → 500 不出旧读数 → 成功后显示新读数', async () => {
+    const seq: (() => Response)[] = [() => body207([KC2]), r503, r500, r500, () => body207([{ ...KC2, temperature: 22.5 }])]
+    let n = 0
+    backend({ '/ctrl/air-sensor-get': () => seq[Math.min(n++, seq.length - 1)](), '/ctrl/air-sensor-data-hour-get': () => body208([]) })
+    await signIn('u', 'pw', true)
+    const client = mount()
+    await screen.findByText('25.5°')
+    const again = async () => { await act(async () => { await client.refetchQueries({ queryKey: ['ctrl', 207] }) }) }
+    await again()
+    await screen.findByText('控制屏未连接')
+    await again() // 500（自动重试一次，仍 500）
+    await screen.findByText('空气传感器数据加载失败')
+    expect(screen.queryByText('25.5°')).toBeNull()
+    expect(screen.queryByText('KC2', { selector: 'b' })).toBeNull()
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: '重试' })) })
+    await screen.findByText('22.5°')
+  })
+
+  it('208：成功 → 503 → 500 不出旧统计 → 成功后显示新统计', async () => {
+    const seq: (() => Response)[] = [() => body208([hourRec(KC2.id, 0, { temperature: 25 })]), r503, r500, r500, () => body208([hourRec(KC2.id, 0, { temperature: 21 })])]
+    let n = 0
+    backend({ '/ctrl/air-sensor-get': () => body207([KC2]), '/ctrl/air-sensor-data-hour-get': () => seq[Math.min(n++, seq.length - 1)]() })
+    await signIn('u', 'pw', true)
+    const client = mount()
+    await screen.findByTestId('chart')
+    const again = async () => { await act(async () => { await client.refetchQueries({ queryKey: ['ctrl', 208] }) }) }
+    await again()
+    expect(await screen.findAllByText('控制屏未连接')).toHaveLength(2)
+    await again()
+    expect(await screen.findAllByText('统计数据加载失败：内部错误')).toHaveLength(2)
+    expect(screen.queryByTestId('chart')).toBeNull()
+    expect(within(summaryTable()).queryByText('温度 (°C)')).toBeNull()
+    await act(async () => { fireEvent.click(screen.getAllByRole('button', { name: '重试' })[0]) })
+    await screen.findByTestId('chart')
+    const row = within(summaryTable()).getByText('温度 (°C)').closest('tr')!
+    expect(row.querySelectorAll('td')[1].textContent).toBe('21.0')
+  })
+})
+
+describe('轮询（假定时器，跨多个周期）', () => {
+  // 推进假时钟，再让响应处理与 TanStack 的批量通知落地（各推进 1 毫秒，检查点都留了秒级余量）
+  const tick = async (ms: number) => {
+    await act(async () => { await vi.advanceTimersByTimeAsync(ms) })
+    for (let i = 0; i < 3; i++) await act(async () => { await realTurn(); await vi.advanceTimersByTimeAsync(1) })
+  }
+  // 真实的一轮事件循环（setImmediate 不在假定时器接管的列表里）
+  const realTurn = () => new Promise<void>((r) => (globalThis as unknown as { setImmediate: (f: () => void) => void }).setImmediate(r))
+  const fake = () => vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'], now: NOW })
+  const wrapperOf = () => {
+    const client = createQueryClient()
+    return ({ children }: { children: ReactNode }) => createElement(QueryClientProvider, { client }, children)
+  }
+  const r503 = () => json({ code: 14, message: '控制屏消息发送失败' }, 503)
+
+  it('207：平时 15 秒；503 期间降到 60 秒继续探测；恢复成功后回到 15 秒', async () => {
+    const plan = ['ok', '503', '503', 'ok']
+    let n = 0
+    const b = backend({ '/ctrl/air-sensor-get': () => (plan[Math.min(n++, plan.length - 1)] === 'ok' ? body207([KC2]) : r503()) })
+    await signIn('u', 'pw', true)
+    fake()
+    const h = renderHook(() => useAirSensors({ id: 'p1-entity', online: true }), { wrapper: wrapperOf() })
+    const calls = () => b.callsTo('/ctrl/air-sensor-get').length
+    await tick(0)
+    expect([calls(), h.result.current.kind]).toEqual([1, 'ready'])
+    await tick(SENSOR_POLL_MS) // ≈15 秒：第 2 次，503
+    expect([calls(), h.result.current.kind]).toEqual([2, 'unavailable'])
+    await tick(2 * SENSOR_POLL_MS) // ≈45 秒：503 后不再按 15 秒
+    await tick(SENSOR_UNAVAILABLE_POLL_MS - 2 * SENSOR_POLL_MS - 1000) // ≈74 秒
+    expect(calls()).toBe(2)
+    await tick(2000) // ≈76 秒：60 秒后的探测，仍 503
+    expect([calls(), h.result.current.kind]).toEqual([3, 'unavailable'])
+    await tick(SENSOR_UNAVAILABLE_POLL_MS - 2000) // ≈134 秒
+    expect(calls()).toBe(3)
+    await tick(2000) // ≈136 秒：恢复
+    expect([calls(), h.result.current.kind]).toEqual([4, 'ready'])
+    await tick(SENSOR_POLL_MS) // 回到 15 秒
+    expect(calls()).toBe(5)
+    await tick(SENSOR_POLL_MS)
+    expect(calls()).toBe(6)
+    h.unmount()
+  })
+
+  it('208：每 5 分钟一次，跨多个周期；503 期间不变；窗口按请求时刻滚动', async () => {
+    let n = 0
+    const b = backend({ '/ctrl/air-sensor-data-hour-get': () => (++n === 2 ? r503() : body208([])) })
+    await signIn('u', 'pw', true)
+    fake()
+    const h = renderHook(() => useSensorHours({ id: 'p1-entity', online: true }, { id: KC2.id, online: true }, '24小时'), { wrapper: wrapperOf() })
+    const calls = () => b.callsTo('/ctrl/air-sensor-data-hour-get').length
+    await tick(0)
+    expect(calls()).toBe(1)
+    await tick(HOURS_POLL_MS - 2000)
+    expect(calls()).toBe(1)
+    await tick(2000)
+    expect([calls(), h.result.current.kind]).toEqual([2, 'unavailable'])
+    await tick(HOURS_POLL_MS - 2000)
+    expect(calls()).toBe(2)
+    await tick(2000)
+    expect([calls(), h.result.current.kind]).toEqual([3, 'ready'])
+    await tick(HOURS_POLL_MS)
+    expect(calls()).toBe(4)
+    const all = b.callsTo('/ctrl/air-sensor-data-hour-get').map(q208)
+    expect(all[3].endTime - all[0].endTime).toBeGreaterThanOrEqual(3 * HOURS_POLL_MS)
+    expect(all[3].endTime - all[0].endTime).toBeLessThan(3 * HOURS_POLL_MS + 10_000)
+    h.unmount()
   })
 })
 

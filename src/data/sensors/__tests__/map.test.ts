@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { kpiOf, pickSensor, sensorTag, toAirSensors } from '../map'
 
 // 实测样本（实测记录-1124：KC2）
+const NOW = Date.parse('2026-01-15T10:00:00+08:00')
 const KC2 = { id: 2042830592, name: 'KC2', temperature: 25.5, humidity: 55, pm25: 5, co2: 580, dewPoint: 15.8, isConnected: true }
 
 describe('toAirSensors', () => {
@@ -15,6 +16,13 @@ describe('toAirSensors', () => {
     expect(s).toMatchObject({ pm25: null, co2: null, temp: 25.5, hum: 55 })
     const [t] = toAirSensors([{ ...KC2, temperature: 65536 }])
     expect(t.temp).toBeNull()
+  })
+
+  it('缺字段解码出的 0 一律无效（含温度）；湿度、CO₂ 负数无效；温度、露点负数有效', () => {
+    const [s] = toAirSensors([{ ...KC2, humidity: 0, co2: 0, temperature: 0, pm25: 0, dewPoint: 0 }])
+    expect(s).toMatchObject({ hum: null, co2: null, temp: null, pm25: null, dew: null })
+    const [t] = toAirSensors([{ ...KC2, humidity: -1, co2: -5, temperature: -3, dewPoint: -8 }])
+    expect(t).toMatchObject({ hum: null, co2: null, temp: -3, dew: -8 })
   })
 
   it('离线（is_connected 缺省 / false）：读数一律 null', () => {
@@ -33,14 +41,15 @@ describe('toAirSensors', () => {
 
 describe('sensorTag / pickSensor / kpiOf', () => {
   const list = toAirSensors([
-    { ...KC2, id: 1, name: 'A', co2: 1200 },
+    { ...KC2, id: 1, name: 'A', co2: 801 },
     { ...KC2, id: 2, name: 'B', pm25: 65536, co2: 65536, temperature: 27 },
     { ...KC2, id: 3, name: 'C', isConnected: false },
-    { ...KC2, id: 4, name: 'D', pm25: 21 },
+    { ...KC2, id: 4, name: 'D', pm25: 36, co2: 800 },
   ])
 
   it('标签：离线 > CO₂ 超标 > PM2.5 偏高 > 良好；没有探头不算超标', () => {
-    expect(list.map(sensorTag)).toEqual(['CO₂ 超标', '良好', '离线', 'PM2.5 偏高'])
+    // 阈值与「标准范围」同源：CO₂ > 800 超标（800 不算），PM2.5 > 35 偏高
+    expect(list.map((s) => sensorTag(s, NOW))).toEqual(['CO₂ 超标', '良好', '离线', 'PM2.5 偏高'])
   })
 
   it('选中：选过且在线就用它；离线或不存在回到第一个在线的', () => {
@@ -52,7 +61,7 @@ describe('sensorTag / pickSensor / kpiOf', () => {
 
   it('KPI：只算在线且有数据的传感器（65536、离线不计入）', () => {
     expect(kpiOf(list, 'temp')).toEqual({ avg: (25.5 + 27 + 25.5) / 3, max: 27, min: 25.5, n: 3 })
-    expect(kpiOf(list, 'pm25')).toEqual({ avg: 13, max: 21, min: 5, n: 2 })
+    expect(kpiOf(list, 'pm25')).toEqual({ avg: 20.5, max: 36, min: 5, n: 2 })
     expect(kpiOf(toAirSensors([{ ...KC2, co2: 65536 }]), 'co2')).toBeNull()
   })
 })

@@ -72,35 +72,58 @@ const pad2 = (n: number) => String(n).padStart(2, '0')
 export const hourLabel = (ms: number) => `${pad2(new Date(ms + CST_OFFSET_MS).getUTCHours())}:00`
 /** 北京时间的 MM-DD */
 export const dayLabel = (ms: number) => { const d = new Date(ms + CST_OFFSET_MS); return `${pad2(d.getUTCMonth() + 1)}-${pad2(d.getUTCDate())}` }
+/** 北京时间的 YYYY-MM-DD HH:MM */
+export const dateTimeLabel = (ms: number) => new Date(ms + CST_OFFSET_MS).toISOString().slice(0, 16).replace('T', ' ')
+/** 北京时间的 HH:MM */
+export const minuteLabel = (ms: number) => timeLabel(ms).slice(0, 5)
 /** 北京时间的 HH:MM:SS */
 export const timeLabel = (ms: number) => new Date(ms + CST_OFFSET_MS).toISOString().slice(11, 19)
+
+/**
+ * 设备读数的有效性（达标率口径经 Fable 复核，11/24）：65536（无数据）、-100（无效）、缺字段解码出的 0 都算无效，
+ * 不进统计的分子也不进分母。proto3 不输出值为 0 的字段，缺省字段解码出来就是 0（实测 floor_temperature 即如此），
+ * 所以所有指标（含温度）的 0 都按无效处理；湿度、CO₂ 不可能为负，负数也无效。温度、露点的负数照常有效。
+ */
+export function validReading(key: MetricKey, v: number | null): number | null {
+  if (v === null || v === 0) return null
+  if ((key === 'hum' || key === 'co2') && v < 0) return null
+  return v
+}
 
 /** 一条记录 → 有效读数 */
 export function readingsOf(r: Partial<HourRecord>): Readings {
   return {
-    temp: hourlyReading(r.temperature),
-    hum: hourlyReading(r.humidity),
-    dew: hourlyReading(r.dewPoint),
-    pm25: hourlyReading(r.pm25),
-    co2: hourlyReading(r.co2),
+    temp: validReading('temp', hourlyReading(r.temperature)),
+    hum: validReading('hum', hourlyReading(r.humidity)),
+    dew: validReading('dew', hourlyReading(r.dewPoint)),
+    pm25: validReading('pm25', hourlyReading(r.pm25)),
+    co2: validReading('co2', hourlyReading(r.co2)),
   }
 }
 
 /**
  * 208 记录 → 窗口内按时间排序的小时点。
- * - 只要这台设备的（id 缺省为 0 时不按 id 过滤）；date 不是有限数、不在 [start, end] 里的丢掉；
- * - date 统一取整到整点；同一小时出现多条时，后到的覆盖先到的（不重复计入统计）。
+ * - 只要这台设备的（id 缺省为 0 时不按 id 过滤）；date 不是有限数、不在 [start, end] 里的丢掉；date 取整到整点；
+ * - 同一小时出现多条（接口没有说明哪条为准，已列入待问后端）：按字段合并——无效值（65536 / -100 / 缺省）不覆盖
+ *   有效值；同一字段有多个有效值时取平均。结果与记录顺序无关，同一小时只计一次。
  */
 export function toHourPoints(records: readonly Partial<HourRecord>[], deviceId: number, w: Pick<StatWindow, 'start' | 'end'>): HourPoint[] {
-  const byHour = new Map<number, HourPoint>()
+  const byHour = new Map<number, Record<MetricKey, { sum: number; n: number }>>()
   for (const r of records) {
     if (r.id && r.id !== deviceId) continue
     const d = r.date
     if (typeof d !== 'number' || !Number.isFinite(d) || d < w.start || d > w.end) continue
     const ts = hourStart(d)
-    byHour.set(ts, { ts, ...readingsOf(r) })
+    let acc = byHour.get(ts)
+    if (!acc) { acc = Object.fromEntries(METRIC_KEYS.map((k) => [k, { sum: 0, n: 0 }])) as Record<MetricKey, { sum: number; n: number }>; byHour.set(ts, acc) }
+    const v = readingsOf(r)
+    for (const k of METRIC_KEYS) { const x = v[k]; if (x !== null) { acc[k].sum += x; acc[k].n += 1 } }
   }
-  return [...byHour.values()].sort((a, b) => a.ts - b.ts)
+  return [...byHour.entries()].sort((a, b) => a[0] - b[0]).map(([ts, acc]) => {
+    const p = { ts } as HourPoint
+    for (const k of METRIC_KEYS) p[k] = acc[k].n ? acc[k].sum / acc[k].n : null
+    return p
+  })
 }
 
 export interface Agg { avg: number; max: number; min: number; /** 有效小时数 */ n: number }
@@ -117,13 +140,40 @@ export function aggregate(values: readonly (number | null)[]): Agg | null {
   return n ? { avg: sum / n, max, min, n } : null
 }
 
-/** 标准范围（前端常量，沿用演示版阈值） */
+/** 标准范围 */
 export interface Limits { lo?: number; hi: number }
+
+export type Season = 'summer' | 'winter'
+/**
+ * 季节（温度标准范围按季节切换）：按北京时间月份，5–10 月为夏季，其余为冬季。
+ * 页面上的「标准范围」列、阈值虚线、达标率都用同一个时刻（统计窗口的结束时刻 = 取数时刻）判定。
+ */
+export const seasonOf = (ms: number): Season => { const m = new Date(ms + CST_OFFSET_MS).getUTCMonth() + 1; return m >= 5 && m <= 10 ? 'summer' : 'winter' }
+
+/**
+ * 标准范围（五恒指南，经 Fable 复核 11/24）：温度冬季 18–22℃、夏季 24–26℃；湿度 40–60%；CO₂ ≤ 800 ppm；PM2.5 ≤ 35 μg/m³。
+ * 露点指南未给，沿用演示版 ≤ 17.0℃。
+ */
+export function limitsOf(key: MetricKey, at: number): Limits {
+  switch (key) {
+    case 'temp': return seasonOf(at) === 'summer' ? { lo: 24, hi: 26 } : { lo: 18, hi: 22 }
+    case 'hum': return { lo: 40, hi: 60 }
+    case 'dew': return { hi: 17 }
+    case 'pm25': return { hi: 35 }
+    case 'co2': return { hi: 800 }
+  }
+}
+
+/** 「标准范围」列的文字，与 limitsOf 同源 */
+export const limitsText = (l: Limits, digits: number) => (l.lo !== undefined ? `${l.lo} – ${l.hi}` : `≤ ${digits ? l.hi.toFixed(digits) : l.hi}`)
+
+/** 统计窗口里应有的小时数（按实际窗口：从 start 起到 end 为止的整点个数；24 小时档恒为 24） */
+export const expectedHours = (w: Pick<StatWindow, 'start' | 'end'>) => Math.max(0, Math.floor((w.end - w.start) / HOUR_MS) + 1)
 export const inRange = (l: Limits, v: number) => v <= l.hi && (l.lo === undefined || v >= l.lo)
 
 export interface SummaryRow extends Agg {
   key: MetricKey
-  /** 达标率（%，整数）：有效小时里落在标准范围内的比例 */
+  /** 达标率（%，整数）= 落在标准范围内的有效小时数 ÷ 有效小时数（口径经 Fable 复核，11/24） */
   pct: number
 }
 
@@ -133,7 +183,8 @@ export function summarize(points: readonly HourPoint[], key: MetricKey, limits: 
   const a = aggregate(vs)
   if (!a) return null
   const ok = vs.filter((v): v is number => v !== null && inRange(limits, v)).length
-  return { key, ...a, pct: Math.round((ok / a.n) * 100) }
+  // 只有全部达标才显示 100%；否则向下取整（199/200 显示 99%，不会四舍五入成 100%）
+  return { key, ...a, pct: ok === a.n ? 100 : Math.floor((ok / a.n) * 100) }
 }
 
 export interface ChartSeries {
