@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { QueryClient } from '@tanstack/react-query'
 import { ApiError } from '@/api/errors'
 import * as L from '@/api/writeLock'
-import { createUnifiedBatch, type BatchProject, type BatchSender } from '../batch'
+import { createUnifiedBatch, summarizeRooms, type BatchProject, type BatchSender } from '../batch'
 import { LOCK_BUSY_TEXT, match203, recordOf, rereadHits, resolveOrgProject, setupUnifiedWriteLock, verifiable203 } from '../lock'
 import { orgKeys } from '@/data/org/hooks'
 
@@ -181,6 +181,13 @@ describe('203 核对口径', () => {
     expect(match203(t({}), snap)).toBe(false)
     expect(match203(t({ roomSwitch: 1 }), { rooms: 0, roomSwitch: null, roomTemp: null })).toBe(false)
   })
+  it('写锁核对用逐房间原始读数（与状态机同口径）：目标 20.01、回读 20.024（四舍五入为 20.02）不一致；24.494 与 24.5 一致；有房间离线不一致', () => {
+    const t = (roomTemp: number) => recordOf({ systemSwitch: -1, systemMode: 0, roomSwitch: -1, roomTemp } as never).target
+    expect(match203(t(20.01), summarizeRooms([{ switch: 1, setTemp: 20.024 }]))).toBe(false)
+    expect(match203(t(24.5), summarizeRooms([{ switch: 1, setTemp: 24.494 }, { switch: 1, setTemp: 24.5 }]))).toBe(true)
+    expect(match203(t(24.5), summarizeRooms([{ switch: 1, setTemp: 24.5 }, { switch: 1, setTemp: 24.5, isConnected: false }]))).toBe(false)
+  })
+
   it('温度容差 0.01（与状态机一致）：差 0.04 不一致', () => {
     expect(match203(t({ roomTemp: 26 }), { ...snap, roomTemp: 25.96 })).toBe(false)
     expect(match203(t({ roomTemp: 26 }), { ...snap, roomTemp: 26.005 })).toBe(true)

@@ -14,6 +14,7 @@ import { orgKeys } from '@/data/org/hooks'
 import { getSessionView } from '@/data/session'
 import type { Group, Project } from '@/data/org/types'
 import type { UnifiedSnapshot } from './batch'
+import { echoMismatches } from './rules'
 
 /** 同一块控制屏（或 DTU、项目）上一条下发还没有结论 */
 export const LOCK_BUSY_TEXT = '上一条下发还在处理中'
@@ -35,17 +36,15 @@ export function verifiable203(t: { [k: string]: Scalar }): boolean {
   return t.roomSwitch !== -1 || t.roomTemp !== -1
 }
 
-/** 温度按 0.01 容差比较（与状态机的逐字段核对 rules.ts echoMismatches 同一口径，float32） */
-const TEMP_EPS = 0.01
-
-/** 203 核对：回读快照里房间开关、设定温度（全部房间一致）都等于目标才算一致；无法核对的一律不一致 */
+/**
+ * 203 核对：与状态机同一口径（rules.ts echoMismatches，逐房间原始读数、温度 0.01 容差）——房间开关、设定温度逐房间都等于目标才算一致；
+ * 改了系统开关 / 运行模式、没有房间、有房间离线的一律不一致
+ */
 export function match203(t: { [k: string]: Scalar }, snap: UnifiedSnapshot): boolean {
-  if (!verifiable203(t) || !snap || snap.rooms <= 0) return false
-  // 有房间离线：读数不可信，不算一致
-  if (snap.offline) return false
-  if (t.roomSwitch !== -1 && snap.roomSwitch !== t.roomSwitch) return false
-  if (t.roomTemp !== -1 && (typeof t.roomTemp !== 'number' || snap.roomTemp == null || Math.abs(snap.roomTemp - t.roomTemp) >= TEMP_EPS)) return false
-  return true
+  if (!verifiable203(t) || !snap || snap.rooms <= 0 || snap.offline) return false
+  if (typeof t.roomSwitch !== 'number' || typeof t.roomTemp !== 'number') return false
+  const q: WriteQuery<203> = { systemSwitch: -1, systemMode: 0, roomSwitch: t.roomSwitch, roomTemp: t.roomTemp }
+  return echoMismatches(q, snap).length === 0
 }
 
 /** S6a 组织范围的同步查询：当前账号可见的项目里按 id 找（只读缓存，不发请求） */
