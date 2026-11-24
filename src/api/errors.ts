@@ -81,6 +81,7 @@ function kindOfGrpc(code: number): ApiErrorKind | null {
 function kindOfStatus(status: number): ApiErrorKind {
   if (status === 401) return 'unauthenticated'
   if (status === 403) return 'forbidden'
+  if (status === 502) return 'network'
   if (status === 503) return 'unavailable'
   if (status === 504 || status === 408) return 'timeout'
   if (status >= 400 && status < 500) return 'bad_request'
@@ -104,7 +105,8 @@ export function errorFromResponse(status: number, contentType: string | null, te
     if (typeof j.code === 'number') code = j.code
     if (typeof j.message === 'string' && j.message) message = j.message
   } catch { /* 当作无体处理 */ }
-  const kind = (code !== undefined ? kindOfGrpc(code) : null) ?? kindOfStatus(status)
+  // 502（Worker / 网关连不上后端）：请求可能已经到了后端，按网络中断处理，写操作提示结果未知
+  const kind = status === 502 ? 'network' : (code !== undefined ? kindOfGrpc(code) : null) ?? kindOfStatus(status)
   // 令牌类错误的后端文案（no token / jwt.ParseWithClaims failed…）是技术细节，统一成中文提示
   // （「密码错误，请重试」这类业务文案保留）
   const technical = kind === 'unauthenticated' && /token|jwt/i.test(message ?? '')
