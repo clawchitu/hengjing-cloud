@@ -321,26 +321,73 @@ test.describe('Tabs（新风设备切换）', () => {
     expect(await shadow(tabs.nth(1))).toContain(RING)
   })
 
-  test('右键、未完成的指针操作不会遗留标记：之后 Tab 进入仍有外圈', async ({ page, login }) => {
+  // 以下用例对应 src/components/ui/tabs.tsx 顶部状态表的每一格「Tab 回来」（以及部分「方向键」）
+  const ringed = async (el: Locator) => (await shadow(el)).includes(RING)
+
+  test('状态表·鼠标左键：未聚焦 / 已聚焦无外圈 / 已聚焦有外圈，之后 Tab 回来都有外圈', async ({ page, login }) => {
     const tabs = await go(page, login, 'PRJ-10252')
-    // 右键当前设备（Radix 只对左键聚焦，这里不能打指针标记）
-    await tabs.nth(0).click({ button: 'right' })
-    await page.keyboard.press('Escape')
-    await expect(tabs.nth(0)).not.toHaveAttribute('data-pointer-focus')
-    // 右键另一台（非当前、tabindex=-1）设备
-    await tabs.nth(2).click({ button: 'right' })
-    await page.keyboard.press('Escape')
-    await expect(tabs.nth(2)).not.toHaveAttribute('data-pointer-focus')
-    // 指针按下后被取消（触屏滚动等）：瞬时标志清掉
-    await tabs.nth(0).dispatchEvent('pointerdown', { button: 0, pointerType: 'touch', isPrimary: true })
-    await tabs.nth(0).dispatchEvent('pointercancel', { pointerType: 'touch', isPrimary: true })
-    await tabTo(page, tabs.nth(0))
-    expect(await focusVisible(tabs.nth(0))).toBe(true)
-    await expect(tabs.nth(0)).not.toHaveAttribute('data-pointer-focus')
-    expect(await shadow(tabs.nth(0))).toContain(RING)
+    // 未聚焦 → 左键
+    await tabs.nth(1).click()
+    await page.clock.runFor(100)
+    await expect(tabs.nth(1)).toBeFocused()
+    expect(await ringed(tabs.nth(1))).toBe(false)
+    await tabTo(page, tabs.nth(1))
+    expect(await ringed(tabs.nth(1))).toBe(true)
+    // 已聚焦·无外圈 → 再左键（第三轮评审的复现路径：先离开，左键点进来，再点同一个标签，离开，Tab 回来）
+    await page.getByPlaceholder('搜索项目名称 / 项目ID').focus()
+    await tabs.nth(1).click()
+    await page.clock.runFor(100)
+    await tabs.nth(1).click()
+    await page.clock.runFor(100)
+    await expect(tabs.nth(1)).toBeFocused()
+    expect(await ringed(tabs.nth(1))).toBe(false)
+    await tabTo(page, tabs.nth(1))
+    expect(await ringed(tabs.nth(1))).toBe(true)
+    // 已聚焦·有外圈（键盘进来的）→ 左键：外圈保持；离开再 Tab 回来仍有
+    await tabs.nth(1).click()
+    await page.clock.runFor(100)
+    expect(await ringed(tabs.nth(1))).toBe(true)
+    await tabTo(page, tabs.nth(1))
+    expect(await ringed(tabs.nth(1))).toBe(true)
   })
 
-  test('脚本 focus()：不打指针标记，外圈与 :focus-visible 一致', async ({ page, login }) => {
+  test('状态表·右键与 Ctrl+左键：未聚焦时不聚焦，已聚焦时不变，之后 Tab 回来都有外圈', async ({ page, login }) => {
+    const tabs = await go(page, login, 'PRJ-10252')
+    await page.getByPlaceholder('搜索项目名称 / 项目ID').focus()
+    // 未聚焦的非当前标签：右键、Ctrl+左键都不聚焦、不打标记
+    for (const opts of [{ button: 'right' as const }, { modifiers: ['Control' as const] }]) {
+      await tabs.nth(2).click(opts)
+      await page.keyboard.press('Escape')
+      await page.clock.runFor(100)
+      await expect(tabs.nth(2)).not.toBeFocused()
+      await expect(tabs.nth(2)).not.toHaveAttribute('data-pointer-focus')
+    }
+    await tabTo(page, tabs.nth(0))
+    expect(await ringed(tabs.nth(0))).toBe(true)
+    // 已聚焦（鼠标点进来、无外圈）：右键 / Ctrl+左键不改变；离开再 Tab 回来有外圈
+    for (const opts of [{ button: 'right' as const }, { modifiers: ['Control' as const] }]) {
+      await page.getByPlaceholder('搜索项目名称 / 项目ID').focus()
+      await tabs.nth(0).click()
+      await page.clock.runFor(100)
+      await tabs.nth(0).click(opts)
+      await page.clock.runFor(100)
+      // 这里不按 Esc：任何按键都视为键盘接管（会清标记、显示外圈），见状态表
+      expect(await ringed(tabs.nth(0))).toBe(false)
+      await tabTo(page, tabs.nth(0))
+      expect(await ringed(tabs.nth(0))).toBe(true)
+    }
+    // 已聚焦（键盘进来、有外圈）：右键不改变
+    await tabs.nth(0).click({ button: 'right' })
+    await page.keyboard.press('Escape')
+    expect(await ringed(tabs.nth(0))).toBe(true)
+    // 方向键：右键之后直接按方向键，相邻标签有外圈
+    await page.keyboard.press('ArrowRight')
+    await page.clock.runFor(100)
+    await expect(tabs.nth(1)).toBeFocused()
+    expect(await ringed(tabs.nth(1))).toBe(true)
+  })
+
+  test('状态表·脚本 focus()：不打指针标记，外圈与 :focus-visible 一致；之后 Tab 回来有外圈', async ({ page, login }) => {
     const tabs = await go(page, login, 'PRJ-10252')
     await page.getByPlaceholder('搜索项目名称 / 项目ID').focus()
     await page.keyboard.press('Shift')
@@ -349,7 +396,48 @@ test.describe('Tabs（新风设备切换）', () => {
     await expect(tabs.nth(0)).not.toHaveAttribute('data-pointer-focus')
     const fv = await focusVisible(tabs.nth(0))
     expect(fv).toBe(true)
-    expect((await shadow(tabs.nth(0))).includes(RING)).toBe(fv)
+    expect(await ringed(tabs.nth(0))).toBe(fv)
+    await tabTo(page, tabs.nth(0))
+    expect(await ringed(tabs.nth(0))).toBe(true)
+  })
+
+  test.describe('触屏', () => {
+    test.use({ hasTouch: true })
+
+    test('状态表·触屏点按：未聚焦 / 已聚焦（重复点按）/ 按下后取消，之后 Tab 回来都有外圈，方向键有外圈', async ({ page, login }) => {
+      const tabs = await go(page, login, 'PRJ-10252')
+      // 未聚焦 → 点按：聚焦、无外圈
+      await tabs.nth(1).tap()
+      await page.clock.runFor(100)
+      await expect(tabs.nth(1)).toBeFocused()
+      await expect(tabs.nth(1)).toHaveAttribute('aria-selected', 'true')
+      expect(await ringed(tabs.nth(1))).toBe(false)
+      await tabTo(page, tabs.nth(1))
+      expect(await ringed(tabs.nth(1))).toBe(true)
+      // 已聚焦 → 重复点按：先离开，点按进来，再点按同一个：无外圈；离开再 Tab 回来有外圈
+      await page.getByPlaceholder('搜索项目名称 / 项目ID').focus()
+      await tabs.nth(1).tap()
+      await page.clock.runFor(100)
+      await tabs.nth(1).tap()
+      await page.clock.runFor(100)
+      expect(await ringed(tabs.nth(1))).toBe(false)
+      await tabTo(page, tabs.nth(1))
+      expect(await ringed(tabs.nth(1))).toBe(true)
+      // 按下后取消（滚动等）：之后 Tab 回来有外圈
+      await page.getByPlaceholder('搜索项目名称 / 项目ID').focus()
+      await tabs.nth(1).dispatchEvent('pointerdown', { button: 0, pointerType: 'touch', isPrimary: true })
+      await tabs.nth(1).dispatchEvent('pointercancel', { pointerType: 'touch', isPrimary: true })
+      await tabTo(page, tabs.nth(1))
+      expect(await ringed(tabs.nth(1))).toBe(true)
+      // 点按后直接方向键：相邻标签有外圈
+      await tabs.nth(0).tap()
+      await page.clock.runFor(100)
+      expect(await ringed(tabs.nth(0))).toBe(false)
+      await page.keyboard.press('ArrowRight')
+      await page.clock.runFor(100)
+      await expect(tabs.nth(1)).toBeFocused()
+      expect(await ringed(tabs.nth(1))).toBe(true)
+    })
   })
 
   for (const [project, kind] of [['PRJ-10252', '有运行设置'], ['PRJ-10241', '只读']] as const) {
