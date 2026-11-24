@@ -128,13 +128,9 @@ test.describe('管理员 集成项目', () => {
     const q = page.getByPlaceholder('搜索经销商名称 / 编码 / 区域')
     await q.fill('南京')
     await tick(page)
-    // 下拉里只剩一个经销商
-    await page.getByRole('combobox', { name: '经销商' }).click()
-    await tick(page, 100)
-    await expect(page.getByRole('option')).toHaveCount(1)
-    await page.keyboard.press('Escape')
-    await tick(page, 100)
-    await expect(page.getByRole('listbox')).toHaveCount(0)
+    // 只剩一个经销商且已自动选中（下拉收起时选项不在 DOM 里，用计数文案和触发器文字断言）
+    await expect(page.getByText('匹配 1 / 3 个经销商')).toBeVisible()
+    await expect(page.getByRole('combobox', { name: '经销商' })).toContainText('南京')
     await expect(page.getByText('河西府住宅组').first()).toBeVisible()
     await shot(page, 'admin-groups-dealer-search')
     await q.fill('杭州')

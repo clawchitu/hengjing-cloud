@@ -96,12 +96,13 @@ export default function FreshAir() {
         <div><h1>新风除湿机</h1><div className="sub">{project.name}<span className="sep">·</span>{units.length} 台新风除湿一体机{hasSettings && <><span className="sep">·</span>新风单机版</>}</div></div>
         <div className="muted" style={{ fontSize: 12, marginTop: 24 }}><Icon icon={faRotate} /> {project.online ? <>实时刷新 · <span className="num">{clock}</span></> : <>最后更新 · <span className="num">{project.lastOnline}</span></>}</div>
       </div>
+      {/* 设备切换：自动激活（方向键移到哪个设备就选中哪个），焦点永远落在当前设备上，青色边框即焦点指示，故去掉浏览器焦点环（点击后也会出现，旧 div 没有） */}
       <Tabs value={u.id} onValueChange={setCur}>
         <TabsList className="dev-tabs" aria-label="新风设备">
           {units.map((f) => {
             const [t, c] = statusText(f)
             return (
-              <TabsTrigger key={f.id} value={f.id} className={'dev-tab' + (f.id === u.id ? ' on' : '')}>
+              <TabsTrigger key={f.id} value={f.id} className={'dev-tab outline-none' + (f.id === u.id ? ' on' : '')}>
                 <span className="di"><Icon icon={faFan} /></span>
                 <span className="block"><b className="num">{f.name}</b><small className={c}>{t} · {f.floor} · 模式 {f.mode}</small></span>
               </TabsTrigger>

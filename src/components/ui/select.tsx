@@ -12,6 +12,8 @@ import { cn } from '@/lib/utils'
  * - 文字色 --text-2、字重 400（原生控件不继承字重）、white-space: pre、内容垂直居中；
  * - 原生下拉框内部文字的行高是首选字体的 ascent + descent 取整（不是 line-height: normal，后者会被中文回退字体撑高），
  *   恒境云首选字体 Barlow 的 ascent/descent 为 1.0em / 0.2em，14px 下取整为 14 + 3 = 17px；
+ * - 原生内部文字块是 overflow: hidden（滚动容器，绘制偏移会取整到整像素），这里同样用 overflow-hidden 而不是 clip，
+ *   否则在小数纵坐标上文字会差 1px；
  * - 原生 select 的默认宽度 = 最长选项文字宽度向上取整 + 内边距。不定宽的使用点传 `sizer`（全部选项文字），
  *   触发器下面叠一个不可见的原生 select 撑出同样的宽度，保证逐像素一致。
  * 焦点：旧 .select 只有 outline: none，没有焦点样式，这里照旧。
@@ -39,7 +41,7 @@ function SelectTrigger({
       <SelectPrimitive.Value
         data-slot="select-value"
         placeholder={placeholder}
-        className="min-w-0 grow overflow-x-clip leading-[17px]"
+        className="min-w-0 grow overflow-hidden leading-[17px]"
       />
     </SelectPrimitive.Trigger>
   )
