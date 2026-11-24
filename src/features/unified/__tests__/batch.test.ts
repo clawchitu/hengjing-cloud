@@ -6,14 +6,27 @@ import { createUnifiedBatch, summarizeRooms, unifiedAppCode, type BatchProject, 
 
 const P = (id: string, code: string, extra: Partial<BatchProject> = {}): BatchProject => ({ id, code, name: '项目' + code, programCode: 1, online: true, ...extra })
 
-function setup(projects: BatchProject[], opts: { send?: BatchSender; reads?: Record<string, UnifiedSnapshot[]> } = {}) {
+/** 假写入口：同写入口一样，先同步跑 beforeSend，不通过就不「发出」（不计入 wire） */
+function fakeWire(reply: (p: BatchProject) => Promise<{ success: boolean; msg: string }> = async () => ({ success: true, msg: '' })) {
+  const wire: string[] = []
+  const send = vi.fn<BatchSender>(async (p, _q, o) => {
+    if (!o.beforeSend()) throw new ApiError('write_blocked', '发送前复核未通过，未下发')
+    wire.push(p.id)
+    return reply(p)
+  })
+  return { send, wire }
+}
+
+function setup(projects: BatchProject[], opts: { send?: BatchSender; reads?: Record<string, UnifiedSnapshot[]>; deadlineMs?: number; realNow?: boolean } = {}) {
   let list = projects
   const reads = opts.reads ?? {}
   const readBack = vi.fn(async (id: string) => reads[id]?.shift() ?? { rooms: 2, roomSwitch: 1, roomTemp: 26 })
-  const send = vi.fn(opts.send ?? (async () => ({ success: true, msg: '' })))
-  const batch = createUnifiedBatch({ getProjects: () => list, readBack, send, log: () => {}, now: () => new Date('2026-11-24T10:00:00') })
-  return { batch, readBack, send, setList: (l: BatchProject[]) => { list = l } }
+  const w = fakeWire()
+  const send = opts.send ? vi.fn(opts.send) : w.send
+  const batch = createUnifiedBatch({ getProjects: () => list, readBack, send, log: () => {}, deadlineMs: opts.deadlineMs, now: opts.realNow ? undefined : () => new Date('2026-11-24T10:00:00') })
+  return { batch, readBack, send, wire: w.wire, setList: (l: BatchProject[]) => { list = l } }
 }
+const gated = () => { let release!: () => void; const gate = new Promise<void>((r) => { release = r }); return { gate, release } }
 
 describe('summarizeRooms（ctrl 200 → 回读快照）', () => {
   it('全部房间一致才给值；65536 / -1 视为没读到；不一致为 null', () => {
@@ -157,18 +170,70 @@ describe('start：逐个下发，三种结果，不重试', () => {
     expect(done.rows.map((r) => r.status)).toEqual(['not-sent', 'not-sent'])
   })
 
-  it('批次时限：超过后不再开始后面的项目（未下发并注明），已开始的照常走完', async () => {
-    let t = 0
+  it('截止时：已发出未回应的立即标「结果未确认」，没发出的标「未下发（超时）」，不再等；截止后绝不再发写', async () => {
+    const hang = gated()
     const projects = [P('a', '1'), P('b', '2'), P('c', '3')]
-    const readBack = vi.fn(async () => { t += 10_000; return { rooms: 1, roomSwitch: 0, roomTemp: 26 } })
-    const send = vi.fn(async () => { t += 10_000; return { success: true, msg: '' } })
-    const batch = createUnifiedBatch({ getProjects: () => projects, readBack, send, log: () => {}, now: () => new Date(t), deadlineMs: 35_000 })
-    batch.prepare(['a', 'b', 'c'], { roomSwitch: 1 })
-    const done = await batch.start()
-    // a 用掉 30 秒，b 在 30 秒时开始（未超时）走完到 60 秒，c 不再开始
-    expect(send).toHaveBeenCalledTimes(2)
-    expect(done.rows.map((r) => r.status)).toEqual(['success', 'success', 'not-sent'])
-    expect(done.rows[2].note).toMatch(/35 秒/)
+    let sentA = false
+    const send = vi.fn<BatchSender>(async (p, _q, o) => {
+      if (!o.beforeSend()) throw new ApiError('write_blocked', 'x')
+      if (p.id === 'a') { sentA = true; await hang.gate; return { success: true, msg: '' } }
+      return { success: true, msg: '' }
+    })
+    const t = setup(projects, { send, deadlineMs: 60, realNow: true })
+    t.batch.prepare(['a', 'b', 'c'], { roomSwitch: 1 })
+    const t0 = Date.now()
+    const done = await t.batch.start() // a 的 203 一直不回
+    expect(Date.now() - t0).toBeLessThan(1000)
+    expect(sentA).toBe(true)
+    expect(done.phase).toBe('done')
+    expect(done.rows.map((r) => r.status)).toEqual(['unknown', 'not-sent', 'not-sent'])
+    expect(done.rows[0].note).toMatch(/结果未确认/)
+    expect(done.rows[1].note).toMatch(/未下发（超时）/)
+    // a 迟到的应答不改结果；b、c 不会再发
+    hang.release()
+    await new Promise((r) => setTimeout(r, 50))
+    expect(send).toHaveBeenCalledTimes(1)
+    expect(t.batch.getState().rows.map((r) => r.status)).toEqual(['unknown', 'not-sent', 'not-sent'])
+  })
+
+  it('截止时还在下发前读取（或等令牌续期）的项目：之后 beforeSend 拒绝，不发写', async () => {
+    const slow = gated()
+    const t = setup([P('a', '1')], { deadlineMs: 40, realNow: true })
+    t.readBack.mockImplementationOnce(async () => { await slow.gate; return { rooms: 1, roomSwitch: 0, roomTemp: 26 } })
+    t.batch.prepare(['a'], { roomSwitch: 1 })
+    const done = await t.batch.start()
+    expect(done.rows[0].status).toBe('not-sent')
+    slow.release()
+    await new Promise((r) => setTimeout(r, 50))
+    expect(t.wire).toEqual([])
+  })
+
+  it('beforeSend：等令牌续期期间项目离线 / 页面卸载 → 不发写', async () => {
+    for (const how of ['offline', 'unmount'] as const) {
+      const token = gated()
+      const a = P('a', '1')
+      let list = [a]
+      const wire: string[] = []
+      const send = vi.fn<BatchSender>(async (_p, _q, o) => {
+        await token.gate // 模拟写入口在等令牌续期
+        if (!o.beforeSend()) throw new ApiError('write_blocked', 'x')
+        wire.push('a')
+        return { success: true, msg: '' }
+      })
+      const batch = createUnifiedBatch({ getProjects: () => list, readBack: async () => ({ rooms: 1, roomSwitch: 0, roomTemp: 26 }), send, log: () => {} })
+      batch.prepare(['a'], { roomSwitch: 1 })
+      const p = batch.start()
+      await vi.waitFor(() => expect(send).toHaveBeenCalled())
+      if (how === 'offline') list = [{ ...a, online: false }]
+      else batch.abort()
+      token.release()
+      const done = await p
+      expect(wire, how).toEqual([])
+      // 写入口拦下：失败（未执行）；页面卸载时则是没开始发就终止
+      const st = done.rows[0].state
+      if (how === 'offline') expect(st.status === 'failure' && st.outcome).toBe('not-sent')
+      else expect(['not-sent', 'failure']).toContain(done.rows[0].status)
+    }
   })
 
   it('运行中重复 start 返回同一个 Promise；运行中 prepare 无效', async () => {

@@ -68,7 +68,12 @@ async function mount(signin = true) {
   await screen.findByText('测试项目0829')
   return r
 }
-const notes = () => document.querySelector('.unified-notes')?.textContent ?? ''
+/** 点开「下发核对」（默认收起），返回里面的文字 */
+async function openNotes() {
+  const t = screen.getByRole('button', { name: /下发核对/ })
+  if (t.getAttribute('aria-expanded') !== 'true') await click(t)
+  return document.querySelector('.unified-notes')?.textContent ?? ''
+}
 /** 结果表每行只有 项目、项目ID、状态、操作时间 四格，状态格只有徽标 */
 function expectFourCells(badge: HTMLElement) {
   const cells = within(badge.closest('tr')!).getAllByRole('cell')
@@ -185,96 +190,125 @@ describe('下发', () => {
     return screen.findByRole('alertdialog')
   }
   const okIn = (dlg: HTMLElement) => within(dlg).getByRole('button', { name: '确认下发' })
+  /** 200：203 发出之前返回 before，之后返回 after（选项目时的房间状态读取也走 200） */
+  function room200(be: () => { callsTo: (p: string) => Call[] }, before: [number, number], after: [number, number] = before) {
+    return () => (be().callsTo('/ctrl/unified-ctrl-set').length ? rooms(...after) : rooms(...before))
+  }
+  const reads = (be: { callsTo: (p: string) => Call[] }) => be.callsTo('/ctrl/room-temperature-data-get').length
 
-  it('二次确认 → 下发前读 → 203 → 下发后读 → 成功；弹窗写明项目和值；结果只有 项目 / 项目ID / 状态 / 操作时间', async () => {
-    const be = backend({
-      '/ctrl/room-temperature-data-get': (_c, n) => (n === 1 ? rooms(0, 26) : rooms(1, 26.5)),
-      '/ctrl/unified-ctrl-set': () => reply(true),
-    })
+  it('二次确认 → 下发前读 → 203 → 下发后读 → 成功；结果卡片只有四项，原因与回读在默认收起的「下发核对」里', async () => {
+    let be!: ReturnType<typeof backend>
+    let readsAtSend = -1
+    be = backend({ '/ctrl/room-temperature-data-get': room200(() => be, [0, 26], [1, 26.5]), '/ctrl/unified-ctrl-set': () => { readsAtSend = reads(be); return reply(true) } })
     const dlg = await prepare()
     expect(dlg.textContent).toContain('测试项目0829（240829001）')
     expect(dlg.textContent).toContain('房间开关开启')
     expect(dlg.textContent).toContain('房间温度26.5°C')
     expect(be.callsTo('/ctrl/unified-ctrl-set')).toHaveLength(0) // 确认前不发
+    const r0 = reads(be)
     await click(okIn(dlg))
     const badge = await screen.findByText('成功', { selector: '[data-slot=badge]' }, { timeout: 3000 })
-    expect(be.callsTo('/ctrl/room-temperature-data-get')).toHaveLength(2)
+    // 下发前读一次（203 发出时已读 1 次）、下发后读一次；之后页面再刷新一次房间状态
+    expect(readsAtSend - r0).toBe(1)
+    expect(reads(be) - r0).toBe(3)
     const w = be.callsTo('/ctrl/unified-ctrl-set')
     expect(w).toHaveLength(1)
     const body = w[0].body as { project_id: string; body: string }
     expect(body.project_id).toBe('p1')
     expect(decodeReply(pb.UnifiedCtrlSetQuerySchema, body.body)).toEqual({ systemSwitch: -1, systemMode: 0, roomSwitch: 1, roomTemp: 26.5 })
     expectFourCells(badge)
-    expect(notes()).toContain('测试项目0829（240829001）')
-    expect(notes()).toContain('回读：下发前 房间关 · 26.0°C，下发后 房间开 · 26.5°C')
-    const heads = within(badge.closest('table')!).getAllByRole('columnheader').map((h) => h.textContent)
+    const card = screen.getByRole('region', { name: '最近一次执行结果' })
+    expect(card.textContent).not.toMatch(/回读|未自动重试|核对/)
+    const heads = within(card).getAllByRole('columnheader').map((h) => h.textContent)
     expect(heads).toEqual(['项目', '项目ID', '状态', '操作时间'])
+    // 「下发核对」默认收起
+    const toggle = screen.getByRole('button', { name: /下发核对/ })
+    expect(toggle.getAttribute('aria-expanded')).toBe('false')
+    expect(document.querySelector('.unified-notes')).toBeNull()
+    expect(await openNotes()).toContain('回读：下发前 房间关 · 26.0°C，下发后 房间开 · 26.5°C')
   })
 
   it('控制屏拒绝 → 失败，提示未自动重试，只发了一次', async () => {
-    const be = backend({
-      '/ctrl/room-temperature-data-get': () => rooms(0, 26),
-      '/ctrl/unified-ctrl-set': () => reply(false, '设备忙'),
-    })
+    const be = backend({ '/ctrl/room-temperature-data-get': () => rooms(0, 26), '/ctrl/unified-ctrl-set': () => reply(false, '设备忙') })
     await click(okIn(await prepare()))
     const badge = await screen.findByText('失败', { selector: '[data-slot=badge]' }, { timeout: 3000 })
     expectFourCells(badge)
-    expect(notes()).toContain('设备忙')
-    expect(notes()).toContain('未自动重试')
-    await new Promise((r) => setTimeout(r, 300))
+    const n = await openNotes()
+    expect(n).toContain('设备忙')
+    expect(n).toContain('未自动重试')
+    await tick(300)
     expect(be.callsTo('/ctrl/unified-ctrl-set')).toHaveLength(1)
     expect(await screen.findByText(/失败 1 个/)).toBeTruthy()
   })
 
-  it('500 且回读不一致 → 结果未确认，提示刷新查看，不重试', async () => {
+  it.each([
+    ['401', () => json({ code: 16, message: 'token expired' }, 401)],
+    ['token err', () => text('token err', 403)],
+  ])('写接口 %s → 不重放：失败（未执行），提示「登录状态已更新，请重新下发」，203 只发一次', async (_n, h) => {
     const be = backend({
       '/ctrl/room-temperature-data-get': () => rooms(0, 26),
-      '/ctrl/unified-ctrl-set': () => text('oops', 500),
+      '/ctrl/unified-ctrl-set': h,
+      '/auth/refresh': () => json({ access_token: 'A2', refresh_token: 'R2', expires_in: 7200 }),
     })
+    await click(okIn(await prepare()))
+    await screen.findByText('失败（未执行）', { selector: '[data-slot=badge]' }, { timeout: 3000 })
+    await tick(300)
+    expect(be.callsTo('/ctrl/unified-ctrl-set')).toHaveLength(1)
+    expect(await openNotes()).toContain('登录状态已更新，请重新下发')
+  })
+
+  it('500 且回读不一致 → 结果未确认，提示刷新查看，不重试', async () => {
+    const be = backend({ '/ctrl/room-temperature-data-get': () => rooms(0, 26), '/ctrl/unified-ctrl-set': () => text('oops', 500) })
     await click(okIn(await prepare()))
     const badge = await screen.findByText('结果未确认', { selector: '[data-slot=badge]' }, { timeout: 3000 })
     expectFourCells(badge)
-    expect(notes()).toContain('结果未确认，请刷新查看')
+    expect(await openNotes()).toContain('结果未确认，请刷新查看')
     expect(be.callsTo('/ctrl/unified-ctrl-set')).toHaveLength(1)
   })
 
-  it('结果在本标签页保留：卸载后重新进入页面仍显示（同一账号）', async () => {
+  it('结果在本标签页保留：卸载后重新进入页面仍显示（同一账号、同一数据源）', async () => {
     backend({ '/ctrl/room-temperature-data-get': () => rooms(1, 26.5), '/ctrl/unified-ctrl-set': () => reply(true) })
     await click(okIn(await prepare()))
     await screen.findByText('成功', { selector: '[data-slot=badge]' }, { timeout: 3000 })
+    expect(sessionStorage.getItem('hjc-unified-last:real:dealer-1')).toContain('240829001')
     cleanup()
     await mount(false)
     expect(await screen.findByText('成功', { selector: '[data-slot=badge]' })).toBeTruthy()
-    expect(screen.getByText('最近一次执行结果')).toBeTruthy()
   })
 
-  it('确认弹窗打开时页面卸载：确认失效，不读不写', async () => {
+  it('确认弹窗打开时页面卸载：确认失效，不再读、不写', async () => {
     const be = backend({ '/ctrl/room-temperature-data-get': () => rooms(0, 26), '/ctrl/unified-ctrl-set': () => reply(true) })
     await prepare()
+    const r0 = reads(be)
     cleanup()
     await tick(300)
-    expect(be.callsTo('/ctrl/room-temperature-data-get')).toHaveLength(0)
+    expect(reads(be)).toBe(r0)
     expect(be.callsTo('/ctrl/unified-ctrl-set')).toHaveLength(0)
   })
 
   it('确认弹窗打开时路由变化：弹窗失效，点确认也不下发', async () => {
     const be = backend({ '/ctrl/room-temperature-data-get': () => rooms(0, 26), '/ctrl/unified-ctrl-set': () => reply(true) })
     const dlg = await prepare()
+    const r0 = reads(be)
     const ok = okIn(dlg)
     await act(async () => { navigate('/other') })
     await act(async () => { fireEvent.click(ok) })
     await tick(300)
     expect(screen.getByText('别的页面')).toBeTruthy()
-    expect(be.callsTo('/ctrl/room-temperature-data-get')).toHaveLength(0)
+    expect(reads(be)).toBe(r0)
     expect(be.callsTo('/ctrl/unified-ctrl-set')).toHaveLength(0)
   })
 
   it('下发前读取期间页面卸载：不再发出 203', async () => {
     let release!: () => void
     const gate = new Promise<void>((r) => { release = r })
-    const be = backend({ '/ctrl/room-temperature-data-get': async () => { await gate; return rooms(0, 26) }, '/ctrl/unified-ctrl-set': () => reply(true) })
-    await click(okIn(await prepare()))
-    await waitFor(() => expect(be.callsTo('/ctrl/room-temperature-data-get')).toHaveLength(1))
+    let confirmed = false
+    const be = backend({ '/ctrl/room-temperature-data-get': async () => { if (confirmed) await gate; return rooms(0, 26) }, '/ctrl/unified-ctrl-set': () => reply(true) })
+    const dlg = await prepare()
+    const r0 = reads(be)
+    confirmed = true
+    await click(okIn(dlg))
+    await waitFor(() => expect(reads(be)).toBe(r0 + 1))
     cleanup()
     release()
     await tick(300)
@@ -284,14 +318,16 @@ describe('下发', () => {
   it('确认弹窗取消：不读不写', async () => {
     const be = backend({ '/ctrl/room-temperature-data-get': () => rooms(0, 26), '/ctrl/unified-ctrl-set': () => reply(true) })
     const dlg = await prepare()
+    const r0 = reads(be)
     await click(within(dlg).getByRole('button', { name: '取消' }))
     await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull())
-    expect(be.callsTo('/ctrl/room-temperature-data-get')).toHaveLength(0)
+    await tick(100)
+    expect(reads(be)).toBe(r0)
     expect(be.callsTo('/ctrl/unified-ctrl-set')).toHaveLength(0)
   })
 
   it('没有改动：不弹确认，提示「没有要下发的设置」', async () => {
-    const be = backend()
+    const be = backend({ '/ctrl/room-temperature-data-get': () => rooms(1, 26) })
     await mount()
     await click(screen.getByText('测试项目0829'))
     await click(screen.getByRole('button', { name: '确认下发' }))
@@ -301,13 +337,61 @@ describe('下发', () => {
   })
 })
 
-describe('真实数据模式', () => {
-  it('进入页面不显示演示的执行结果', async () => {
+describe('房间都关着', () => {
+  it('已选项目的房间全部关着：温度设定禁用并提示；同时选「全部开启」才可设温度', async () => {
+    backend({ '/ctrl/room-temperature-data-get': () => rooms(0, 26) })
+    await mount()
+    await click(keep())
+    await click(screen.getByText('测试项目0829'))
+    expect(await screen.findByText(/房间都关着（测试项目0829）/)).toBeTruthy()
+    expect(keep().hasAttribute('disabled')).toBe(true)
+    await expectTempLocked()
+    await click(screen.getByRole('button', { name: '全部开启' }))
+    expect(screen.queryByText(/房间都关着/)).toBeNull()
+    expect(screen.getByTestId('temp-box').hasAttribute('disabled')).toBe(false)
+  })
+
+  it('房间开着：温度可设', async () => {
+    backend({ '/ctrl/room-temperature-data-get': () => rooms(1, 26) })
+    await mount()
+    await click(keep())
+    await click(screen.getByText('测试项目0829'))
+    await waitFor(() => expect(screen.getByTestId('temp-box').hasAttribute('disabled')).toBe(false))
+    expect(screen.queryByText(/房间都关着/)).toBeNull()
+  })
+})
+
+describe('真实数据模式的最近一次结果', () => {
+  const ROW = (name: string) => JSON.stringify([{ name, code: '240829001', status: 'success', at: '2026-11-24 10:00:00' }])
+  it('第一次进来没有记录：显示「暂无执行记录」，不显示演示结果', async () => {
     backend()
     await mount()
     await tick(400)
-    expect(screen.queryByText('最近一次执行结果')).toBeNull()
+    expect(screen.getByText('暂无执行记录')).toBeTruthy()
     expect(document.body.textContent).not.toMatch(/朝阳壹号院|PRJ-/)
+  })
+
+  it('只显示当前数据源 + 当前账号（user id）的结果：演示模式存的、别的账号存的都不显示', async () => {
+    sessionStorage.setItem('hjc-unified-last:mock:d', ROW('演示模式存的'))
+    sessionStorage.setItem('hjc-unified-last:real:someone-else', ROW('别的账号存的'))
+    backend()
+    await mount()
+    await tick(200)
+    expect(screen.queryByText('演示模式存的')).toBeNull()
+    expect(screen.queryByText('别的账号存的')).toBeNull()
+    expect(screen.getByText('暂无执行记录')).toBeTruthy()
+    cleanup()
+    sessionStorage.setItem('hjc-unified-last:real:dealer-1', ROW('本账号存的'))
+    await mount(false)
+    expect(await screen.findByText('本账号存的')).toBeTruthy()
+  })
+
+  it('存储被改坏（状态是原型链上的键等）：忽略坏行，不报错', async () => {
+    sessionStorage.setItem('hjc-unified-last:real:dealer-1', JSON.stringify([{ name: 'x', code: '1', status: 'toString', at: 't' }, { name: 'y', code: 2, status: 'success', at: 't' }]))
+    backend()
+    await mount()
+    expect(screen.queryByText('x')).toBeNull()
+    expect(screen.queryByText('y')).toBeNull()
   })
 })
 

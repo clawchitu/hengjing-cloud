@@ -214,7 +214,7 @@ export function buildProjectRoomSwitchSet(on: boolean): WriteQuery<206> {
 // ---------------------------------------------------------------------------
 // 调用
 
-export interface CtrlOptions { signal?: AbortSignal; userId?: string }
+export interface CtrlOptions { signal?: AbortSignal; userId?: string; /** 只对写消息有效：见 requestWrite 的 beforeSend */ beforeSend?: () => boolean }
 
 /** 只读 ctrl 消息（200/202/205/207–210）。写消息号直接拒绝，须用 writeCtrl() */
 export async function callCtrl<T extends ReadCtrlType>(type: T, projectId: string, query?: Partial<CtrlQuery<T>>, opts: CtrlOptions = {}): Promise<CtrlReply<T>> {
@@ -238,7 +238,7 @@ export async function writeCtrl<T extends WriteCtrlType>(type: T, project: Write
   validateWriteQuery(def.query, query)
   const res = await requestWrite<{ body?: string }>(def.write!, [project],
     { user_id: opts.userId ?? getCurrentUserId(), body: encodeMessage(def.query, query) },
-    { timeoutMs: getConfig().ctrlTimeoutMs, signal: opts.signal })
+    { timeoutMs: getConfig().ctrlTimeoutMs, signal: opts.signal, beforeSend: opts.beforeSend })
   return decodeReply(def.reply, res.body) as CtrlReply<T>
 }
 

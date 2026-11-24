@@ -23,7 +23,7 @@ export interface UnifiedTarget { projectId: string; projectCode: string; project
 export type SendingStep = 'read-before' | 'send' | 'read-after'
 /**
  * failure 的原因：
- * - not-sent：没发出（下发前读取失败、写防护拦截、写消息校验不过）
+ * - not-sent：没发出（下发前读取失败、写防护拦截、写消息校验不过、发送前复核不过、登录状态失效）
  * - rejected：明确被拒（控制屏 success=false、网关无权限 / 令牌失效、后端参数错误）
  * 结果未知（超时、断网、500、503、取消等）不进 failure，见 unknown 状态
  */
@@ -130,6 +130,8 @@ const errText = (e: unknown) => (e instanceof Error ? e.message : String(e))
 /** 只有能确定的才算 not-sent / rejected，其余一律结果未知：请求可能已经到达控制屏并执行 */
 export function outcomeOf(e: unknown): Outcome {
   if (!isApiError(e)) return 'unknown'
+  // 未认证（401 / 网关 token err）：网关在转给控制屏之前就拒了，确定没执行。写入口不重放，按「未执行」结束
+  if (e.kind === 'unauthenticated') return 'not-sent'
   if (e.status === undefined && LOCAL_NOT_SENT.has(e.kind)) return 'not-sent'
   if (e.kind === 'ctrl' || (e.status !== undefined && REJECTED.has(e.kind))) return 'rejected'
   return 'unknown'

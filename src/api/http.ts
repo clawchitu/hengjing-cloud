@@ -12,7 +12,8 @@
 // 还持有旧值的标签页直接换上新令牌。
 //
 // 写接口只能走 requestWrite()（先过 guard.ts 防护、不重试、超时/断网提示结果未知）；
-// request() 遇到写接口路径直接拒绝。
+// request() 遇到写接口路径直接拒绝。写请求不走上面的「未认证 → 续期 → 重放」：发送前先确保令牌有效，
+// 收到未认证直接结束这次下发（WRITE_AUTH_TEXT），绝不重放；真正调用 fetch 前同步执行一次 beforeSend 复核。
 import { getConfig } from './config'
 import { ApiError, errorFromResponse, errorFromThrown } from './errors'
 import { assertWriteAllowed, isNonCanonicalPath, isWritePath, WRITE_ROUTES, type WriteOp, type WriteProject } from './guard'
@@ -82,7 +83,7 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
 const url = (path: string) => getConfig().apiBase + (path.startsWith('/') ? path : '/' + path)
 
-async function send<T>(path: string, opts: RequestOptions, accessToken: string | null): Promise<T> {
+async function send<T>(path: string, opts: RequestOptions, accessToken: string | null, beforeFetch?: () => void): Promise<T> {
   const ctl = new AbortController()
   let timedOut = false
   const timer = setTimeout(() => { timedOut = true; ctl.abort() }, opts.timeoutMs ?? getConfig().requestTimeoutMs)
@@ -96,6 +97,8 @@ async function send<T>(path: string, opts: RequestOptions, accessToken: string |
   if (method === 'POST') headers['Content-Type'] = 'application/json'
   if (accessToken) headers.Authorization = `Bearer ${accessToken}`
   try {
+    // 写请求的最后复核：和下面的 fetch 调用在同一段同步代码里，中间不让出
+    beforeFetch?.()
     const res = await fetch(url(path), {
       method,
       headers,
@@ -221,7 +224,20 @@ function plainWriteBody(body: unknown): Record<string, unknown> {
   return out
 }
 
-export async function requestWrite<T>(op: WriteOp, projects: readonly WriteProject[], body: Record<string, unknown>, opts: Omit<RequestOptions, 'body' | 'method' | 'auth'> = {}): Promise<T> {
+/** 写请求收到未认证（401 / token err）时的提示：不重放，按「没执行」结束 */
+export const WRITE_AUTH_TEXT = '登录状态已更新，请重新下发'
+/** beforeSend 不通过时的提示 */
+export const WRITE_RECHECK_TEXT = '发送前复核未通过，未下发'
+
+export interface WriteOptions extends Omit<RequestOptions, 'body' | 'method' | 'auth' | 'accessToken'> {
+  /**
+   * 发送前复核（同步）：令牌续期等完之后、真正调用 fetch 之前执行一次，返回 true 才发。
+   * 调用方在这里复核取消信号、页面是否还在、项目当前在线状态与 code、批次截止时间等。抛错按 false 处理
+   */
+  beforeSend?: () => boolean
+}
+
+export async function requestWrite<T>(op: WriteOp, projects: readonly WriteProject[], body: Record<string, unknown>, opts: WriteOptions = {}): Promise<T> {
   const allowed = assertWriteAllowed(op, projects)
   const copy = plainWriteBody(body)
   let target: Record<string, unknown>
@@ -230,13 +246,40 @@ export async function requestWrite<T>(op: WriteOp, projects: readonly WriteProje
   else throw new ApiError('write_blocked', '单项目写消息只能指定一个项目')
   const payload = { ...copy, ...target }
   try {
-    return await authed<T>(WRITE_ROUTES[op], { ...opts, method: 'POST', body: payload })
+    return await writeOnce<T>(WRITE_ROUTES[op], { ...opts, method: 'POST', body: payload })
   } catch (e) {
     if (e instanceof ApiError && (e.kind === 'timeout' || e.kind === 'network')) {
       const text = e.kind === 'timeout' ? '未收到控制屏应答，下发结果未知' : e.status === 502 ? '后端连接失败，下发结果未知' : '网络中断，下发结果未知'
       throw new ApiError(e.kind, text, { status: e.status, code: e.code, cause: e })
     }
     throw e
+  }
+}
+
+/**
+ * 写请求只发一次：先确保令牌有效（快过期就先续期；没有令牌 → 未发出），再同步执行 beforeSend，通过才 fetch。
+ * 收到未认证不重放，抛 unauthenticated（无 status：确定没执行），并在后台续期一次让登录状态更新
+ */
+async function writeOnce<T>(path: string, opts: WriteOptions & { method: 'POST'; body: unknown }): Promise<T> {
+  const { beforeSend, ...rest } = opts
+  const token = await freshAccessToken()
+  if (!token) {
+    const err = new ApiError('unauthenticated', '登录已过期，请重新登录')
+    expireSession(err)
+    throw err
+  }
+  const check = () => {
+    let ok = false
+    try { ok = beforeSend ? beforeSend() === true : true } catch { ok = false }
+    if (!ok) throw new ApiError('write_blocked', WRITE_RECHECK_TEXT)
+  }
+  try {
+    return await send<T>(path, rest, token, check)
+  } catch (e) {
+    if (!(e instanceof ApiError) || e.kind !== 'unauthenticated') throw e
+    // 令牌被拒：只在存储里仍是这个令牌时续期一次（失败会按过期处理），不重放写请求
+    if (readTokens()?.accessToken === token) void refreshSession().catch(() => {})
+    throw new ApiError('unauthenticated', WRITE_AUTH_TEXT, { code: e.code, cause: e })
   }
 }
 

@@ -60,8 +60,12 @@ export async function readUnifiedSnapshot(projectId: string, signal: AbortSignal
 }
 
 /** 写入口：S4 的 writeCtrl(203)，传整个 Project（写防护按 code 比对白名单，请求体用 id） */
-export type BatchSender = (project: BatchProject, query: WriteQuery<203>) => Promise<CtrlReply<203>>
-export const defaultBatchSender: BatchSender = (project, query) => writeCtrl(203, project, query)
+/**
+ * beforeSend：写入口在令牌就绪后、真正 fetch 前同步调用，返回 false 就不发（见 http.ts requestWrite）。
+ * 自己实现的下发函数（演示数据、测试）也必须在「发出」前调用它
+ */
+export type BatchSender = (project: BatchProject, query: WriteQuery<203>, opts: { beforeSend: () => boolean }) => Promise<CtrlReply<203>>
+export const defaultBatchSender: BatchSender = (project, query, opts) => writeCtrl(203, project, query, { beforeSend: opts.beforeSend })
 
 export type RowStatus = 'waiting' | 'sending' | 'success' | 'failure' | 'unknown' | 'not-sent'
 export interface BatchRow {
@@ -71,7 +75,7 @@ export interface BatchRow {
   status: RowStatus
   /** 结束时刻（YYYY-MM-DD HH:MM:SS） */
   at?: string
-  /** 批次层面的说明（如超过时限没开始） */
+  /** 批次层面的说明（截止时间到了等）。有它时 status 以批次判定为准 */
   note?: string
   state: UnifiedState<UnifiedSnapshot>
 }
@@ -96,9 +100,14 @@ export interface BatchDeps {
   deadlineMs?: number
 }
 
-/** 批次时限：方案 S12 验收「35 秒内给出最终结果」。逐个项目串行，超时后不再开始后面的项目 */
+/**
+ * 批次截止：从开始下发起 35 秒（方案 S12 验收「35 秒内给出最终结果」）。到截止时：
+ * - 还没发出的项目（含正在下发前读取、正在等令牌续期的）→ 未下发（超时），之后 beforeSend 一律拒绝，绝不再发写请求；
+ * - 已经发出、还没回应的 → 立即标「结果未确认」，不再等它
+ */
 export const BATCH_DEADLINE_MS = 35_000
-export const DEADLINE_NOTE = '超过 35 秒时限，未开始下发；请核对后重新下发'
+export const DEADLINE_NOT_SENT = '超过 35 秒截止时间，未下发（超时）'
+export const DEADLINE_UNKNOWN = '超过 35 秒截止时间仍未收到应答，结果未确认，请刷新查看；未自动重试'
 
 export function rowStatus(s: UnifiedState<unknown>, started: boolean): RowStatus {
   switch (s.status) {
@@ -120,25 +129,48 @@ export function createUnifiedBatch(deps: BatchDeps) {
   const send = deps.send ?? defaultBatchSender
   const now = deps.now ?? (() => new Date())
   const mock = deps.mock ?? false
-  type Entry = { p: BatchProject; ctl: UnifiedController<UnifiedSnapshot>; started: boolean; at?: string; note?: string; unsub: () => void }
+  type Entry = {
+    p: BatchProject; ctl: UnifiedController<UnifiedSnapshot>; started: boolean; at?: string; unsub: () => void
+    /** beforeSend 放行过（写请求确实发出了） */
+    sent: boolean
+    /** 截止时冻结的结果 */
+    final?: { status: 'not-sent' | 'unknown'; note: string }
+  }
   let entries: Entry[] = []
   let state: BatchState = { phase: 'idle', rows: [], errors: [], items: [] }
   let stopped = false
+  /** 截止时间（毫秒时间戳）；到点后置 expired */
+  let deadlineAt = Infinity
+  let expired = false
   let running: Promise<BatchState> | null = null
   const subs = new Set<() => void>()
 
   const emit = (patch: Partial<BatchState>) => {
-    const rows = entries.map((e): BatchRow => ({ id: e.p.id, code: e.p.code, name: e.p.name, status: rowStatus(e.ctl.getState(), e.started), at: e.at, note: e.note, state: e.ctl.getState() }))
+    const rows = entries.map((e): BatchRow => ({
+      id: e.p.id, code: e.p.code, name: e.p.name, at: e.at, state: e.ctl.getState(),
+      status: e.final?.status ?? rowStatus(e.ctl.getState(), e.started), note: e.final?.note,
+    }))
     state = { ...state, rows, ...patch }
     for (const fn of subs) fn()
   }
   const find = (id: string) => deps.getProjects().find((p) => p.id === id)
 
+  /**
+   * 发送前复核（同步）：批次没被终止（页面卸载）、没过截止时间、项目仍在列表里、code 没变、仍在线。
+   * 通过就记下「已发出」
+   */
+  const recheck = (e: Entry, wp: WriteProject) => () => {
+    if (stopped || expired || now().getTime() >= deadlineAt) return false
+    const cur = find(wp.id)
+    if (!cur || cur.code !== wp.code || cur.online !== true) return false
+    e.sent = true
+    return true
+  }
   /** 控制器给的 {id, code} → 最新列表里的整个 Project；对不上就本地拦截（没发出） */
-  const sendWhole = (wp: WriteProject, q: WriteQuery<203>) => {
+  const sendWhole = (e: Entry) => (wp: WriteProject, q: WriteQuery<203>) => {
     const p = find(wp.id)
     if (!p || p.code !== wp.code) return Promise.reject(new ApiError('write_blocked', TEXT.projectChanged))
-    return send(p, q)
+    return send(p, q, { beforeSend: recheck(e, wp) })
   }
 
   function clear() {
@@ -160,16 +192,17 @@ export function createUnifiedBatch(deps: BatchDeps) {
       for (const id of uniq) {
         const p = find(id)
         if (!p) { errs.push({ name: id, msg: TEXT.noProject }); continue }
+        const entry = { p, started: false, sent: false, unsub: () => {} } as Entry
         const ctl = createUnifiedController<UnifiedSnapshot>({
           getContext: () => contextOf(find(id), mock),
           readBack,
           toEcho: (s) => s,
-          send: sendWhole,
+          send: sendWhole(entry),
           log: deps.log ?? consoleLogger,
         })
+        entry.ctl = ctl
         const s = ctl.request(draft)
         if (s.status === 'idle') for (const m of s.errors) errs.push({ name: p.name, msg: m })
-        const entry: Entry = { p, ctl, started: false, unsub: () => {} }
         entry.unsub = ctl.subscribe(() => {
           const st = ctl.getState()
           if (entry.started && !entry.at && (st.status === 'success' || st.status === 'failure' || st.status === 'unknown' || st.status === 'idle')) entry.at = stamp(now())
@@ -202,19 +235,36 @@ export function createUnifiedBatch(deps: BatchDeps) {
     start(): Promise<BatchState> {
       if (running) return running
       if (state.phase !== 'confirming') return Promise.resolve(state)
+      deadlineAt = now().getTime() + (deps.deadlineMs ?? BATCH_DEADLINE_MS)
+      expired = false
+      let onDeadline!: () => void
+      const deadline = new Promise<'deadline'>((r) => { onDeadline = () => r('deadline') })
+      const timer = setTimeout(() => {
+        // 截止：先置 expired（之后 beforeSend 一律拒绝），再冻结每个项目的结果
+        expired = true
+        for (const e of entries) {
+          const st = e.ctl.getState().status
+          if (st === 'success' || st === 'failure' || st === 'unknown') continue
+          if (st === 'idle' && e.started) continue
+          e.final = e.sent ? { status: 'unknown', note: DEADLINE_UNKNOWN } : { status: 'not-sent', note: DEADLINE_NOT_SENT }
+          e.started = true
+          e.at ??= stamp(now())
+          e.ctl.abort()
+        }
+        onDeadline()
+      }, Math.max(0, deadlineAt - now().getTime()))
       emit({ phase: 'running' })
       const run = async () => {
-        const t0 = now().getTime()
-        const limit = deps.deadlineMs ?? BATCH_DEADLINE_MS
         for (const e of entries) {
-          if (stopped) break
-          if (now().getTime() - t0 >= limit) { e.note = DEADLINE_NOTE; continue }
+          if (stopped || expired) break
           e.started = true
           emit({})
-          await e.ctl.confirm()
+          // 截止时不再等在途的项目
+          if (await Promise.race([e.ctl.confirm().then(() => 'done' as const), deadline]) === 'deadline') break
           if (!e.at) e.at = stamp(now())
           emit({})
         }
+        clearTimeout(timer)
         // 没轮到的（页面卸载后）也标成已开始，显示为「未下发」
         for (const e of entries) if (!e.started) { e.started = true; e.ctl.abort(); e.at ??= stamp(now()) }
         emit({ phase: 'done' })

@@ -81,7 +81,7 @@ export function useUnifiedBatch(deps: BatchDeps): UnifiedBatchControl {
     ...deps,
     getProjects: () => ref.current.getProjects(),
     readBack: (id, s) => (ref.current.readBack ?? readUnifiedSnapshot)(id, s),
-    send: (p, q) => (ref.current.send ?? defaultBatchSender)(p, q),
+    send: (p, q, o) => (ref.current.send ?? defaultBatchSender)(p, q, o),
   }))
   useLayoutEffect(() => () => batch.abort(), [batch])
   const state = useSyncExternalStore(batch.subscribe, batch.getState, batch.getState)

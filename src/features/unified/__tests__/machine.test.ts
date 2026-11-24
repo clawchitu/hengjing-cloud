@@ -451,7 +451,7 @@ describe('控制器：结果未知（unknown）', () => {
     ['普通异常', new Error('boom'), 'unknown'],
     ['后端参数错误 code 3', new ApiError('bad_request', '参数错误', { status: 400, code: 3 }), 'rejected'],
     ['网关无权限', new ApiError('forbidden', '无权限', { status: 403 }), 'rejected'],
-    ['令牌失效', new ApiError('unauthenticated', '登录已过期', { status: 401, code: 16 }), 'rejected'],
+    ['令牌失效（网关拒绝，未转给控制屏）', new ApiError('unauthenticated', '登录已过期', { status: 401, code: 16 }), 'not-sent'],
     ['控制屏 success=false', new ApiError('ctrl', '该软件类型不支持此控制'), 'rejected'],
     ['前端写防护（无状态）', new ApiError('write_blocked', '下发已关闭'), 'not-sent'],
     ['写消息校验不过（无状态）', new ApiError('bad_request', '写消息缺少字段'), 'not-sent'],

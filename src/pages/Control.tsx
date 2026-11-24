@@ -17,11 +17,16 @@ import { useApp } from '../app/store'
 import { useConfirm } from '../app/feedback'
 import { projectsInGroup, useDealerPick, useDealers } from '../data/org'
 import { DealersError } from '../components/DealersError'
+import { useQueries, useQueryClient } from '@tanstack/react-query'
 import { isMockMode } from '../api/config'
+import { getCurrentUserId } from '../api/auth'
+import { ApiError } from '../api/errors'
+import { WRITE_RECHECK_TEXT } from '../api/http'
+import { jwtSub, readTokens } from '../api/tokens'
 import { UnifiedCtrlSetQuery_OperatingMode as Mode } from '../api/gen/ctrl200_pb.js'
 import * as api from '../api'
 import {
-  clampTemp, MODE_OPTIONS, resolveTempRange, TEXT, tempAvailability, unifiedAppCode, useUnifiedBatch,
+  clampTemp, MODE_OPTIONS, readUnifiedSnapshot, resolveTempRange, TEXT, tempAvailability, unifiedAppCode, useUnifiedBatch,
   type BatchRow, type RowStatus, type UnifiedDraft, type UnifiedSnapshot,
 } from '../features/unified'
 
@@ -47,7 +52,13 @@ const MODE_ICON: Partial<Record<Mode, [IconDefinition, string]>> = {
 const MODES: Array<{ value: Mode; label: string }> = [...MODE_OPTIONS, { value: Mode.OPERATION_MODE_NONE, label: TEXT.unchanged }]
 
 /** 结果表的一行（演示数据与本次下发结果同一形状） */
-export interface ResultRow { name: string; code: string; status: Exclude<RowStatus, 'waiting' | 'sending'>; at: string; detail?: string }
+export interface ResultRow {
+  name: string; code: string; status: Exclude<RowStatus, 'waiting' | 'sending'>; at: string
+  /** 失败但确定没执行（发送前复核不过、登录状态失效等） */
+  notExecuted?: boolean
+  /** 原因与前后回读（只在「下发核对」区显示，不进结果卡片） */
+  detail?: string
+}
 
 const STATUS: Record<ResultRow['status'], { label: string; variant: 'green' | 'red' | 'orange' | 'gray' }> = {
   success: { label: '成功', variant: 'green' },
@@ -66,6 +77,8 @@ const fmtSnap = (s: UnifiedSnapshot | null | undefined) => {
 /** 每行的说明：结果原因 + 下发前后回读的回显 */
 function rowDetail(r: BatchRow): string {
   const s = r.state
+  // 截止时间到了：以批次判定为准，附上当时已有的回读
+  if (r.note) return [r.note, 'before' in s && s.before ? `回读：下发前 ${fmtSnap(s.before as UnifiedSnapshot)}` : ''].filter(Boolean).join('；')
   const echo = (before?: UnifiedSnapshot, after?: UnifiedSnapshot | null) => `回读：下发前 ${fmtSnap(before)}，下发后 ${fmtSnap(after)}`
   switch (s.status) {
     case 'success': {
@@ -78,27 +91,40 @@ function rowDetail(r: BatchRow): string {
     case 'unknown':
       return [s.error, s.cause, s.afterError, ...s.mismatches.map((m) => m.message), TEXT.retryHint, echo(s.before, s.after)].filter(Boolean).join('；')
     case 'idle':
-      return r.note ?? (s.errors.join('；') || TEXT.aborted)
+      return s.errors.join('；') || TEXT.aborted
     default:
       return ''
   }
 }
 
-// 最近一次结果：203 不进 unified-ctrls-records，没有可查的历史，只存在本标签页（sessionStorage，按账号区分），
-// 刷新或重新进入页面仍在；换账号看不到别人的
+// 最近一次结果：203 下发不会出现在 unified-ctrls-records 里，没有可查的历史，只存在本标签页（sessionStorage）。
+// 键 = 数据源 + 稳定的账号标识（/me 的 user id，没有就用令牌的 sub；演示模式用演示账号名），
+// 换账号或换数据源都看不到别的结果
 const LAST_KEY = 'hjc-unified-last:'
-function readLast(user: string): ResultRow[] | null {
+export function lastResultKey(mock: boolean, username: string): string | null {
+  if (mock) return username ? `mock:${username}` : null
+  const id = getCurrentUserId() || jwtSub(readTokens()?.accessToken)
+  return id ? `real:${id}` : null
+}
+const isRow = (r: unknown): r is ResultRow => {
+  const x = r as Partial<ResultRow> | null
+  return !!x && typeof x.name === 'string' && typeof x.code === 'string' && typeof x.at === 'string' && typeof x.status === 'string' && Object.hasOwn(STATUS, x.status)
+}
+function readLast(key: string | null): ResultRow[] | null {
+  if (!key) return null
   try {
-    const v = JSON.parse(sessionStorage.getItem(LAST_KEY + user) ?? 'null')
-    return Array.isArray(v) ? (v as ResultRow[]).filter((r) => r && typeof r.name === 'string' && r.status in STATUS) : null
+    const v: unknown = JSON.parse(sessionStorage.getItem(LAST_KEY + key) ?? 'null')
+    return Array.isArray(v) ? v.filter(isRow) : null
   } catch { return null }
 }
-function writeLast(user: string, rows: ResultRow[]) {
-  try { sessionStorage.setItem(LAST_KEY + user, JSON.stringify(rows)) } catch { /* 存不下不影响显示 */ }
+function writeLast(key: string | null, rows: ResultRow[]) {
+  if (!key) return
+  try { sessionStorage.setItem(LAST_KEY + key, JSON.stringify(rows)) } catch { /* 存不下不影响显示 */ }
 }
 
 const toResult = (r: BatchRow): ResultRow => ({
   name: r.name, code: r.code, at: r.at ?? '—', detail: rowDetail(r),
+  notExecuted: r.status === 'failure' && r.state.status === 'failure' && r.state.outcome === 'not-sent',
   status: r.status === 'waiting' || r.status === 'sending' ? 'not-sent' : r.status,
 })
 
@@ -106,6 +132,7 @@ export default function Control() {
   const { toast, scope, user } = useApp()
   // 在真正发起下发的组件里取 confirm（分工第 7 条）：本组件卸载、换路由、换项目时确认自动失效
   const confirm = useConfirm()
+  const queryClient = useQueryClient()
   const isAdmin = user.role === 'admin'
   const { projects } = scope
   const mock = isMockMode()
@@ -128,14 +155,18 @@ export default function Control() {
   const [keep, setKeep] = useState(true)
   // 演示数据只在演示模式下用（getLastRun 里也按 isMockMode 判断）
   const [lastInit] = useAsync(() => (mock ? api.getLastRun() : Promise.resolve(null)), [mock])
-  const [lastRun, setLastRun] = useState<ResultRow[] | null>(() => readLast(user.username))
-  const last: ResultRow[] | null = lastRun ?? (mock && lastInit ? lastInit.rows : null)
+  const lastKey = lastResultKey(mock, user.username)
+  const [lastRun, setLastRun] = useState<{ key: string | null; rows: ResultRow[] } | null>(null)
+  const last: ResultRow[] | null = (lastRun && lastRun.key === lastKey ? lastRun.rows : readLast(lastKey)) ?? (mock && lastInit ? lastInit.rows : null)
+  const [showNotes, setShowNotes] = useState(false)
 
+  const readSnap = mock ? (id: string) => api.mockUnifiedRead(id) : readUnifiedSnapshot
   const { batch, state: run } = useUnifiedBatch({
     getProjects: () => projects,
     mock,
-    readBack: mock ? (id) => api.mockUnifiedRead(id) : undefined,
-    send: mock ? (p, q) => api.mockUnifiedSend(p, q) : undefined,
+    readBack: readSnap,
+    // 演示下发同写入口一样，先过 beforeSend
+    send: mock ? (p, q, o) => (o.beforeSend() ? api.mockUnifiedSend(p, q) : Promise.reject(new ApiError('write_blocked', WRITE_RECHECK_TEXT))) : undefined,
   })
   const busy = run.phase === 'confirming' || run.phase === 'running'
 
@@ -148,7 +179,22 @@ export default function Control() {
   const appBlock = (pickedP.length ? pickedP : inGroup).map((p) => tempAvailability(unifiedAppCode(p.programCode, mock))).find((a) => !a.enabled)
     ?? (inGroup.length ? undefined : tempAvailability(undefined))
   const roomOff = roomSw === '全部关闭'
-  const tempLock: string | null = appBlock && !appBlock.enabled ? appBlock.reason : roomOff ? TEXT.tempWhileRoomOff : null
+  // 房间都关着（后端答复⑦：房间关闭时界面不允许设温度）：读已选在线项目的 200，某个项目的房间全部关着就禁用温度，
+  // 除非这次同时选了「全部开启」。还在读的时候先禁用；读失败不在这里拦（下发前读取失败本来就不会下发）
+  const snaps = useQueries({
+    queries: pickedP.filter((p) => p.online).map((p) => ({
+      queryKey: ['unified-snap', mock, p.id],
+      queryFn: ({ signal }: { signal: AbortSignal }) => readSnap(p.id, signal),
+      staleTime: 15_000, retry: false,
+    })),
+  })
+  const onlinePicked = pickedP.filter((p) => p.online)
+  const roomsOffP = onlinePicked.filter((_, i) => { const d = snaps[i]?.data; return !!d && d.rooms > 0 && d.roomSwitch === 0 })
+  const snapsLoading = snaps.some((q) => q.isPending)
+  const roomsLock = roomSw === '全部开启' ? null
+    : roomsOffP.length ? `房间都关着（${roomsOffP.map((p) => p.name).join('、')}），不能设定温度；需要时同时选「全部开启」`
+    : snapsLoading ? '正在读取房间状态…' : null
+  const tempLock: string | null = appBlock && !appBlock.enabled ? appBlock.reason : roomOff ? TEXT.tempWhileRoomOff : roomsLock
   const tempOff = keep || tempLock !== null
   const tempDisabled = tempOff || busy
   const setT = (v: number) => setTemp(clampTemp(v, range))
@@ -177,8 +223,10 @@ export default function Control() {
     if (!ok) { batch.cancel(); return }
     const done = await batch.start()
     const rows = done.rows.map(toResult)
-    setLastRun(rows)
-    writeLast(user.username, rows)
+    setLastRun({ key: lastKey, rows })
+    writeLast(lastKey, rows)
+    setShowNotes(false)
+    void queryClient.invalidateQueries({ queryKey: ['unified-snap'] })
     batch.reset()
     const n = (st: ResultRow['status']) => rows.filter((r) => r.status === st).length
     if (n('success') === rows.length) toast(`${TEXT.success}（${rows.length} 个项目）`)
@@ -281,44 +329,52 @@ export default function Control() {
         </div>
       </div>
 
-      {(last || run.phase === 'running') && (
-        <Card pad={false}>
-          <CardHeader pad style={{ marginBottom: 0, paddingBottom: 14 }}>
-            <div><CardTitle>最近一次执行结果</CardTitle></div>
-            {run.phase !== 'running' && (
-              <div className="row" style={{ gap: 16, fontSize: 13.5 }}>
-                <span className="green"><Icon icon={faCircleCheck} /> 成功 <b>{counts.s}</b></span>
-                <span className="red"><Icon icon={faCircleXmark} /> 失败 <b>{counts.f}</b></span>
-                <span className="orange"><Icon icon={faCircleQuestion} /> 结果未确认 <b>{counts.u}</b></span>
-                {counts.n > 0 && <span className="muted"><Icon icon={faCircleMinus} /> 未下发 <b>{counts.n}</b></span>}
-              </div>
-            )}
-          </CardHeader>
-          {run.phase === 'running' ? (
-            <div className="muted" role="status" style={{ padding: '18px 22px 22px', fontSize: 13 }}><Icon icon={faSpinner} spin /> {TEXT.sending}完成后显示全部结果</div>
-          ) : (
-            <Table>
-              <TableHeader><TableRow><TableHead>项目</TableHead><TableHead>项目ID</TableHead><TableHead>状态</TableHead><TableHead>操作时间</TableHead></TableRow></TableHeader>
-              <TableBody>
-                {last!.map((r) => (
-                  <TableRow key={r.code}>
-                    <TableCell style={{ fontWeight: 500 }}>{r.name}</TableCell>
-                    <TableCell className="num muted">{r.code}</TableCell>
-                    <TableCell><Badge variant={STATUS[r.status].variant}>{STATUS[r.status].label}</Badge></TableCell>
-                    <TableCell className="num muted">{r.at}</TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          )}
-          {/* 改动 6：表里只有四列；失败原因、未重试说明和下发前后的回读回显放在表外 */}
-          {run.phase !== 'running' && last!.some((r) => r.detail) && (
-            <div className="unified-notes" aria-label="本次核对" style={{ padding: '12px 22px 18px', fontSize: 12.5, borderTop: '1px solid var(--line)' }}>
-              <div style={{ fontWeight: 600, marginBottom: 6 }}>本次核对</div>
-              <ul style={{ margin: 0, paddingLeft: 18, lineHeight: 1.7 }}>
-                {last!.filter((r) => r.detail).map((r) => <li key={r.code + r.name} className="muted"><b style={{ color: 'var(--text)' }}>{r.name}（{r.code}）</b>：{r.detail}</li>)}
-              </ul>
+      {/* 改动 6：结果卡片只有 项目、项目ID、状态、操作时间 四项，不放任何说明 */}
+      <Card pad={false} role="region" aria-label="最近一次执行结果">
+        <CardHeader pad style={{ marginBottom: 0, paddingBottom: 14 }}>
+          <div><CardTitle>最近一次执行结果</CardTitle></div>
+          {run.phase !== 'running' && last && last.length > 0 && (
+            <div className="row" style={{ gap: 16, fontSize: 13.5 }}>
+              <span className="green"><Icon icon={faCircleCheck} /> 成功 <b>{counts.s}</b></span>
+              <span className="red"><Icon icon={faCircleXmark} /> 失败 <b>{counts.f}</b></span>
+              <span className="orange"><Icon icon={faCircleQuestion} /> 结果未确认 <b>{counts.u}</b></span>
+              {counts.n > 0 && <span className="muted"><Icon icon={faCircleMinus} /> 未下发 <b>{counts.n}</b></span>}
             </div>
+          )}
+        </CardHeader>
+        {run.phase === 'running' ? (
+          <div className="muted" role="status" style={{ padding: '18px 22px 22px', fontSize: 13 }}><Icon icon={faSpinner} spin /> {TEXT.sending}完成后显示全部结果</div>
+        ) : !last || last.length === 0 ? (
+          <div className="faint" style={{ padding: '18px 22px 22px', fontSize: 13, textAlign: 'center' }}>暂无执行记录</div>
+        ) : (
+          <Table>
+            <TableHeader><TableRow><TableHead>项目</TableHead><TableHead>项目ID</TableHead><TableHead>状态</TableHead><TableHead>操作时间</TableHead></TableRow></TableHeader>
+            <TableBody>
+              {last.map((r) => (
+                <TableRow key={r.code + r.name}>
+                  <TableCell style={{ fontWeight: 500 }}>{r.name}</TableCell>
+                  <TableCell className="num muted">{r.code}</TableCell>
+                  <TableCell><Badge variant={STATUS[r.status].variant}>{r.notExecuted ? '失败（未执行）' : STATUS[r.status].label}</Badge></TableCell>
+                  <TableCell className="num muted">{r.at}</TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        )}
+      </Card>
+
+      {/* 卡片下方单独的「下发核对」：失败原因、未重试说明、下发前后的回读。默认收起 */}
+      {run.phase !== 'running' && last?.some((r) => r.detail) && (
+        <Card pad={false} className="unified-check" style={{ marginTop: 16 }}>
+          <button type="button" className="row" aria-expanded={showNotes} aria-controls="unified-notes" onClick={() => setShowNotes(!showNotes)}
+            style={{ width: '100%', justifyContent: 'space-between', padding: '14px 22px', background: 'none', border: 0, fontSize: 14, fontWeight: 600, cursor: 'pointer' }}>
+            <span>下发核对</span>
+            <span className="muted" style={{ fontSize: 12.5, fontWeight: 400 }}>{showNotes ? '收起' : '展开查看原因与前后回读'} <Icon icon={showNotes ? faChevronUp : faChevronDown} size="xs" /></span>
+          </button>
+          {showNotes && (
+            <ul id="unified-notes" className="unified-notes" style={{ margin: 0, padding: '0 22px 18px 40px', fontSize: 12.5, lineHeight: 1.7 }}>
+              {last.filter((r) => r.detail).map((r) => <li key={r.code + r.name} className="muted"><b style={{ color: 'var(--text)' }}>{r.name}（{r.code}）</b>：{r.detail}</li>)}
+            </ul>
           )}
         </Card>
       )}
