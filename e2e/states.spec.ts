@@ -56,6 +56,11 @@ test.describe('新风单机版 运行模式', () => {
         await expect(page.locator('.ctl-type button', { hasText: '露点控制' })).toBeEnabled()
       }
       await shot(page, `standalone12-fa-mode${m}`)
+      if (m === 5) {
+        // 仅湿度模式下湿度设定值可调：点加号后 50 → 51
+        await page.locator('.setbox.on button.plus').click()
+        await expect(page.locator('.setbox.on .sv')).toHaveText(/^51/)
+      }
     })
   }
 
@@ -115,6 +120,9 @@ test.describe('管理员 集成项目', () => {
     await expect(page.locator('.dealer-pick option')).toHaveCount(1)
     await expect(page.getByText('河西府住宅组').first()).toBeVisible()
     await shot(page, 'admin-groups-dealer-search')
+    await q.fill('杭州')
+    await tick(page)
+    await expect(page.getByText('西溪蝶园别墅组').first()).toBeVisible()
     await q.fill('zzz')
     await tick(page)
     await expect(page.getByText('匹配 0 / 3')).toBeVisible()
