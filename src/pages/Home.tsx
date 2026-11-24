@@ -51,13 +51,14 @@ export default function Home() {
   const { groups, projects } = scope
   const online = projects.filter((p) => p.online).length
   const seed = (v: '0' | '2' | '4+') => { api.seedFrequent(user, v); setPreset(v); toast(`演示：常用项目计数已重置为「${v === '4+' ? '≥4 个' : v + ' 个'}」`) }
-  const hour = new Date().getHours()
+  const now = new Date()
+  const hour = now.getHours()
   const greet = hour < 11 ? '上午好' : hour < 13 ? '中午好' : hour < 18 ? '下午好' : '晚上好'
 
   return (
     <div className="page">
       <div className="page-head">
-        <div><h1>{greet}，{user.name} 👋</h1><div className="sub">{__HJC_MOCK__ && w ? '今天是 2025年6月18日 星期三 · 农历五月廿三，以下是您所在区域的天气预报' : `今天是 ${new Date().toLocaleDateString('zh-CN', { year: 'numeric', month: 'long', day: 'numeric', weekday: 'long' })}`}</div></div>
+        <div><h1>{greet}，{user.name} 👋</h1><div className="sub">{__HJC_MOCK__ && w ? '今天是 2025年6月18日 星期三 · 农历五月廿三，以下是您所在区域的天气预报' : `今天是 ${now.toLocaleDateString('zh-CN', { year: 'numeric', month: 'long', day: 'numeric', weekday: 'long' })}`}</div></div>
         {__HJC_MOCK__ && w && <div className="actions">
           <Button size="lg" style={{ fontWeight: 500, color: 'var(--text)' }} onClick={() => toast('演示环境仅提供上海市浦东新区天气')}><Icon icon={faLocationDot} className="cyan" />{w.city}<Icon icon={faChevronDown} size="xs" className="faint" /></Button>
           <Button size="lg" style={{ width: 42, padding: 0 }} onClick={() => { setSpin(true); setTimeout(() => { setSpin(false); toast('天气已更新') }, 800) }}><Icon icon={faRotateRight} spin={spin} /></Button>
