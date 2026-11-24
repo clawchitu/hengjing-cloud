@@ -1,0 +1,264 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>房间温控面板 · 修改温度与节能模式（静态效果图）</title>
+<style>
+/* 变量与基础类摘自 src/styles/global.css、pages.css，保持一致；仅 .te-* 为本次新增 */
+:root {
+  --navy: #0b1a2e; --navy-2: #11243d; --navy-active: #0a3147;
+  --primary: #0891b2; --primary-2: #06b6d4; --primary-soft: #ecfeff; --primary-line: #a5f3fc;
+  --bg: #f1f5f9; --card: #ffffff; --line: #e7ecf2; --line-2: #f1f5f9;
+  --text: #0f172a; --text-2: #334155; --muted: #64748b; --faint: #94a3b8;
+  --green: #059669; --green-2: #10b981; --green-soft: #ecfdf5;
+  --amber: #f59e0b; --red: #f43f5e; --red-2: #e11d48;
+  --radius: 14px;
+  --shadow: 0 1px 2px rgba(15, 23, 42, 0.04), 0 2px 8px rgba(15, 23, 42, 0.03);
+  --sb-w: 232px;
+  --font: 'Barlow', 'Noto Sans SC', -apple-system, 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+body { font-family: var(--font); font-size: 14px; color: var(--text); background: var(--bg); -webkit-font-smoothing: antialiased; width: 1440px; }
+button { font-family: inherit; font-size: inherit; color: inherit; cursor: pointer; }
+.num { font-variant-numeric: tabular-nums; }
+.app { display: flex; min-height: 100vh; background: linear-gradient(to right, var(--navy) var(--sb-w), var(--bg) var(--sb-w)); }
+.sidebar { width: var(--sb-w); flex: none; color: #cbd5e1; }
+.sb-logo { height: 57px; display: flex; align-items: center; gap: 10px; padding: 0 16px; border-bottom: 1px solid rgba(255,255,255,.06); }
+.logo-mark { width: 32px; height: 32px; border-radius: 9px; background: linear-gradient(135deg, #22d3ee, #2563eb); }
+.logo-text b { display: block; color: #fff; font-size: 15px; font-weight: 600; letter-spacing: .5px; }
+.logo-text small { display: block; color: #64748b; font-size: 8.5px; letter-spacing: 2.2px; margin-top: 2px; }
+.sb-scroll { padding: 14px 12px; }
+.sb-label { font-size: 10.5px; color: #64748b; padding: 8px; }
+.nav-item { display: flex; align-items: center; height: 33px; padding: 0 10px 0 37px; margin-bottom: 3px; border-radius: 8px; font-size: 13.5px; position: relative; }
+.nav-item.active { background: var(--navy-active); color: #fff; font-weight: 500; }
+.nav-item.active::before { content: ''; position: absolute; left: 0; top: 4px; bottom: 4px; width: 2.5px; border-radius: 2px; background: var(--primary-2); }
+.main { flex: 1; min-width: 0; }
+.topbar { height: 57px; background: #fff; border-bottom: 1px solid var(--line); display: flex; align-items: center; padding: 0 28px; font-size: 13.5px; color: var(--muted); gap: 8px; }
+.topbar .cur { color: var(--text); font-weight: 600; }
+.page { padding: 26px 28px 32px; }
+.page-head { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 20px; }
+.page-head h1 { font-size: 23px; font-weight: 700; margin: 0 0 6px; letter-spacing: .3px; }
+.page-head .sub { color: var(--muted); font-size: 13px; display: flex; gap: 6px; align-items: center; }
+.page-head .sub .sep { color: var(--faint); }
+.actions { display: flex; gap: 10px; }
+.card { background: var(--card); border-radius: var(--radius); border: 1px solid #e9eef4; box-shadow: var(--shadow); }
+.grid { display: grid; gap: 16px; }
+.g2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.row { display: flex; align-items: center; gap: 8px; }
+.btn { height: 36px; padding: 0 16px; border-radius: 8px; border: 1px solid var(--line); background: #fff; display: inline-flex; align-items: center; justify-content: center; gap: 8px; font-size: 13.5px; font-weight: 500; color: var(--text-2); white-space: nowrap; }
+.btn.primary { background: var(--primary); border-color: var(--primary); color: #fff; box-shadow: 0 0 0 3px rgba(8,145,178,.18); }
+.btn:disabled { opacity: .5; cursor: not-allowed; }
+.toggle { width: 40px; height: 22px; border-radius: 22px; background: #e2e8f0; border: 0; position: relative; padding: 0; flex: none; }
+.toggle::after { content: ''; position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,.2); }
+.toggle.on { background: var(--primary-2); }
+.toggle.on::after { left: 21px; }
+.toggle:disabled { opacity: .5; cursor: not-allowed; }
+.pill { display: inline-flex; align-items: center; gap: 4px; height: 22px; padding: 0 8px; border-radius: 6px; font-size: 11.5px; font-weight: 500; white-space: nowrap; }
+.pill.gray { background: #f1f5f9; color: var(--faint); }
+.pill.amber { background: #fffbeb; color: #d97706; }
+.pill.blue { background: #eff6ff; color: #2563eb; }
+.pill.red { background: #fff1f2; color: var(--red-2); }
+.dot { width: 5px; height: 5px; border-radius: 50%; display: inline-block; background: currentColor; }
+.toast { background: #fff; border-radius: 10px; padding: 10px 16px; box-shadow: 0 8px 28px rgba(2,6,23,.16); display: inline-flex; gap: 10px; align-items: center; font-size: 13.5px; border: 1px solid var(--line); }
+.toast .ti { color: var(--green-2); font-weight: 700; }
+.toast.err .ti { color: var(--red); }
+.room { padding: 18px 20px; border: 1.5px solid transparent; }
+.room.sel { border-color: var(--primary-2); }
+.room-top { display: flex; justify-content: space-between; align-items: flex-start; }
+.room-name { font-size: 15px; font-weight: 700; }
+.room-id { font-size: 11px; color: var(--faint); margin-top: 2px; }
+.room-lbl { font-size: 11.5px; color: var(--muted); margin-top: 14px; }
+.room-mid { display: flex; justify-content: space-between; align-items: flex-end; margin: 2px 0 12px; }
+.room-temp { font-size: 33px; font-weight: 700; line-height: 1; }
+.room-temp small { font-size: 15px; color: var(--faint); font-weight: 500; margin-left: 2px; }
+.room-hd { text-align: right; font-size: 11.5px; color: var(--muted); line-height: 1.7; }
+.room-hd b { color: var(--text); font-weight: 600; }
+.room-sets { display: grid; grid-template-columns: 1.5fr 1.2fr 1fr; gap: 8px; margin-bottom: 12px; }
+.room-sets > div { background: #f8fafc; border-radius: 8px; padding: 8px 12px; border: 1.5px solid transparent; }
+.room-sets span { display: block; font-size: 11.5px; color: var(--muted); }
+.room-sets b { font-size: 13.5px; font-weight: 600; }
+
+/* ---------- 本次新增 ---------- */
+.cap { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--muted); margin: 0 0 8px 2px; }
+.cap i { font-style: normal; width: 20px; height: 20px; border-radius: 50%; background: var(--navy); color: #fff; display: grid; place-items: center; font-size: 11.5px; font-weight: 600; }
+.cap { white-space: nowrap; } .cap b { color: var(--text); }
+.te-line { display: flex; align-items: center; justify-content: space-between; margin-top: 3px; min-height: 28px; }
+.te-step { display: inline-flex; align-items: center; gap: 6px; }
+.te-step button { width: 28px; height: 28px; border-radius: 7px; border: 1px solid var(--line); background: #fff; color: var(--text-2); font-size: 17px; line-height: 1; display: grid; place-items: center; padding: 0 0 2px; }
+.te-step button:disabled { opacity: .45; cursor: not-allowed; }
+.te-step .v { min-width: 62px; text-align: center; font-size: 16px; font-weight: 700; }
+.te-step .v small { font-size: 11.5px; color: var(--faint); font-weight: 500; margin-left: 1px; }
+.room-sets > div.dirty { background: var(--primary-soft); border-color: var(--primary-line); }
+.room-sets > div.dirty .v { color: var(--primary); }
+.room-sets > div.dirty button.hot { border-color: var(--primary-2); color: var(--primary); box-shadow: 0 0 0 3px rgba(6,182,212,.14); }
+.room-sets span.te-old { display: inline; font-size: 11px; color: var(--faint); font-weight: 400; margin-left: 6px; }
+.te-old s { text-decoration-color: #cbd5e1; }
+.te-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 12px; padding: 9px 10px 9px 14px; border-radius: 10px; font-size: 12.5px; }
+.te-bar.pending { background: var(--primary-soft); border: 1px solid var(--primary-line); color: var(--text-2); }
+.te-bar.sending { background: #f8fafc; border: 1px solid var(--line); color: var(--muted); }
+.te-bar.fail { background: #fff1f2; border: 1px solid #fecdd3; color: #9f1239; }
+.te-bar b { color: var(--text); font-weight: 600; }
+.te-bar .btn { height: 30px; padding: 0 14px; font-size: 13px; }
+.te-bar .btn.primary { box-shadow: none; }
+.spin { width: 14px; height: 14px; border-radius: 50%; border: 2px solid #cbd5e1; border-top-color: var(--primary); display: inline-block; flex: none; }
+.btn .spin { border-color: rgba(255,255,255,.4); border-top-color: #fff; }
+.room.busy .room-sets > div, .room.busy .modes-row { opacity: .6; }
+.modes-row { display: flex; align-items: center; gap: 8px; }
+.modes-row .lbl { font-size: 11.5px; color: var(--muted); margin-right: 2px; }
+.note { margin-top: 18px; padding: 12px 16px; font-size: 12.5px; color: var(--muted); line-height: 1.8; }
+.note b { color: var(--text-2); }
+.offline { display: flex; align-items: center; gap: 10px; padding: 10px 16px; margin-top: 16px; background: #fffbeb; border: 1px solid #fde68a; border-radius: 10px; color: #92400e; font-size: 12.5px; }
+</style>
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar">
+    <div class="sb-logo"><div class="logo-mark"></div><div class="logo-text"><b>恒境云</b><small>HENGJING CLOUD</small></div></div>
+    <div class="sb-scroll">
+      <div class="sb-label">项目设备</div>
+      <div class="nav-item">室内空气传感器</div>
+      <div class="nav-item active">房间温控面板</div>
+      <div class="nav-item">新风除湿机</div>
+      <div class="nav-item">设备连接状态</div>
+    </div>
+  </aside>
+  <div class="main">
+    <div class="topbar">项目设备 <span style="color:#cbd5e1;font-size:9px">▸</span> <span class="cur">房间温控面板</span><span style="margin-left:auto" class="pill gray">静态效果图 · 非真实数据</span></div>
+    <div class="page">
+      <div class="page-head">
+        <div>
+          <h1>房间温控面板</h1>
+          <div class="sub">测试项目0829<span class="sep">·</span>4 个房间温控面板<span class="sep">·</span>设定温度与节能模式可在卡片内直接修改</div>
+        </div>
+        <div class="actions"><button class="btn">全部关闭</button><button class="btn primary">全部开启</button></div>
+      </div>
+
+      <div class="grid g2">
+        <!-- ① 默认态 -->
+        <div>
+          <div class="cap"><i>1</i><b>默认态</b>设定温度带 − / + 步进，节能模式为开关，风速只读；末端按 end_modes 动态显示</div>
+          <div class="card room">
+            <div class="room-top">
+              <div><div class="room-name">客厅</div><div class="room-id num">406658286 · 制冷</div></div>
+              <div class="row"><span class="pill gray" style="color:var(--muted)">标准</span><button class="toggle on"></button></div>
+            </div>
+            <div class="room-lbl">室内温度</div>
+            <div class="room-mid">
+              <div class="room-temp num">25.8<small>°C</small></div>
+              <div class="room-hd num">湿度 <b>51%</b><br />露点 <b>14.9°C</b></div>
+            </div>
+            <div class="room-sets">
+              <div><span>设定温度</span><div class="te-line"><div class="te-step"><button>−</button><div class="v num">26.0<small>°C</small></div><button>+</button></div></div></div>
+              <div><span>节能模式</span><div class="te-line"><b>标准</b><button class="toggle"></button></div></div>
+              <div><span>风速</span><div class="te-line"><b>3 档</b></div></div>
+            </div>
+            <div class="modes-row"><span class="lbl">末端</span>
+              <span class="pill blue"><span class="dot" style="color:var(--green-2)"></span>风盘 开</span>
+              <span class="pill blue"><span class="dot" style="color:var(--green-2)"></span>顶辐射 开</span>
+              <span class="pill gray"><span class="dot" style="color:#cbd5e1"></span>地冷 关</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- ② 正在调整温度 -->
+        <div>
+          <div class="cap"><i>2</i><b>正在调整温度</b>点 − / + 只改草稿，改动项高亮并显示原值；卡片底部出现「取消 / 下发」</div>
+          <div class="card room sel">
+            <div class="room-top">
+              <div><div class="room-name">主卧</div><div class="room-id num">406658291 · 制冷</div></div>
+              <div class="row"><span class="pill gray" style="color:var(--muted)">标准</span><button class="toggle on"></button></div>
+            </div>
+            <div class="room-lbl">室内温度</div>
+            <div class="room-mid">
+              <div class="room-temp num">26.2<small>°C</small></div>
+              <div class="room-hd num">湿度 <b>55%</b><br />露点 <b>16.5°C</b></div>
+            </div>
+            <div class="room-sets">
+              <div class="dirty"><span>设定温度<span class="te-old num">原 <s>25.5</s></span></span><div class="te-line"><div class="te-step"><button class="hot">−</button><div class="v num">24.5<small>°C</small></div><button>+</button></div></div></div>
+              <div class="dirty"><span>节能模式<span class="te-old">原 <s>标准</s></span></span><div class="te-line"><b style="color:var(--primary)">节能</b><button class="toggle on"></button></div></div>
+              <div><span>风速</span><div class="te-line"><b>1 档</b></div></div>
+            </div>
+            <div class="modes-row"><span class="lbl">末端</span>
+              <span class="pill blue"><span class="dot" style="color:var(--green-2)"></span>顶辐射 开</span>
+              <span class="pill gray"><span class="dot" style="color:#cbd5e1"></span>地冷 关</span>
+            </div>
+            <div class="te-bar pending">
+              <span>待下发：设定温度 <b class="num">25.5 → 24.5°C</b>，节能模式 <b>标准 → 节能</b></span>
+              <span class="row"><button class="btn">取消</button><button class="btn primary">下发</button></span>
+            </div>
+          </div>
+        </div>
+
+        <!-- ③ 下发中 -->
+        <div>
+          <div class="cap"><i>3</i><b>下发中</b>本卡片所有控件禁用，保留待下发值；等待控制屏应答，最长 10 秒</div>
+          <div class="card room sel busy">
+            <div class="room-top">
+              <div><div class="room-name">次卧</div><div class="room-id num">406658302 · 制冷</div></div>
+              <div class="row"><span class="pill amber">节能</span><button class="toggle on" disabled></button></div>
+            </div>
+            <div class="room-lbl">室内温度</div>
+            <div class="room-mid">
+              <div class="room-temp num">25.4<small>°C</small></div>
+              <div class="room-hd num">湿度 <b>50%</b><br />露点 <b>14.3°C</b></div>
+            </div>
+            <div class="room-sets">
+              <div class="dirty"><span>设定温度<span class="te-old num">原 <s>27.0</s></span></span><div class="te-line"><div class="te-step"><button disabled>−</button><div class="v num">26.0<small>°C</small></div><button disabled>+</button></div></div></div>
+              <div><span>节能模式</span><div class="te-line"><b>节能</b><button class="toggle on" disabled></button></div></div>
+              <div><span>风速</span><div class="te-line"><b>自动</b></div></div>
+            </div>
+            <div class="modes-row"><span class="lbl">末端</span>
+              <span class="pill blue"><span class="dot" style="color:var(--green-2)"></span>顶辐射 开</span>
+              <span class="pill blue"><span class="dot" style="color:#cbd5e1"></span>风盘 关</span>
+            </div>
+            <div class="te-bar sending">
+              <span class="row"><span class="spin"></span>正在下发到控制屏：设定温度 <b class="num">26.0°C</b> …</span>
+              <span class="row"><button class="btn primary" disabled><span class="spin"></span>下发中</button></span>
+            </div>
+          </div>
+        </div>
+
+        <!-- ④ 结果回显 -->
+        <div>
+          <div class="cap"><i>4</i><b>结果回显</b>失败 / 超时在卡片内说明并回退为面板当前值；成功则提示并重新读取</div>
+          <div class="card room">
+            <div class="room-top">
+              <div><div class="room-name">书房</div><div class="room-id num">406658317 · 制冷</div></div>
+              <div class="row"><span class="pill gray" style="color:var(--muted)">标准</span><button class="toggle on"></button></div>
+            </div>
+            <div class="room-lbl">室内温度</div>
+            <div class="room-mid">
+              <div class="room-temp num">24.9<small>°C</small></div>
+              <div class="room-hd num">湿度 <b>49%</b><br />露点 <b>13.6°C</b></div>
+            </div>
+            <div class="room-sets">
+              <div><span>设定温度</span><div class="te-line"><div class="te-step"><button>−</button><div class="v num">25.0<small>°C</small></div><button>+</button></div></div></div>
+              <div><span>节能模式</span><div class="te-line"><b>标准</b><button class="toggle"></button></div></div>
+              <div><span>风速</span><div class="te-line"><b>4 档</b></div></div>
+            </div>
+            <div class="modes-row"><span class="lbl">末端</span>
+              <span class="pill blue"><span class="dot" style="color:var(--green-2)"></span>风盘 开</span>
+            </div>
+            <div class="te-bar fail">
+              <span>控制屏 10 秒内未应答，结果未知。已重新读取：设定温度仍为 <b class="num">25.0°C</b>，未生效。</span>
+              <span class="row"><button class="btn">知道了</button><button class="btn">重试 24.0°C</button></span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="row" style="margin-top:16px; gap:12px; flex-wrap:wrap">
+        <span class="toast"><span class="ti">✓</span>主卧 已下发：设定温度 24.5°C，节能模式 开</span>
+        <span class="toast err"><span class="ti">✕</span>书房 下发失败：该软件类型不支持此控制</span>
+        <span class="offline" style="margin:0">项目离线：控制屏未连接，温度、节能模式与开关均不可修改，显示为最后一次读取值</span>
+      </div>
+
+      <div class="card note">
+        <b>说明</b>　设定温度范围暂定 16.0–30.0°C、步进 0.5°C，后续按接口返回的范围，缺失时回退此值；到达上下限时对应按钮禁用。蓝色 = end_modes.is_selected 为 true，灰色 = 未选中；「开 / 关」取自该末端的 switch。末端本期只读，下发时不改的字段一律传 -1、end_modes 传空列表。
+      </div>
+    </div>
+  </div>
+</div>
+</body>
+</html>
