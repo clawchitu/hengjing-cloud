@@ -174,6 +174,10 @@ test.describe('Select（集成项目）', () => {
     await page.getByRole('option', { name: '浦东新区' }).click()
     await page.clock.runFor(500)
     await expect(area).toHaveText('浦东新区')
+    // 重复点当前集成项目：筛选不变
+    await page.locator('.grp-card.on h4').click()
+    await page.clock.runFor(500)
+    await expect(area).toHaveText('浦东新区')
     // 滨江别墅区的项目都在滨江区
     await page.locator('.grp-card', { hasText: '滨江别墅区' }).locator('h4').click()
     await page.clock.runFor(500)
@@ -197,6 +201,7 @@ test.describe('Select（集成项目）', () => {
     await page.clock.runFor(500)
     const trigger = page.getByRole('combobox', { name: '经销商' })
     await expect(trigger).toContainText('南京')
+    const childrenBefore = await page.evaluate(() => document.body.children.length)
     await trigger.click()
     await page.clock.runFor(100)
     await expect(page.getByRole('option')).toHaveCount(1)
@@ -208,7 +213,7 @@ test.describe('Select（集成项目）', () => {
     await expect(page.getByRole('listbox')).toHaveCount(0)
     await expect(trigger).toBeFocused()
     const body = await page.evaluate(() => ({ style: document.body.getAttribute('style') ?? '', locked: document.body.hasAttribute('data-scroll-locked'), children: document.body.children.length }))
-    expect(body).toEqual({ style: '', locked: false, children: 2 })
+    expect(body).toEqual({ style: '', locked: false, children: childrenBefore })
   })
 })
 
@@ -270,36 +275,98 @@ test.describe('Checkbox', () => {
 test.describe('Tabs（新风设备切换）', () => {
   const RING = 'rgba(6, 182, 212, 0.12)'
   const shadow = (el: Locator) => el.evaluate((n) => getComputedStyle(n).boxShadow)
+  const focusVisible = (el: Locator) => el.evaluate((n) => n.matches(':focus-visible'))
 
-  test('Tab 键进入时有焦点外圈，鼠标点击不出现；面板不单独占一个 Tab 停留点', async ({ page, login }) => {
-    await login('dealer', 'PRJ-10252')
+  async function go(page: Page, login: (role: 'dealer', project?: string) => Promise<void>, project: string) {
+    await login('dealer', project)
     await page.goto('/fresh-air')
     await settle(page)
-    const tabs = page.getByRole('tablist', { name: '新风设备' }).getByRole('tab')
+    return page.getByRole('tablist', { name: '新风设备' }).getByRole('tab')
+  }
+  /** 从顶栏搜索框开始真实地按 Tab，直到目标获得焦点 */
+  async function tabTo(page: Page, el: Locator) {
+    await page.getByPlaceholder('搜索项目名称 / 项目ID').focus()
+    for (let i = 0; i < 60; i++) {
+      await page.keyboard.press('Tab')
+      if (await el.evaluate((n) => n === document.activeElement)) return
+    }
+    throw new Error('Tab 没能聚焦到目标')
+  }
+
+  test('Tab 键进入时有焦点外圈，鼠标点击不出现，方向键移动外圈跟随', async ({ page, login }) => {
+    const tabs = await go(page, login, 'PRJ-10252')
     // 鼠标点击：聚焦但没有外圈
     await tabs.nth(1).click()
     await page.clock.runFor(100)
     await expect(tabs.nth(1)).toBeFocused()
+    await expect(tabs.nth(1)).toHaveAttribute('data-pointer-focus', '')
     expect(await shadow(tabs.nth(1))).not.toContain(RING)
-    // 从顶栏搜索框按 Tab 走到设备切换：落在当前设备上，有外圈，且 :focus-visible 命中
-    await page.getByPlaceholder('搜索项目名称 / 项目ID').focus()
-    let found = false
-    for (let i = 0; i < 60 && !found; i++) {
-      await page.keyboard.press('Tab')
-      found = await tabs.nth(1).evaluate((n) => n === document.activeElement)
-    }
-    expect(found).toBe(true)
-    expect(await tabs.nth(1).evaluate((n) => n.matches(':focus-visible'))).toBe(true)
+    // 从顶栏搜索框按 Tab 走到设备切换：落在当前设备上，:focus-visible 命中且有外圈
+    await tabTo(page, tabs.nth(1))
+    expect(await focusVisible(tabs.nth(1))).toBe(true)
+    await expect(tabs.nth(1)).not.toHaveAttribute('data-pointer-focus')
     expect(await shadow(tabs.nth(1))).toContain(RING)
-    // 方向键移到下一个设备，外圈跟着走
     await page.keyboard.press('ArrowRight')
     await page.clock.runFor(100)
     await expect(tabs.nth(2)).toBeFocused()
     expect(await shadow(tabs.nth(2))).toContain(RING)
     expect(await shadow(tabs.nth(1))).not.toContain(RING)
-    // 再按 Tab：焦点离开标签组，进入面板里的第一个控件，而不是面板本身
-    await page.keyboard.press('Tab')
-    expect(await page.evaluate(() => document.activeElement?.getAttribute('role'))).not.toBe('tabpanel')
-    expect(await shadow(tabs.nth(2))).not.toContain(RING)
+    // 鼠标点击后直接按方向键：键盘接管，外圈出现
+    await tabs.nth(0).click()
+    await page.clock.runFor(100)
+    expect(await shadow(tabs.nth(0))).not.toContain(RING)
+    await page.keyboard.press('ArrowRight')
+    await page.clock.runFor(100)
+    await expect(tabs.nth(1)).toBeFocused()
+    expect(await shadow(tabs.nth(1))).toContain(RING)
   })
+
+  test('右键、未完成的指针操作不会遗留标记：之后 Tab 进入仍有外圈', async ({ page, login }) => {
+    const tabs = await go(page, login, 'PRJ-10252')
+    // 右键当前设备（Radix 只对左键聚焦，这里不能打指针标记）
+    await tabs.nth(0).click({ button: 'right' })
+    await page.keyboard.press('Escape')
+    await expect(tabs.nth(0)).not.toHaveAttribute('data-pointer-focus')
+    // 右键另一台（非当前、tabindex=-1）设备
+    await tabs.nth(2).click({ button: 'right' })
+    await page.keyboard.press('Escape')
+    await expect(tabs.nth(2)).not.toHaveAttribute('data-pointer-focus')
+    // 指针按下后被取消（触屏滚动等）：瞬时标志清掉
+    await tabs.nth(0).dispatchEvent('pointerdown', { button: 0, pointerType: 'touch', isPrimary: true })
+    await tabs.nth(0).dispatchEvent('pointercancel', { pointerType: 'touch', isPrimary: true })
+    await tabTo(page, tabs.nth(0))
+    expect(await focusVisible(tabs.nth(0))).toBe(true)
+    await expect(tabs.nth(0)).not.toHaveAttribute('data-pointer-focus')
+    expect(await shadow(tabs.nth(0))).toContain(RING)
+  })
+
+  test('脚本 focus()：不打指针标记，外圈与 :focus-visible 一致', async ({ page, login }) => {
+    const tabs = await go(page, login, 'PRJ-10252')
+    await page.getByPlaceholder('搜索项目名称 / 项目ID').focus()
+    await page.keyboard.press('Shift')
+    await tabs.nth(0).evaluate((n) => (n as HTMLElement).focus())
+    await expect(tabs.nth(0)).toBeFocused()
+    await expect(tabs.nth(0)).not.toHaveAttribute('data-pointer-focus')
+    const fv = await focusVisible(tabs.nth(0))
+    expect(fv).toBe(true)
+    expect((await shadow(tabs.nth(0))).includes(RING)).toBe(fv)
+  })
+
+  for (const [project, kind] of [['PRJ-10252', '有运行设置'], ['PRJ-10241', '只读']] as const) {
+    test(`面板是 Tab 停留点，键盘聚焦时有焦点环、鼠标点击没有（${kind}）`, async ({ page, login }) => {
+      const tabs = await go(page, login, project)
+      const panel = page.getByRole('tabpanel')
+      await tabTo(page, tabs.nth(0))
+      await page.keyboard.press('Tab')
+      await expect(panel).toBeFocused()
+      expect(await focusVisible(panel)).toBe(true)
+      expect(await panel.evaluate((n) => getComputedStyle(n).outlineStyle)).not.toBe('none')
+      // 鼠标点面板里的只读文字：焦点落到面板，但不显示焦点环
+      await page.mouse.click(5, 5)
+      await panel.getByText('实时数据', { exact: false }).first().click()
+      await expect(panel).toBeFocused()
+      expect(await focusVisible(panel)).toBe(false)
+      expect(await panel.evaluate((n) => getComputedStyle(n).outlineStyle)).toBe('none')
+    })
+  }
 })

@@ -31,8 +31,8 @@ export default function Groups() {
   const [area, setArea] = useState('全部区域')
   const [st, setSt] = useState<'全部' | '在线' | '离线'>('全部')
   const [page, setPage] = useState(1)
-  // 切换经销商 / 集成项目时区域筛选回到「全部区域」（新集成项目里可能没有原来的区域）
-  const pickGroup = (id: string) => { setGid(id); setArea('全部区域') }
+  // 切换经销商 / 集成项目时区域筛选回到「全部区域」（新集成项目里可能没有原来的区域）；重复点当前组不动筛选
+  const pickGroup = (id: string) => { if (id !== gid) { setGid(id); setArea('全部区域') } }
   useEffect(() => setPage(1), [gid, pq, area, st])
   const g = groups.find((x) => x.id === gid)
   const dp = dealerPickModel(dealerHits, dealerId)

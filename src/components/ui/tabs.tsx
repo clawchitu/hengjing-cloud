@@ -17,19 +17,29 @@ function TabsList(props: React.ComponentProps<typeof TabsPrimitive.List>) {
 
 /*
  * Radix 在 mousedown 里用脚本 focus() 聚焦触发器，Chromium 因此把鼠标点击也当成 :focus-visible。
- * 这里记下“这次聚焦来自指针”（data-pointer-focus），按键或失焦后清掉；使用方的焦点样式写成
- * `focus-visible:not-data-[pointer-focus]:…`，鼠标点击不出现，Tab / 方向键进入时出现。
+ * 这里只标记“这一次聚焦来自指针”：pointerdown（左键、无 Ctrl，与 Radix 自己聚焦的条件一致）记一个瞬时标志，
+ * 紧接着的 focus 读走标志并设 data-pointer-focus；blur、按键时清掉属性。瞬时标志在 focus 时消费，
+ * 鼠标松开时若没拿到焦点、或指针被取消（触屏滚动等）也清掉，不会遗留到之后的键盘或脚本聚焦。
+ * 使用方把焦点样式写成 `focus-visible:not-data-[pointer-focus]:…`：鼠标点击不出现，Tab / 方向键 / 脚本聚焦照常出现。
  */
-function TabsTrigger({ className, onPointerDown, onKeyDown, onBlur, ...props }: React.ComponentProps<typeof TabsPrimitive.Trigger>) {
-  const [pointer, setPointer] = React.useState(false)
+function TabsTrigger({ className, onPointerDown, onPointerUp, onPointerCancel, onFocus, onBlur, onKeyDown, ...props }: React.ComponentProps<typeof TabsPrimitive.Trigger>) {
+  const pending = React.useRef(false)
+  const [pointerFocus, setPointerFocus] = React.useState(false)
   return (
     <TabsPrimitive.Trigger
       data-slot="tabs-trigger"
-      data-pointer-focus={pointer ? '' : undefined}
+      data-pointer-focus={pointerFocus ? '' : undefined}
       className={cn('text-left', className)}
-      onPointerDown={(e) => { setPointer(true); onPointerDown?.(e) }}
-      onKeyDown={(e) => { setPointer(false); onKeyDown?.(e) }}
-      onBlur={(e) => { setPointer(false); onBlur?.(e) }}
+      onPointerDown={(e) => { pending.current = e.button === 0 && !e.ctrlKey; onPointerDown?.(e) }}
+      onPointerUp={(e) => {
+        // 触屏点按的 mousedown / focus 在 pointerup 之后才来，只对鼠标做“没聚焦就清掉”
+        if (e.pointerType === 'mouse' && document.activeElement !== e.currentTarget) pending.current = false
+        onPointerUp?.(e)
+      }}
+      onPointerCancel={(e) => { pending.current = false; onPointerCancel?.(e) }}
+      onFocus={(e) => { setPointerFocus(pending.current); pending.current = false; onFocus?.(e) }}
+      onBlur={(e) => { setPointerFocus(false); onBlur?.(e) }}
+      onKeyDown={(e) => { setPointerFocus(false); onKeyDown?.(e) }}
       {...props}
     />
   )

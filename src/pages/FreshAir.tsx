@@ -110,7 +110,7 @@ export default function FreshAir() {
             )
           })}
         </TabsList>
-        <TabsContent value={u.id} tabIndex={-1}>
+        <TabsContent value={u.id}>
           <div className={'fa-top' + (hasSettings ? '' : ' wide')}>
             <Card>
               <CardHeader><CardTitle>实时数据 · <span className="num">{u.name}</span></CardTitle><Badge variant={u.status === 'off' ? 'gray' : u.status === 'filter' ? 'orange' : 'green'}><span className="dot" />{st}</Badge></CardHeader>
