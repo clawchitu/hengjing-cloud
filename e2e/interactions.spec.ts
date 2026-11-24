@@ -92,30 +92,73 @@ test.describe('Table', () => {
   })
 
   test('特殊行底色与悬停色的优先级（cur-row / st-off / st-err / .ptable tr.mod）', async ({ page, login }) => {
+    // 用页面上真实渲染的 Table / TableBody / TableRow / TableCell（集成项目的项目列表），只给表格和行加上旧样式类，
+    // 这样 data-slot、组件自带的工具类和 global.css / pages.css 的层叠关系都和线上一致
     await open(page, login, '/groups')
-    // 用页面上已加载的 global.css + pages.css，插一张与 shadcn Table 同结构的表
-    await page.evaluate(() => {
-      const box = document.createElement('div')
-      box.id = 'probe'
-      box.style.cssText = 'position:fixed;top:0;left:0;z-index:99999;background:#fff'
-      box.innerHTML = `<table data-slot="table" class="ptable"><tbody data-slot="table-body">
-        ${['plain', 'cur-row', 'st-off', 'st-err', 'mod'].map((c) => `<tr class="${c}"><td data-slot="table-cell" style="height:40px">${c}</td></tr>`).join('')}
-      </tbody></table>`
-      document.body.prepend(box)
-    })
+    await page.mouse.move(1439, 899)
+    const table = page.locator('table[data-slot="table"]').first()
+    const rows = table.locator('tbody[data-slot="table-body"] > tr')
+    expect(await rows.count()).toBeGreaterThanOrEqual(4)
+    const classes = ['', 'st-off', 'st-err', 'mod'] as const
+    await table.evaluate((t, cls) => {
+      t.classList.add('ptable')
+      const trs = t.querySelectorAll('tbody[data-slot="table-body"] > tr')
+      cls.forEach((c, i) => { trs[i].classList.remove('cur-row'); if (c) trs[i].classList.add(c) })
+    }, [...classes])
     const cases = [
-      ['plain', 'rgba(0, 0, 0, 0)', HOVER],
-      ['cur-row', 'rgb(240, 253, 255)', HOVER],
+      ['', 'rgba(0, 0, 0, 0)', HOVER],
       ['st-off', 'rgb(255, 247, 247)', HOVER],
       ['st-err', 'rgb(255, 252, 242)', HOVER],
       ['mod', 'rgb(255, 251, 235)', 'rgb(255, 251, 235)'], // !important 仍压过悬停
     ] as const
-    for (const [cls, idle, hovered] of cases) {
-      const td = page.locator(`#probe tr.${cls} > td`)
+    for (const [i, [cls, idle, hovered]] of cases.entries()) {
+      const td = rows.nth(i).locator('td[data-slot="table-cell"]').first()
+      await expect(rows.nth(i)).toHaveClass(cls ? new RegExp(`\\b${cls}\\b`) : /.*/)
       await page.mouse.move(1439, 899)
       await expect(td).toHaveCSS('background-color', idle)
       await td.hover()
       await expect(td).toHaveCSS('background-color', hovered)
     }
+  })
+})
+
+test.describe('Button 悬停', () => {
+  /** 悬停规则不能带 @media (hover: hover)（tailwind.css 的 @custom-variant hover），否则触屏设备上与旧版不一致 */
+  async function hoverRuleIsUnconditional(page: Page, selectorPart: string) {
+    return page.evaluate((part) => {
+      const found: boolean[] = []
+      const walk = (rules: CSSRuleList, inMedia: boolean) => {
+        for (const r of Array.from(rules)) {
+          if (r instanceof CSSStyleRule && r.selectorText.includes(part) && r.selectorText.includes(':hover')) found.push(!inMedia)
+          if (r instanceof CSSMediaRule) walk(r.cssRules, inMedia || /hover/.test(r.conditionText))
+          else if ('cssRules' in r && (r as CSSGroupingRule).cssRules) walk((r as CSSGroupingRule).cssRules, inMedia)
+        }
+      }
+      for (const sh of Array.from(document.styleSheets)) walk(sh.cssRules, false)
+      return found
+    }, selectorPart)
+  }
+
+  test('默认按钮：悬停变 #f8fafc 底、#cbd5e1 边', async ({ page, login }) => {
+    await open(page, login, '/groups')
+    const btn = page.getByRole('button', { name: '编辑', exact: true })
+    await page.mouse.move(0, 0)
+    await expect(btn).toHaveCSS('background-color', 'rgb(255, 255, 255)')
+    await expect(btn).toHaveCSS('border-top-color', 'rgb(231, 236, 242)')
+    await btn.hover()
+    await expect(btn).toHaveCSS('background-color', 'rgb(248, 250, 252)')
+    await expect(btn).toHaveCSS('border-top-color', 'rgb(203, 213, 225)')
+    expect(await hoverRuleIsUnconditional(page, 'hover\\:bg-\\[\\#f8fafc\\]')).toEqual([true])
+    expect(await hoverRuleIsUnconditional(page, 'hover\\:border-\\[\\#cbd5e1\\]')).toEqual([true])
+  })
+
+  test('primary 按钮：悬停变 #0e7490 底', async ({ page, login }) => {
+    await open(page, login, '/groups')
+    const btn = page.getByRole('button', { name: '新建项目', exact: true })
+    await page.mouse.move(0, 0)
+    await expect(btn).toHaveCSS('background-color', 'rgb(8, 145, 178)')
+    await btn.hover()
+    await expect(btn).toHaveCSS('background-color', 'rgb(14, 116, 144)')
+    expect(await hoverRuleIsUnconditional(page, 'hover\\:bg-\\[\\#0e7490\\]')).toEqual([true])
   })
 })
