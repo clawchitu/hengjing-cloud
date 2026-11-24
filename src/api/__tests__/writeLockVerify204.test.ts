@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { BLOCK_204_CONTROL_TYPE, BLOCK_204_UNINITIALIZED, blocked204, matchRunningCtrl, VERIFIABLE_FIELDS } from '../writeLockVerify'
+import { BLOCK_204_CONTROL_TYPE, BLOCK_204_INVALID, BLOCK_204_UNINITIALIZED, blocked204, matchRunningCtrl, VERIFIABLE_FIELDS } from '../writeLockVerify'
 import { checkSentRecord } from '../writeLock'
 
 const ID = 1514027092
@@ -64,6 +64,14 @@ describe('blocked204（Fable 11/25 裁定）', () => {
     expect(blocked204({ id: ID, dewPoint: 13, humiditySet: 50 }, ['switch'])).toBeNull()
     expect(blocked204({ ...live, humiditySet: 50, switch: -1 }, ['windSpeed'])).toBeNull()
   })
+  it('echo：没改的枚举读数越界、设定值非有限数 → 整条不发', () => {
+    const ok = { ...live, humiditySet: 50 }
+    expect(blocked204(ok, ['switch'])).toBeNull()
+    expect(blocked204({ ...ok, windSpeed: 3 }, ['switch'])).toBe(BLOCK_204_INVALID)
+    expect(blocked204({ ...ok, controlType: 2 }, ['switch'])).toBe(BLOCK_204_INVALID)
+    expect(blocked204({ ...ok, windSpeed: 3 }, ['windSpeed'])).toBeNull() // 改了的字段由 checkSentRecord 管
+    for (const bad of [NaN, Infinity]) expect(blocked204({ ...ok, dewPoint: bad }, ['switch'])).toBe(BLOCK_204_UNINITIALIZED)
+  })
   it('minus1：没改的字段本来就传 -1，不拦', () => {
     expect(blocked204(live, ['windSpeed'], 'minus1')).toBeNull()
   })
@@ -80,5 +88,13 @@ describe('checkSentRecord(204)', () => {
     expect(checkSentRecord(rec({ windSpeed: 3 }))).toMatch(/不合规/)
     expect(checkSentRecord(rec({ controlType: 2 }))).toMatch(/不合规/)
     expect(checkSentRecord(rec({ switch: 2 }))).toMatch(/不合规/)
+    for (const bad of [NaN, Infinity, -Infinity]) {
+      expect(checkSentRecord(rec({ dewPoint: bad }))).toMatch(/不合规/)
+      expect(checkSentRecord(rec({ humiditySet: bad }))).toMatch(/不合规/)
+    }
+  })
+  it('只认 204 的五个字段：未知 / 拼错的键 → 拒绝', () => {
+    expect(checkSentRecord({ msg: 204, deviceId: ID, target: { windSpead: 1 } })).toMatch(/不合规/)
+    expect(checkSentRecord({ msg: 204, deviceId: ID, target: { ...NONE, windSpeed: 1, extra: -1 } })).toMatch(/不合规/)
   })
 })

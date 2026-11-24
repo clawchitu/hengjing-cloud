@@ -303,9 +303,13 @@ const copyRecord = (r: SentRecord): SentRecord => ({ msg: r.msg, deviceId: r.dev
  * 204 的核对目标（只放用户改了的字段，其余 -1）：至少改一项；枚举字段只能是合法取值，设定值是有限数。
  * 核对数据里的 -1 表示「没改」；读数 control_type = -1 时写入口整体禁用（见 writeLockVerify.ts 的 blocked204）
  */
+const FIELDS_204 = new Set(['controlType', 'dewPoint', 'humiditySet', 'windSpeed', 'switch'])
 function check204Target(t: SentRecord['target']): string | null {
   const ENUM: Record<string, readonly number[]> = { controlType: [0, 1], windSpeed: [0, 1, 2], switch: [0, 1] }
-  const changed = Object.entries(t).filter(([, v]) => v !== -1)
+  const entries = Object.entries(t)
+  // 只认 204 的五个字段：拼错的键既不能算改动，也不能绕过取值检查
+  if (entries.some(([k]) => !FIELDS_204.has(k))) return '核对数据不合规，未下发'
+  const changed = entries.filter(([, v]) => v !== -1)
   if (!changed.length) return '没有要下发的改动，未下发'
   for (const [k, v] of changed) {
     if (ENUM[k] && !ENUM[k].includes(v as number)) return '核对数据不合规，未下发'

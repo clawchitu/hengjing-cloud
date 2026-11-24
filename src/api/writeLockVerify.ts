@@ -160,12 +160,16 @@ export function matchRunningCtrl(
 export const ECHO_FIELDS_204 = Object.freeze(['controlType', 'dewPoint', 'humiditySet', 'windSpeed'] as const)
 export const BLOCK_204_CONTROL_TYPE = '该设备当前露点与湿度均不可控，不能下发运行设置'
 export const BLOCK_204_UNINITIALIZED = '有未初始化的设定项，未下发'
+export const BLOCK_204_INVALID = '有设定项的读数不在合法范围内，未下发'
+/** 没改、要带回的枚举读数的合法取值（control_type = -1 已在前一条整体禁用） */
+const ECHO_ENUM_204: Record<string, readonly number[]> = { controlType: [0, 1], windSpeed: [0, 1, 2] }
 
 /**
  * 204 发送前的读数检查（Fable 11/25 裁定，A1 后端答复前）：
  * - 读数 control_type = -1：写入口整体禁用（不管改了什么）。
  * - policy = 'echo' 时，用户没改的设定项在 210 里读到 -1（或 65536、非有限数、缺失以外的无效值）：整条不发，提示「有未初始化的设定项」。
  *   不能只跳过那一个字段：跳过后 proto3 编码出来是 0，等于把它设成湿度控制、低档或 0°C。
+ * - echo 时没改的枚举读数（control_type、wind_speed）不在合法取值内：整条不发（带回去就是一个非法值）。
  * changed 是用户改了的字段名。返回 null 表示可以发。'minus1' 下没改的字段本来就传 -1，只做第一条检查。
  */
 export function blocked204(reading: Running, changed: readonly string[], policy: 'echo' | 'minus1' = 'echo'): string | null {
@@ -175,6 +179,7 @@ export function blocked204(reading: Running, changed: readonly string[], policy:
     if (changed.includes(f)) continue
     const v = RUNNING_READ[f](reading)
     if (typeof v !== 'number' || !Number.isFinite(v) || v === -1 || v === NO_DATA) return BLOCK_204_UNINITIALIZED
+    if (ECHO_ENUM_204[f] && !ECHO_ENUM_204[f].includes(v)) return BLOCK_204_INVALID
   }
   return null
 }
