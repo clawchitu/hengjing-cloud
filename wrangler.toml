@@ -1,14 +1,23 @@
-# 恒境云 HVAC IoT demo — static SPA on Workers Static Assets, in-app login checked by worker/index.js
-# Deploy: npx wrangler deploy   (build runs automatically)
-# Secrets (never in repo): BASIC_PASS = dealer login cosyhome, ADMIN_PASS = admin login hjadmin
-#   security find-generic-password -s hvac-demo-basic -w | npx wrangler secret put BASIC_PASS
-#   security find-generic-password -s hvac-demo-admin -w | npx wrangler secret put ADMIN_PASS
-# Local dev: npx wrangler dev with a gitignored .dev.vars (dummy BASIC_PASS / ADMIN_PASS)
+# 恒境云：Workers Static Assets 上的 SPA，Worker 代码 worker/index.js。两个站共用一份构建：
+#   hvac-demo（默认环境）  真实接口：/api/* 转发到测试环境，无演示账号
+#     部署：npx wrangler deploy
+#   hvac-mock（env.mock）  演示数据 + 两个演示账号（Worker 校验密码）
+#     部署：npx wrangler deploy --env mock
+#     密钥（不进仓库）：
+#       security find-generic-password -s hvac-demo-basic -w | npx wrangler secret put BASIC_PASS --env mock
+#       security find-generic-password -s hvac-demo-admin -w | npx wrangler secret put ADMIN_PASS --env mock
+# 构建会自动跑（npm run build）。本地调试：npx wrangler dev [--env mock]，演示密码放 gitignore 的 .dev.vars。
+# API_UPSTREAM 只能取 worker/index.js 里 ALLOWED_UPSTREAMS 的值（目前只有测试环境），否则 /api 一律 500。
+# 切到生产须负责人确认（docs/plan-v1.md 7.1、3.6）。
 name = "hvac-demo"
 main = "worker/index.js"
 compatibility_date = "2026-10-01"
 workers_dev = false
 routes = [ { pattern = "hvac-demo.haoqianglyu.com", custom_domain = true } ]
+
+[vars]
+DATA_SOURCE = "real"
+API_UPSTREAM = "https://test.cosyhome.com.cn:9443/v1"
 
 [build]
 command = "npm run build"
@@ -24,3 +33,10 @@ enabled = true
 
 [observability.logs]
 invocation_logs = false
+
+[env.mock]
+name = "hvac-mock"
+routes = [ { pattern = "hvac-mock.haoqianglyu.com", custom_domain = true } ]
+
+[env.mock.vars]
+DATA_SOURCE = "mock"

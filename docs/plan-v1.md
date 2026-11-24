@@ -346,6 +346,9 @@ CI（GitHub Actions，每个 PR 触发）：`oxlint` → `tsc -b` → `vitest` �
 - `config.js` 设为不缓存，`/assets/*` 保持长缓存。
 - 上游指向测试环境（证书有效，已实测）。切到生产需要负责人确认，届时写操作模式按 3.6 处理。
 - 上线顺序：演示版已确定保留（负责人答复），现有 mock 版挪到 `hvac-mock.haoqianglyu.com`，`hvac-demo` 改接真接口，因此不需要另起 Worker 名称过渡（Q14 ①已答复；② 切生产的时间、③ 源码权限仍待定）。
+- **已落地（S13 准备）**：两个站共用一份构建和 `worker/index.js`，按 `wrangler.toml` 的 `DATA_SOURCE` 区分。
+  - `hvac-demo`（默认环境，`npx wrangler deploy`）：`DATA_SOURCE=real`，`/api/*` 转发到 `API_UPSTREAM`（只能是 `ALLOWED_UPSTREAMS` 里的测试环境，否则一律 500）；只转 `Authorization / Content-Type / Accept` 和请求体，不跟随重定向，去掉上游 `Set-Cookie` 与 CORS 头，20 秒超时返回 504，跨站请求 403，不记录请求体与令牌。`/config.js` 由 Worker 生成（`dataSource=real`、`apiEnv=test`，白名单沿用前端默认值）。没有演示账号，`BASIC_PASS / ADMIN_PASS` 已从该 Worker 删除。
+  - `hvac-mock`（`npx wrangler deploy --env mock`）：演示数据，`/api/login` 校验两个演示账号（密钥设在 `hvac-mock` 上），其余 `/api/*` 返回 404，不转发。
 
 ### 7.2 给对方后端的交付物（部署到 int.cosyhome.com.cn）
 
