@@ -3,7 +3,7 @@
 // 确认弹窗在本组件里用 useConfirm() 取（分工第 7 条）；写入口拿到的是整个 Project（见 batch.ts）。
 // 改动文档：app_code 为 8、12 时房间温度设定不可用（房间开关仍可用）；最近一次执行结果只显示 项目、项目 ID、状态、操作时间。
 import { useState, type ReactNode } from 'react'
-import { faMagnifyingGlass, faCircleInfo, faLayerGroup, faChevronDown, faChevronUp, faPowerOff, faWandMagicSparkles, faSnowflake, faSun, faDropletSlash, faDroplet, faWind, faRobot, faMinus, faArrowsRotate, faDoorOpen, faTemperatureHalf, faPaperPlane, faTriangleExclamation, faCircleCheck, faSpinner, faCircleXmark, faCircleQuestion } from '@fortawesome/free-solid-svg-icons'
+import { faMagnifyingGlass, faCircleInfo, faLayerGroup, faChevronDown, faChevronUp, faPowerOff, faWandMagicSparkles, faSnowflake, faSun, faDropletSlash, faDroplet, faWind, faRobot, faMinus, faArrowsRotate, faDoorOpen, faTemperatureHalf, faPaperPlane, faTriangleExclamation, faCircleCheck, faSpinner, faCircleXmark, faCircleQuestion, faCircleMinus } from '@fortawesome/free-solid-svg-icons'
 import type { IconDefinition } from '@fortawesome/fontawesome-svg-core'
 import { Icon, useAsync } from '../components/legacy'
 import { Badge } from '@/components/ui/badge'
@@ -78,10 +78,23 @@ function rowDetail(r: BatchRow): string {
     case 'unknown':
       return [s.error, s.cause, s.afterError, ...s.mismatches.map((m) => m.message), TEXT.retryHint, echo(s.before, s.after)].filter(Boolean).join('；')
     case 'idle':
-      return s.errors.join('；') || TEXT.aborted
+      return r.note ?? (s.errors.join('；') || TEXT.aborted)
     default:
       return ''
   }
+}
+
+// 最近一次结果：203 不进 unified-ctrls-records，没有可查的历史，只存在本标签页（sessionStorage，按账号区分），
+// 刷新或重新进入页面仍在；换账号看不到别人的
+const LAST_KEY = 'hjc-unified-last:'
+function readLast(user: string): ResultRow[] | null {
+  try {
+    const v = JSON.parse(sessionStorage.getItem(LAST_KEY + user) ?? 'null')
+    return Array.isArray(v) ? (v as ResultRow[]).filter((r) => r && typeof r.name === 'string' && r.status in STATUS) : null
+  } catch { return null }
+}
+function writeLast(user: string, rows: ResultRow[]) {
+  try { sessionStorage.setItem(LAST_KEY + user, JSON.stringify(rows)) } catch { /* 存不下不影响显示 */ }
 }
 
 const toResult = (r: BatchRow): ResultRow => ({
@@ -113,9 +126,10 @@ export default function Control() {
   const [roomSw, setRoomSw] = useState<RoomTri>('不变')
   const [temp, setTemp] = useState(26)
   const [keep, setKeep] = useState(true)
-  const [lastInit] = useAsync(() => api.getLastRun(), [])
-  const [lastRun, setLastRun] = useState<ResultRow[] | null>(null)
-  const last: ResultRow[] | null = lastRun ?? (lastInit ? lastInit.rows : null)
+  // 演示数据只在演示模式下用（getLastRun 里也按 isMockMode 判断）
+  const [lastInit] = useAsync(() => (mock ? api.getLastRun() : Promise.resolve(null)), [mock])
+  const [lastRun, setLastRun] = useState<ResultRow[] | null>(() => readLast(user.username))
+  const last: ResultRow[] | null = lastRun ?? (mock && lastInit ? lastInit.rows : null)
 
   const { batch, state: run } = useUnifiedBatch({
     getProjects: () => projects,
@@ -128,7 +142,6 @@ export default function Control() {
   const online = inGroup.filter((p) => p.online)
   const pickedP = picked.map((id) => projects.find((p) => p.id === id)!).filter(Boolean)
   const shownP = expand ? ps : ps.slice(0, 7)
-  const devices = pickedP.reduce((s, p) => s + (p.devices ?? 0), 0)
 
   // 温度设定：按 app_code（同组相同；已选项目优先，没选时看组内项目）。8、12 及未知类型不可用
   const range = resolveTempRange(null)
@@ -165,13 +178,14 @@ export default function Control() {
     const done = await batch.start()
     const rows = done.rows.map(toResult)
     setLastRun(rows)
+    writeLast(user.username, rows)
     batch.reset()
     const n = (st: ResultRow['status']) => rows.filter((r) => r.status === st).length
     if (n('success') === rows.length) toast(`${TEXT.success}（${rows.length} 个项目）`)
     else toast([n('success') && `成功 ${n('success')} 个`, n('failure') && `失败 ${n('failure')} 个`, n('unknown') && `结果未确认 ${n('unknown')} 个，请刷新查看`, n('not-sent') && `未下发 ${n('not-sent')} 个`].filter(Boolean).join('，') + '。未自动重试', true)
   }
 
-  const counts = last ? { s: last.filter((r) => r.status === 'success').length, f: last.filter((r) => r.status === 'failure' || r.status === 'not-sent').length, u: last.filter((r) => r.status === 'unknown').length } : { s: 0, f: 0, u: 0 }
+  const counts = last ? { s: last.filter((r) => r.status === 'success').length, f: last.filter((r) => r.status === 'failure').length, u: last.filter((r) => r.status === 'unknown').length, n: last.filter((r) => r.status === 'not-sent').length } : { s: 0, f: 0, u: 0, n: 0 }
   const opt = <T,>(cur: T, v: T, set: (v: T) => void, label: ReactNode, key: string) =>
     <button key={key} type="button" className={'opt-btn' + (cur === v ? ' on' : '')} aria-pressed={cur === v} disabled={busy} onClick={() => set(v)}>{label}</button>
 
@@ -256,7 +270,7 @@ export default function Control() {
 
         <div className="preview">
           <div className="step-h"><span className="sn">3</span>指令预览</div>
-          <div className="pv-kpi"><div><span>目标项目</span><b className="num">{picked.length}<small>个</small></b></div><div><span>影响设备</span><b className="num">{devices}<small>台</small></b></div></div>
+          <div className="pv-kpi"><div><span>目标项目</span><b className="num">{picked.length}<small>个</small></b></div></div>
           <div className="pv-row"><span>系统开关</span><b className={power === '不变' ? 'w' : ''}>{power}</b></div>
           <div className="pv-row"><span>运行模式</span><b className={mode === Mode.OPERATION_MODE_NONE ? 'w' : ''}>{modeLabel}</b></div>
           <div className="pv-row"><span>房间开关</span><b className={roomSw === '不变' ? 'w' : ''}>{roomSw}</b></div>
@@ -276,6 +290,7 @@ export default function Control() {
                 <span className="green"><Icon icon={faCircleCheck} /> 成功 <b>{counts.s}</b></span>
                 <span className="red"><Icon icon={faCircleXmark} /> 失败 <b>{counts.f}</b></span>
                 <span className="orange"><Icon icon={faCircleQuestion} /> 结果未确认 <b>{counts.u}</b></span>
+                {counts.n > 0 && <span className="muted"><Icon icon={faCircleMinus} /> 未下发 <b>{counts.n}</b></span>}
               </div>
             )}
           </CardHeader>
@@ -289,15 +304,21 @@ export default function Control() {
                   <TableRow key={r.code}>
                     <TableCell style={{ fontWeight: 500 }}>{r.name}</TableCell>
                     <TableCell className="num muted">{r.code}</TableCell>
-                    <TableCell>
-                      <Badge variant={STATUS[r.status].variant}>{STATUS[r.status].label}</Badge>
-                      {r.detail && <div className="muted" style={{ fontSize: 12, marginTop: 4, whiteSpace: 'normal' }}>{r.detail}</div>}
-                    </TableCell>
+                    <TableCell><Badge variant={STATUS[r.status].variant}>{STATUS[r.status].label}</Badge></TableCell>
                     <TableCell className="num muted">{r.at}</TableCell>
                   </TableRow>
                 ))}
               </TableBody>
             </Table>
+          )}
+          {/* 改动 6：表里只有四列；失败原因、未重试说明和下发前后的回读回显放在表外 */}
+          {run.phase !== 'running' && last!.some((r) => r.detail) && (
+            <div className="unified-notes" aria-label="本次核对" style={{ padding: '12px 22px 18px', fontSize: 12.5, borderTop: '1px solid var(--line)' }}>
+              <div style={{ fontWeight: 600, marginBottom: 6 }}>本次核对</div>
+              <ul style={{ margin: 0, paddingLeft: 18, lineHeight: 1.7 }}>
+                {last!.filter((r) => r.detail).map((r) => <li key={r.code + r.name} className="muted"><b style={{ color: 'var(--text)' }}>{r.name}（{r.code}）</b>：{r.detail}</li>)}
+              </ul>
+            </div>
           )}
         </Card>
       )}

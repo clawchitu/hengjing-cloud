@@ -5,7 +5,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { QueryClientProvider } from '@tanstack/react-query'
 import { createElement } from 'react'
-import { MemoryRouter } from 'react-router-dom'
+import { MemoryRouter, Route, Routes, useNavigate, type NavigateFunction } from 'react-router-dom'
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { setConfig } from '../api/config'
 import { decodeReply, encodeMessage } from '../api/ctrl'
@@ -55,12 +55,27 @@ function backend(routes: Record<string, Handler> = {}) {
     ...routes,
   })
 }
-async function mount() {
-  await signIn('d', 'pw', true)
+let navigate: NavigateFunction
+function Nav() { navigate = useNavigate(); return null }
+async function mount(signin = true) {
+  if (signin) await signIn('d', 'pw', true)
   const client = createQueryClient()
-  render(createElement(QueryClientProvider, { client }, createElement(AppProvider, null, createElement(MemoryRouter, null, createElement(Control)))))
+  const routes = createElement(Routes, null,
+    createElement(Route, { path: '/control', element: createElement(Control) }),
+    createElement(Route, { path: '/other', element: createElement('div', null, '别的页面') }))
+  const r = render(createElement(QueryClientProvider, { client }, createElement(AppProvider, null,
+    createElement(MemoryRouter, { initialEntries: ['/control'] }, createElement(Nav), routes))))
   await screen.findByText('测试项目0829')
+  return r
 }
+const notes = () => document.querySelector('.unified-notes')?.textContent ?? ''
+/** 结果表每行只有 项目、项目ID、状态、操作时间 四格，状态格只有徽标 */
+function expectFourCells(badge: HTMLElement) {
+  const cells = within(badge.closest('tr')!).getAllByRole('cell')
+  expect(cells).toHaveLength(4)
+  expect(cells[2].textContent).toBe(badge.textContent)
+}
+const tick = (ms: number) => act(() => new Promise((r) => setTimeout(r, ms)))
 const slider = () => screen.getByRole('slider', { name: '房间温度设定' })
 const shown = () => screen.getByTestId('temp-box').querySelector('.tv b')!.textContent
 const keep = () => screen.getByRole('checkbox', { name: '保持不变' })
@@ -189,8 +204,9 @@ describe('下发', () => {
     const body = w[0].body as { project_id: string; body: string }
     expect(body.project_id).toBe('p1')
     expect(decodeReply(pb.UnifiedCtrlSetQuerySchema, body.body)).toEqual({ systemSwitch: -1, systemMode: 0, roomSwitch: 1, roomTemp: 26.5 })
-    const row = badge.closest('tr')!
-    expect(row.textContent).toContain('回读：下发前 房间关 · 26.0°C，下发后 房间开 · 26.5°C')
+    expectFourCells(badge)
+    expect(notes()).toContain('测试项目0829（240829001）')
+    expect(notes()).toContain('回读：下发前 房间关 · 26.0°C，下发后 房间开 · 26.5°C')
     const heads = within(badge.closest('table')!).getAllByRole('columnheader').map((h) => h.textContent)
     expect(heads).toEqual(['项目', '项目ID', '状态', '操作时间'])
   })
@@ -202,7 +218,9 @@ describe('下发', () => {
     })
     await click(okIn(await prepare()))
     const badge = await screen.findByText('失败', { selector: '[data-slot=badge]' }, { timeout: 3000 })
-    expect(badge.closest('tr')!.textContent).toContain('未自动重试')
+    expectFourCells(badge)
+    expect(notes()).toContain('设备忙')
+    expect(notes()).toContain('未自动重试')
     await new Promise((r) => setTimeout(r, 300))
     expect(be.callsTo('/ctrl/unified-ctrl-set')).toHaveLength(1)
     expect(await screen.findByText(/失败 1 个/)).toBeTruthy()
@@ -215,8 +233,52 @@ describe('下发', () => {
     })
     await click(okIn(await prepare()))
     const badge = await screen.findByText('结果未确认', { selector: '[data-slot=badge]' }, { timeout: 3000 })
-    expect(badge.closest('tr')!.textContent).toContain('结果未确认，请刷新查看')
+    expectFourCells(badge)
+    expect(notes()).toContain('结果未确认，请刷新查看')
     expect(be.callsTo('/ctrl/unified-ctrl-set')).toHaveLength(1)
+  })
+
+  it('结果在本标签页保留：卸载后重新进入页面仍显示（同一账号）', async () => {
+    backend({ '/ctrl/room-temperature-data-get': () => rooms(1, 26.5), '/ctrl/unified-ctrl-set': () => reply(true) })
+    await click(okIn(await prepare()))
+    await screen.findByText('成功', { selector: '[data-slot=badge]' }, { timeout: 3000 })
+    cleanup()
+    await mount(false)
+    expect(await screen.findByText('成功', { selector: '[data-slot=badge]' })).toBeTruthy()
+    expect(screen.getByText('最近一次执行结果')).toBeTruthy()
+  })
+
+  it('确认弹窗打开时页面卸载：确认失效，不读不写', async () => {
+    const be = backend({ '/ctrl/room-temperature-data-get': () => rooms(0, 26), '/ctrl/unified-ctrl-set': () => reply(true) })
+    await prepare()
+    cleanup()
+    await tick(300)
+    expect(be.callsTo('/ctrl/room-temperature-data-get')).toHaveLength(0)
+    expect(be.callsTo('/ctrl/unified-ctrl-set')).toHaveLength(0)
+  })
+
+  it('确认弹窗打开时路由变化：弹窗失效，点确认也不下发', async () => {
+    const be = backend({ '/ctrl/room-temperature-data-get': () => rooms(0, 26), '/ctrl/unified-ctrl-set': () => reply(true) })
+    const dlg = await prepare()
+    const ok = okIn(dlg)
+    await act(async () => { navigate('/other') })
+    await act(async () => { fireEvent.click(ok) })
+    await tick(300)
+    expect(screen.getByText('别的页面')).toBeTruthy()
+    expect(be.callsTo('/ctrl/room-temperature-data-get')).toHaveLength(0)
+    expect(be.callsTo('/ctrl/unified-ctrl-set')).toHaveLength(0)
+  })
+
+  it('下发前读取期间页面卸载：不再发出 203', async () => {
+    let release!: () => void
+    const gate = new Promise<void>((r) => { release = r })
+    const be = backend({ '/ctrl/room-temperature-data-get': async () => { await gate; return rooms(0, 26) }, '/ctrl/unified-ctrl-set': () => reply(true) })
+    await click(okIn(await prepare()))
+    await waitFor(() => expect(be.callsTo('/ctrl/room-temperature-data-get')).toHaveLength(1))
+    cleanup()
+    release()
+    await tick(300)
+    expect(be.callsTo('/ctrl/unified-ctrl-set')).toHaveLength(0)
   })
 
   it('确认弹窗取消：不读不写', async () => {
@@ -236,6 +298,16 @@ describe('下发', () => {
     expect(screen.queryByRole('alertdialog')).toBeNull()
     expect(await screen.findByText('没有要下发的设置')).toBeTruthy()
     expect(be.callsTo('/ctrl/unified-ctrl-set')).toHaveLength(0)
+  })
+})
+
+describe('真实数据模式', () => {
+  it('进入页面不显示演示的执行结果', async () => {
+    backend()
+    await mount()
+    await tick(400)
+    expect(screen.queryByText('最近一次执行结果')).toBeNull()
+    expect(document.body.textContent).not.toMatch(/朝阳壹号院|PRJ-/)
   })
 })
 

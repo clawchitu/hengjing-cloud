@@ -525,7 +525,7 @@ test.describe('统一控制下发', () => {
     const table = page.locator('table').filter({ hasText: '操作时间' })
     await expect(table.locator('thead th')).toHaveText(['项目', '项目ID', '状态', '操作时间'])
     await expect(table.locator('[data-slot=badge]', { hasText: '成功' })).toHaveCount(4)
-    await expect(table).toContainText('下发后 房间开 · 26.5°C')
+    await expect(page.locator('.unified-notes')).toContainText('下发后 房间开 · 26.5°C')
     await expectToast(page, '下发成功')
   })
 })

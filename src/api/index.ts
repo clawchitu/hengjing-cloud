@@ -128,7 +128,7 @@ export const getConnections = (projectId: string): Promise<M.Conn[]> => delay(__
 
 // unified control ----------------------------------------------------------------
 /** 最近一次执行结果（演示数据）。改动文档第 6 条：只有项目、项目 ID、状态、操作时间 */
-export const getLastRun = (): Promise<typeof M.lastRun | null> => delay(__HJC_MOCK__ ? M.lastRun : null)
+export const getLastRun = (): Promise<typeof M.lastRun | null> => delay(__HJC_MOCK__ && isMockMode() ? M.lastRun : null)
 
 // 演示数据模式下统一控制的回读与下发：只改内存里的演示状态，不发任何请求。交付包里直接拒绝（真实下发走 src/api/ctrl.ts）
 const mockUnified = new Map<string, { roomSwitch: number; roomTemp: number }>()

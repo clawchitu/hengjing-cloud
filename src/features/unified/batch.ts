@@ -71,6 +71,8 @@ export interface BatchRow {
   status: RowStatus
   /** 结束时刻（YYYY-MM-DD HH:MM:SS） */
   at?: string
+  /** 批次层面的说明（如超过时限没开始） */
+  note?: string
   state: UnifiedState<UnifiedSnapshot>
 }
 export type BatchPhase = 'idle' | 'confirming' | 'running' | 'done'
@@ -90,7 +92,13 @@ export interface BatchDeps {
   log?: UnifiedLogger
   mock?: boolean
   now?: () => Date
+  /** 批次时限（毫秒，默认 35 秒）：超过后不再开始新的项目，已开始的照常走完 */
+  deadlineMs?: number
 }
+
+/** 批次时限：方案 S12 验收「35 秒内给出最终结果」。逐个项目串行，超时后不再开始后面的项目 */
+export const BATCH_DEADLINE_MS = 35_000
+export const DEADLINE_NOTE = '超过 35 秒时限，未开始下发；请核对后重新下发'
 
 export function rowStatus(s: UnifiedState<unknown>, started: boolean): RowStatus {
   switch (s.status) {
@@ -112,7 +120,7 @@ export function createUnifiedBatch(deps: BatchDeps) {
   const send = deps.send ?? defaultBatchSender
   const now = deps.now ?? (() => new Date())
   const mock = deps.mock ?? false
-  type Entry = { p: BatchProject; ctl: UnifiedController<UnifiedSnapshot>; started: boolean; at?: string; unsub: () => void }
+  type Entry = { p: BatchProject; ctl: UnifiedController<UnifiedSnapshot>; started: boolean; at?: string; note?: string; unsub: () => void }
   let entries: Entry[] = []
   let state: BatchState = { phase: 'idle', rows: [], errors: [], items: [] }
   let stopped = false
@@ -120,7 +128,7 @@ export function createUnifiedBatch(deps: BatchDeps) {
   const subs = new Set<() => void>()
 
   const emit = (patch: Partial<BatchState>) => {
-    const rows = entries.map((e): BatchRow => ({ id: e.p.id, code: e.p.code, name: e.p.name, status: rowStatus(e.ctl.getState(), e.started), at: e.at, state: e.ctl.getState() }))
+    const rows = entries.map((e): BatchRow => ({ id: e.p.id, code: e.p.code, name: e.p.name, status: rowStatus(e.ctl.getState(), e.started), at: e.at, note: e.note, state: e.ctl.getState() }))
     state = { ...state, rows, ...patch }
     for (const fn of subs) fn()
   }
@@ -196,8 +204,11 @@ export function createUnifiedBatch(deps: BatchDeps) {
       if (state.phase !== 'confirming') return Promise.resolve(state)
       emit({ phase: 'running' })
       const run = async () => {
+        const t0 = now().getTime()
+        const limit = deps.deadlineMs ?? BATCH_DEADLINE_MS
         for (const e of entries) {
           if (stopped) break
+          if (now().getTime() - t0 >= limit) { e.note = DEADLINE_NOTE; continue }
           e.started = true
           emit({})
           await e.ctl.confirm()
@@ -205,7 +216,7 @@ export function createUnifiedBatch(deps: BatchDeps) {
           emit({})
         }
         // 没轮到的（页面卸载后）也标成已开始，显示为「未下发」
-        for (const e of entries) if (!e.started) { e.started = true; e.ctl.abort() }
+        for (const e of entries) if (!e.started) { e.started = true; e.ctl.abort(); e.at ??= stamp(now()) }
         emit({ phase: 'done' })
         return state
       }

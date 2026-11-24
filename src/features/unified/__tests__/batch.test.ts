@@ -157,6 +157,20 @@ describe('start：逐个下发，三种结果，不重试', () => {
     expect(done.rows.map((r) => r.status)).toEqual(['not-sent', 'not-sent'])
   })
 
+  it('批次时限：超过后不再开始后面的项目（未下发并注明），已开始的照常走完', async () => {
+    let t = 0
+    const projects = [P('a', '1'), P('b', '2'), P('c', '3')]
+    const readBack = vi.fn(async () => { t += 10_000; return { rooms: 1, roomSwitch: 0, roomTemp: 26 } })
+    const send = vi.fn(async () => { t += 10_000; return { success: true, msg: '' } })
+    const batch = createUnifiedBatch({ getProjects: () => projects, readBack, send, log: () => {}, now: () => new Date(t), deadlineMs: 35_000 })
+    batch.prepare(['a', 'b', 'c'], { roomSwitch: 1 })
+    const done = await batch.start()
+    // a 用掉 30 秒，b 在 30 秒时开始（未超时）走完到 60 秒，c 不再开始
+    expect(send).toHaveBeenCalledTimes(2)
+    expect(done.rows.map((r) => r.status)).toEqual(['success', 'success', 'not-sent'])
+    expect(done.rows[2].note).toMatch(/35 秒/)
+  })
+
   it('运行中重复 start 返回同一个 Promise；运行中 prepare 无效', async () => {
     const t = setup([P('a', '1')])
     t.batch.prepare(['a'], { roomSwitch: 1 })
