@@ -800,6 +800,22 @@ describe('持久化（localStorage）', () => {
     expect(await verify(KEY)).toBe('unverifiable')
     expect(lockOf(PA)).not.toBeNull()
   })
+  it('206 已发出但目标房间集合为空数组：规范成缺失照常落盘，刷新恢复后仍锁住、核对按无法核对', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    registerVerifier(206, async (r) => matchAllRoomsSwitch(r, { data: [{ id: 1, switch: 1, isConnected: true }] } as never))
+    const t = take(); claim(t)
+    markSent(t, Promise.resolve(), { msg: 206, deviceId: null, target: { switch: 1 }, roomIds: [] })
+    settle(t, 'unknown')
+    await flush()
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('206 缺少目标房间集合'))
+    expect(warn).not.toHaveBeenCalledWith(expect.stringContaining('不合规'))
+    const saved = parseStored(localStorage.getItem(STORAGE_PREFIX + KEY))
+    expect(saved).toMatchObject({ msg: 206 })
+    expect(saved?.roomIds).toBeUndefined()
+    expect(lockOf(PA)).toMatchObject({ lastVerify: 'unverifiable' })
+    expect(await verify(KEY)).toBe('unverifiable')
+    expect(lockOf(PA)).not.toBeNull()
+  })
   it('206 目标房间在回包里缺失：剩下的房间一致也不放锁（无法核对）；全部在且一致才放', async () => {
     let data = [{ id: 1, switch: 1, isConnected: true }]
     registerVerifier(206, async (r) => matchAllRoomsSwitch(r, { data } as never))

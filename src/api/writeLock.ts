@@ -499,6 +499,11 @@ export function markSent(token: LockToken, sent: Promise<unknown>, record?: Sent
   if (!e || e.sent) return
   e.sent = sent
   e.sentAt = Date.now()
+  // 指令已发出：空的目标房间集合规范成"缺失"，照常落盘（核对按无法核对），不能因此只剩内存锁
+  if (record && Array.isArray(record.roomIds) && record.roomIds.length === 0) {
+    const { roomIds: _empty, ...rest } = record
+    record = rest
+  }
   if (record && validRecord(record)) {
     e.record = copyRecord(record)
     // 206 漏传目标房间集合（接入应先用 checkSentRecord 拒绝）：照常落盘与锁住，核对一律按无法核对，锁到有效期
