@@ -133,6 +133,11 @@ export interface OpSpec<P, L> {
   record: (payload: P) => SentRecord
   /** 新发一次 200（不复用写前的请求；绑定会话），读到后界面同步刷新 */
   read: (signal: AbortSignal) => Promise<L>
+  /**
+   * 写锁核对用的读取（可选）：只返回候选读数，apply 写缓存。写锁认可这次核对（一致时调了 commit，或不一致结论记进了锁的
+   * lastFields）之后才调 apply；不给时用 read（读到即写缓存）
+   */
+  readCandidate?: (signal: AbortSignal) => Promise<{ data: L; apply: () => void }>
   /** 读数与下发目标逐字段比对（writeLockVerify.ts 的四态结论） */
   matches: (payload: P, read: L) => MatchResult
   /** 写锁认可了一次全部一致的核对（之后的自动再核对一致也会调）：页面据此清草稿 */
@@ -204,10 +209,19 @@ export async function runOp<P, L>(o: OpSpec<P, L>): Promise<RunResult> {
     let failed = false
     // 「正在核对…」只是进度，不是结论：开始时标 pending，这次核对没被写锁认可（中止等）就恢复原来的显示
     let before: Readback | null = null
+    // 这次核对读到的候选读数：写锁认可后才写进查询缓存（每次核对开始时清掉，只对应最近一次核对）
+    let candidate: (() => void) | null = null
+    let inv = 0
+    const applyCandidate = () => { const c = candidate; candidate = null; try { c?.() } catch { /* 写缓存失败不影响锁 */ } }
     requireVerify(token, async (signal) => {
       lastThrew = true // 没读完（超时、中止、出错）都按回读失败
+      candidate = null
+      const my = ++inv
       if (sameSession()) { const cur = results.get(key); if (cur && before === null) before = cur.readback; patch({ readback: 'pending' }) }
-      const r = o.matches(payload, await o.read(signal))
+      const got = o.readCandidate ? await o.readCandidate(signal) : { data: await o.read(signal), apply: () => {} }
+      // 超时后迟到返回的旧核对（已有新一次核对开始）不留候选
+      if (my === inv) candidate = got.apply
+      const r = o.matches(payload, got.data)
       lastThrew = false
       const det: MatchDetail = typeof r === 'object' && r ? r : { verdict: (r === true ? 'applied' : r === 'unverifiable' ? 'unverifiable' : 'unchanged') as FieldResult, fields: {} }
       if (det.verdict !== 'applied') return r === false || r === 'unverifiable' ? r : det
@@ -216,6 +230,7 @@ export async function runOp<P, L>(o: OpSpec<P, L>): Promise<RunResult> {
         commit: () => {
           applied = true
           before = null
+          applyCandidate()
           if (sameSession()) {
             const cur = results.get(key)
             // 已下发（success）的这次，或之前核对过不一致、后来才一致：提示成功（在原项目时清结果条，不在时把成功留给原项目）；
@@ -234,6 +249,7 @@ export async function runOp<P, L>(o: OpSpec<P, L>): Promise<RunResult> {
       const info = lockOf(o.project)
       if (!info || info.key !== token.key) {
         offLock()
+        candidate = null
         if (!applied && !failed && sameSession()) patch({ ended: 'expired' })
         firstCheck(null)
         return
@@ -245,6 +261,8 @@ export async function runOp<P, L>(o: OpSpec<P, L>): Promise<RunResult> {
       }
       before = null
       seen = { v: info.lastVerify, f: info.lastFields }
+      // 写锁认可了这次（不一致的）核对：候选读数这时才写缓存
+      applyCandidate()
       const fields = info.lastFields ?? {}
       const vals = Object.values(fields)
       const verdict: FieldResult = vals.length ? verdictOf(vals)

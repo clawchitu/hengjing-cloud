@@ -124,6 +124,17 @@ export function allRoomsTarget(reply: Pick<CtrlReply<200>, 'data'>): { ok: true;
   return { ok: true, roomIds: ids }
 }
 
+/**
+ * 201（单房间设置 / 开关）的目标房间：原始 200 回包里该设备 ID 必须恰好出现一次。缺失或重复（无法确定是哪一条、末端取哪份）
+ * 返回原因，不下发
+ */
+export function roomTargetIssue(reply: Pick<CtrlReply<200>, 'data'>, equipmentId: number): string | null {
+  const n = (reply.data ?? []).filter((r) => r.id === equipmentId).length
+  if (n === 0) return '房间已不在面板列表里'
+  if (n > 1) return `控制屏返回的房间里设备 ID ${equipmentId} 出现了 ${n} 次，无法确定目标房间`
+  return null
+}
+
 // ---------------------------------------------------------------------------
 // 顶部 KPI
 

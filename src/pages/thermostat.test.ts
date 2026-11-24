@@ -24,7 +24,7 @@ import { __resetSessionViewForTests } from '../data/session'
 import { __resetWritesForTests, LIMITS, realSource as thermoRealSource } from '../features/thermostat'
 import Layout from '../components/Layout'
 import { OrgGate } from '../app/OrgGate'
-import { __resetWriteLockForTests, acquire as acquireLock, release as releaseLock, STORAGE_PREFIX, verify as verifyLock } from '../api/writeLock'
+import { __resetWriteLockForTests, configureWriteLock, acquire as acquireLock, release as releaseLock, STORAGE_PREFIX, verify as verifyLock } from '../api/writeLock'
 import Thermostat from './Thermostat'
 
 beforeAll(() => {
@@ -1225,6 +1225,129 @@ describe('#35 第四轮：重新下发没发出（写防护 / 503 code 14 / 认�
       vi.spyOn(thermoRealSource, 'setRoom').mockRejectedValue(new ApiError('network', '网络中断'))
     })
     expect(writes(be)).toHaveLength(1)
+  })
+})
+
+describe('#35 第五轮：201 目标 ID 唯一、核对读数写缓存的时机', () => {
+  const DUP = { ...ROOM, name: '客厅', setTemp: 22 }
+  it('单房间设置：原始 200 里目标设备 ID 重复 → 不弹确认、不下发，提示重新核对', async () => {
+    const be = backend({ '/ctrl/room-temperature-set': ok201 })
+    rooms = [ROOM, OFF_ROOM, DUP]
+    await open()
+    await screen.findAllByText('客厅')
+    fireEvent.click(btn(card('客厅'), '客厅 设定温度升高'))
+    fireEvent.click(btn(card('客厅'), '下发'))
+    await waitFor(() => expect(toasts()).toContain('出现了 2 次，无法确定目标房间'))
+    expect(toasts()).toContain('请重新核对后再下发')
+    expect(screen.queryByRole('alertdialog')).toBeNull()
+    expect(writes(be)).toHaveLength(0)
+  })
+  it('单房间开关：原始 200 里目标设备 ID 重复 → 不弹确认、不下发', async () => {
+    const be = backend({ '/ctrl/room-temperature-set': ok201 })
+    rooms = [ROOM, OFF_ROOM, DUP]
+    await open()
+    await screen.findAllByText('客厅')
+    fireEvent.click(within(card('客厅')).getByLabelText('客厅 开关'))
+    await waitFor(() => expect(toasts()).toContain('无法确定目标房间'))
+    expect(screen.queryByRole('alertdialog')).toBeNull()
+    expect(writes(be)).toHaveLength(0)
+  })
+  for (const kind of ['设置', '开关'] as const) {
+    it(`单房间${kind}：确认后预检读到目标设备 ID 重复 → 取消，不下发`, async () => {
+      const be = backend({ '/ctrl/room-temperature-set': ok201 })
+      const c = await openRooms()
+      if (kind === '设置') { fireEvent.click(btn(c, '客厅 设定温度升高')); fireEvent.click(btn(card('客厅'), '下发')) }
+      else fireEvent.click(within(c).getByLabelText('客厅 开关'))
+      await dialog()
+      rooms = [ROOM, OFF_ROOM, DUP]
+      await confirmOk()
+      await waitFor(() => expect(toasts()).toContain('无法确定目标房间'))
+      expect(writes(be)).toHaveLength(0)
+      expect(document.querySelector('[data-lock]')).toBeNull()
+    })
+  }
+
+  const roomTemp = () => card('客厅').querySelector('.room-temp')?.textContent
+  it('核对被写锁拒绝（跨过有效期）：候选读数不写缓存，卡片不被这次旧核对的读数覆盖', async () => {
+    let wrote = false
+    let n = 0
+    const verify = deferred(() => reply200([{ ...ROOM, temperature: 30 }, OFF_ROOM]))
+    backend({
+      '/ctrl/room-temperature-set': () => { wrote = true; return ok201NoApply() },
+      '/ctrl/room-temperature-data-get': () => (!wrote ? reply200(rooms) : ++n === 1 ? verify.handler() : json({ code: 13, message: 'internal' }, 500)),
+    })
+    await draftAndSend()
+    await confirmOk()
+    await waitFor(() => expect(n).toBe(1)) // 写锁自动核对的读取已发出，卡在 verify 上
+    expect(roomTemp()).toBe('25.8°C')
+    vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 3 * 60_000)
+    await verify.release() // 返回时已过有效期：写锁按到期放锁、强制重读（重读失败），不认可这次核对
+    await waitFor(() => expect(document.querySelector('[data-lock]')).toBeNull())
+    await flush(80)
+    expect(roomTemp()).toBe('25.8°C') // 旧核对的读数没进缓存
+  })
+  it('核对被写锁认可但读取早于另一次更新的读数：按读取序号不覆盖更新的读数', async () => {
+    let wrote = false
+    let n = 0
+    const verify = deferred(() => reply200([{ ...ROOM, temperature: 30 }, OFF_ROOM]))
+    backend({
+      '/ctrl/room-temperature-set': () => { wrote = true; return ok201NoApply() },
+      '/ctrl/room-temperature-data-get': () => (!wrote ? reply200(rooms) : ++n === 1 ? verify.handler() : reply200([{ ...ROOM, temperature: 20 }, OFF_ROOM])),
+    })
+    await draftAndSend()
+    await confirmOk()
+    await waitFor(() => expect(n).toBe(1)) // 写锁自动核对的读取已发出，卡在 verify 上
+    await act(async () => { await client.refetchQueries({ type: 'active' }) }) // 之后发起的轮询先返回更新的读数
+    await waitFor(() => expect(roomTemp()).toBe('20.0°C'))
+    await verify.release() // 旧核对返回：不一致，写锁认可并记下逐字段
+    await waitFor(() => expect(within(card('客厅')).getAllByRole('alert').map((a) => a.textContent).join()).toContain('指令已下发，设备状态暂未变化'))
+    expect(roomTemp()).toBe('20.0°C')
+  })
+
+  it('旧核对跨过到期、晚于到期后的强制重读返回：不覆盖强制重读的新读数', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true, toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'] })
+    try {
+      let wrote = false
+      let holdFrom = Infinity
+      let held: ReturnType<typeof deferred> | null = null
+      let after = 0
+      backend({
+        '/ctrl/room-temperature-set': () => { wrote = true; return ok201NoApply() },
+        '/ctrl/room-temperature-data-get': () => {
+          if (!wrote) return reply200(rooms)
+          if (!held && Date.now() >= holdFrom) { held = deferred(() => reply200([{ ...ROOM, temperature: 30 }, OFF_ROOM])); return held.handler() }
+          if (held) { after += 1; return reply200([{ ...ROOM, temperature: 20 }, OFF_ROOM]) }
+          return reply200(rooms)
+        },
+      })
+      await draftAndSend()
+      configureWriteLock({ ttlMs: 30_000 })
+      await confirmOk()
+      await waitFor(() => expect(document.querySelector('[data-lock="unknown"]')).toBeTruthy())
+      holdFrom = Date.now() + 15_000 // 有效期最后 15 秒内开始的那次自动再核对卡住
+      for (let i = 0; i < 26 && !held; i++) await act(async () => { await vi.advanceTimersByTimeAsync(1_000) })
+      expect(held).toBeTruthy()
+      // 读取卡住期间到期：放锁、强制重读，读到新数据
+      for (let i = 0; i < 12 && document.querySelector('[data-lock]'); i++) await act(async () => { await vi.advanceTimersByTimeAsync(1_000) })
+      expect(document.querySelector('[data-lock]')).toBeNull()
+      await waitFor(() => expect(after).toBeGreaterThan(0))
+      await waitFor(() => expect(roomTemp()).toBe('20.0°C'))
+      await held!.release() // 旧核对这时才返回
+      await act(async () => { await vi.advanceTimersByTimeAsync(100) })
+      expect(roomTemp()).toBe('20.0°C')
+    } finally { vi.useRealTimers() }
+  })
+
+  it('核对被写锁认可（不一致）且是最新读数：认可之后写进缓存，卡片显示核对读到的读数', async () => {
+    let wrote = false
+    backend({
+      '/ctrl/room-temperature-set': () => { wrote = true; return ok201NoApply() },
+      '/ctrl/room-temperature-data-get': () => reply200(wrote ? [{ ...ROOM, temperature: 30 }, OFF_ROOM] : rooms),
+    })
+    await draftAndSend()
+    await confirmOk()
+    await waitFor(() => expect(within(card('客厅')).getAllByRole('alert').map((a) => a.textContent).join()).toContain('指令已下发，设备状态暂未变化'))
+    expect(roomTemp()).toBe('30.0°C')
   })
 })
 

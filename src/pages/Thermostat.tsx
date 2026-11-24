@@ -22,11 +22,11 @@ import { lockKeysOf, onForceReread, OTHER_ACCOUNT_TEXT, verify, type FieldResult
 import { describeFields, verdictOf } from '../api/writeLockVerify'
 import type { CtrlReply } from '../api/ctrl'
 import {
-  ALL, allRoomsTarget, buildRoomSet, buildRoomSwitch, canStep, clearResult, describeChanges, describeDraft, describeResult, draftChanges, ecoLabel,
+  ALL, allRoomsTarget, roomTargetIssue, buildRoomSet, buildRoomSwitch, canStep, clearResult, describeChanges, describeDraft, describeResult, draftChanges, ecoLabel,
   editBlock, editDraft, fmtTemp, hasDraftChanges, isLocked, match201, match206, noteCurrentProject, reconcileDraft, record201, record206,
-  resolveTempRange, runOp, sameQuery, stepTemp, summarize, switchBlock, tempBlock, thermostatSource, useFreshRooms, useRooms, useRoomsRaw, useRoomStats,
+  resolveTempRange, runOp, sameQuery, stepTemp, summarize, switchBlock, tempBlock, thermostatSource, useRooms, useRoomsRaw, useRoomStats,
   useWrites, useFreshRead, windLabel,
-  type ChartData, type EditCtx, type EndMode, type RoomDraft, type RoomView, type Running, type StatsRange, type TempRange, type WriteResult,
+  type ChartData, type FreshRead, type EditCtx, type EndMode, type RoomDraft, type RoomView, type Running, type StatsRange, type TempRange, type WriteResult,
 } from '../features/thermostat'
 
 type WriteQuery201 = WriteQuery<201>
@@ -112,12 +112,13 @@ interface RoomCardProps {
   /** 本标签正在进行的一次下发（界面阶段） */
   running: Running | null
   result: WriteResult | null
-  freshRooms: (signal?: AbortSignal) => Promise<RoomView[]>
   /** 新读一次 200，同时给出原始读数（写后核对用） */
-  freshRead: (signal?: AbortSignal) => Promise<{ list: RoomView[]; raw: Pick<CtrlReply<200>, 'data'> }>
+  freshRead: (signal?: AbortSignal, opts?: { defer?: boolean }) => Promise<FreshRead>
+  /** 最近一次读到的原始 200（确认前查目标设备 ID 是否恰好出现一次） */
+  raw: Pick<CtrlReply<200>, 'data'> | undefined
 }
 
-function RoomCard({ room: r, ctx, range, selected, onSelect, draft, conflict, onEdit, onDiscard, pending, onPending, lock, running, result, freshRooms, freshRead }: RoomCardProps) {
+function RoomCard({ room: r, ctx, range, selected, onSelect, draft, conflict, onEdit, onDiscard, pending, onPending, lock, running, result, freshRead, raw }: RoomCardProps) {
   // 确认与当前项目都在真正发起下发的这个组件里取：卸载、离开、换项目时确认按取消结算
   const confirm = useConfirm()
   const { project } = useCurrentProject()
@@ -148,8 +149,11 @@ function RoomCard({ room: r, ctx, range, selected, onSelect, draft, conflict, on
       project: p, target: r.key, subject: r.name, okText, toast: showToast, onApplied,
       present: () => present.current && latest.current.project?.id === p.id,
       preflight: async (signal) => {
-        const list = await freshRooms(signal)
-        const fresh = list.find((x) => x.key === r.key)
+        const read = await freshRead(signal)
+        // 原始 200 里目标设备 ID 必须恰好一次（重复时 find 取到的那条不一定是用户选的房间，末端也不可靠）
+        const issue = roomTargetIssue(read.raw, r.equipmentId)
+        if (issue) return { ok: false, reason: issue }
+        const fresh = read.list.find((x) => x.key === r.key)
         if (!fresh) return { ok: false, reason: '房间已不在面板列表里' }
         const cur = latest.current.project
         if (!cur || cur.id !== p.id) return { ok: false, reason: '当前项目已变化' }
@@ -164,6 +168,7 @@ function RoomCard({ room: r, ctx, range, selected, onSelect, draft, conflict, on
       send: (q, beforeSend) => thermostatSource().setRoom(p, q, beforeSend),
       record: record201,
       read: async (signal) => (await freshRead(signal)).raw,
+      readCandidate: async (signal) => { const x = await freshRead(signal, { defer: true }); return { data: x.raw, apply: x.apply } },
       matches: match201,
     })
   }
@@ -173,6 +178,8 @@ function RoomCard({ room: r, ctx, range, selected, onSelect, draft, conflict, on
     if (!p0 || isLocked(p0)) return
     const built = buildRoomSet(r, draft, ctx, range)
     if (!built.ok) { showToast(built.reason, true); return }
+    const dupe = raw ? roomTargetIssue(raw, r.equipmentId) : null
+    if (dupe) { showToast(`${r.name}：${dupe}，本次未下发，请重新核对后再下发`, true); return }
     const okText = `${r.name} 已生效：${describeResult(changes)}`
     const ok = await confirm({ title: '下发房间设置', body: <>将向 <b>{p0.name}</b>（<span className="num">{p0.code}</span>）的「{r.name}」下发：{describeChanges(changes)}，确定继续？</>, okText: '确认下发' })
     if (!ok) return
@@ -198,6 +205,8 @@ function RoomCard({ room: r, ctx, range, selected, onSelect, draft, conflict, on
     if (!p0 || isLocked(p0) || dirty) return
     const built = buildRoomSwitch(r, v, ctx)
     if (!built.ok) { showToast(built.reason, true); return }
+    const dupe = raw ? roomTargetIssue(raw, r.equipmentId) : null
+    if (dupe) { showToast(`${r.name}：${dupe}，本次未下发，请重新核对后再下发`, true); return }
     const ok = await confirm({ title: v ? '开启房间' : '关闭房间', body: <>将向 <b>{p0.name}</b>（<span className="num">{p0.code}</span>）的「{r.name}」下发「{v ? '开启' : '关闭'}」指令，确定继续？</>, okText: '确认下发' })
     if (!ok) return
     const now = latest.current
@@ -381,7 +390,6 @@ export default function Thermostat() {
   const confirm = useConfirm()
   const rooms = useRooms(project, caps.thermostat)
   const rawRooms = useRoomsRaw(project, caps.thermostat)
-  const freshRooms = useFreshRooms(project)
   const freshRead = useFreshRead(project)
   const writes = useWrites(project)
   const [sel, setSel] = useState('')
@@ -520,6 +528,7 @@ export default function Thermostat() {
       send: (q, beforeSend) => thermostatSource().setAll(p, q.on, beforeSend),
       record: record206,
       read: async (signal) => (await freshRead(signal)).raw,
+      readCandidate: async (signal) => { const x = await freshRead(signal, { defer: true }); return { data: x.raw, apply: x.apply } },
       matches: match206,
     })
   }
@@ -554,7 +563,7 @@ export default function Thermostat() {
           <RoomCard key={r.key} room={r} ctx={ctx} range={tempRange} selected={statRoom?.key === r.key} onSelect={() => setSel(r.key)}
             draft={draft?.key === r.key ? draft : null} conflict={draft?.key === r.key ? rec.conflict : []}
             onEdit={(patch) => void onEdit(r.key, patch)} onDiscard={() => setDraft((d) => (d?.key === r.key ? null : d))} pending={frozen && draft?.key === r.key} onPending={markPending}
-            lock={lock} running={writes.running} result={writes.result(r.key)} freshRooms={freshRooms} freshRead={freshRead} />
+            lock={lock} running={writes.running} result={writes.result(r.key)} freshRead={freshRead} raw={rawRooms.data} />
         ))}
       </div>
       <Card style={{ marginTop: 20 }}>
