@@ -36,10 +36,6 @@ export function Avatar({ size = 36 }: { size?: number }) {
   )
 }
 
-export function Card({ children, className = '', style, pad = true }: { children: ReactNode; className?: string; style?: CSSProperties; pad?: boolean }) {
-  return <div className={`card ${pad ? 'card-pad' : ''} ${className}`} style={style}>{children}</div>
-}
-
 export function Seg<T extends string>({ value, options, onChange, className = '', counts }: { value: T; options: T[]; onChange: (v: T) => void; className?: string; counts?: Partial<Record<T, number>> }) {
   return (
     <div className={'seg ' + className}>

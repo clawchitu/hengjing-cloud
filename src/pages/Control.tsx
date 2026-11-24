@@ -1,6 +1,10 @@
 import { useState } from 'react'
 import { faMagnifyingGlass, faCircleInfo, faLayerGroup, faChevronDown, faChevronUp, faPowerOff, faWandMagicSparkles, faSnowflake, faSun, faDropletSlash, faWind, faRobot, faMinus, faDoorOpen, faTemperatureHalf, faPaperPlane, faTriangleExclamation, faCircleCheck, faSpinner, faCircleXmark, faRotateRight } from '@fortawesome/free-solid-svg-icons'
-import { Card, Icon, useAsync } from '../components/legacy'
+import { Icon, useAsync } from '../components/legacy'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { Card, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { useApp } from '../app/store'
 import * as api from '../api'
 import { hasRooms } from '../api'
@@ -139,33 +143,33 @@ export default function Control() {
 
       {last && (
         <Card pad={false}>
-          <div className="card-head card-pad" style={{ marginBottom: 0, paddingBottom: 14 }}>
-            <div><h3 className="card-title">最近一次执行结果</h3><div className="card-sub num">{last.id} · {last.at} · {last.by} · {last.summary}</div></div>
+          <CardHeader pad style={{ marginBottom: 0, paddingBottom: 14 }}>
+            <div><CardTitle>最近一次执行结果</CardTitle><CardDescription className="num">{last.id} · {last.at} · {last.by} · {last.summary}</CardDescription></div>
             <div className="row" style={{ gap: 16, fontSize: 13.5 }}>
               <span className="green"><Icon icon={faCircleCheck} /> 成功 <b>{counts.s}</b></span>
               <span className="cyan"><Icon icon={faSpinner} spin={counts.p > 0} /> 执行中 <b>{counts.p}</b></span>
               <span className="red"><Icon icon={faCircleXmark} /> 失败 <b>{counts.f}</b></span>
             </div>
-          </div>
-          <table className="table">
-            <thead><tr><th>项目</th><th>项目ID</th><th>执行进度</th><th className="r">设备 成功/总数</th><th>状态</th><th>说明</th><th className="r">操作</th></tr></thead>
-            <tbody>
+          </CardHeader>
+          <Table>
+            <TableHeader><TableRow><TableHead>项目</TableHead><TableHead>项目ID</TableHead><TableHead>执行进度</TableHead><TableHead className="text-right">设备 成功/总数</TableHead><TableHead>状态</TableHead><TableHead>说明</TableHead><TableHead className="text-right">操作</TableHead></TableRow></TableHeader>
+            <TableBody>
               {last.rows.map((r) => {
                 const pct = Math.round((r.ok / r.total) * 100)
                 const c = r.status === '成功' ? 'var(--green-2)' : r.status === '执行中' ? 'var(--primary-2)' : 'var(--red)'
                 return (
-                  <tr key={r.id}>
-                    <td style={{ fontWeight: 500 }}>{r.name}</td><td className="num muted">{r.id}</td>
-                    <td style={{ width: 290 }}><div className="row" style={{ gap: 10 }}><div className="bar"><i style={{ width: pct + '%', background: c, transition: 'width .6s' }} /></div><span className="num" style={{ width: 36, fontSize: 12 }}>{pct}%</span></div></td>
-                    <td className="r num" style={{ fontWeight: 600 }}>{r.ok} / {r.total}</td>
-                    <td><span className={'pill ' + (r.status === '成功' ? 'green' : r.status === '执行中' ? 'cyan' : 'red')}>{r.status}</span></td>
-                    <td className="muted">{r.note}</td>
-                    <td className="r">{r.status === '部分失败' ? <button className="link" onClick={() => { setLast({ ...last, rows: last.rows.map((x) => (x.id === r.id ? { ...x, ok: x.total, status: '成功', note: '—' } : x)) }); toast(`${r.name} 重试成功`) }}><Icon icon={faRotateRight} /> 重试</button> : <span className="faint">—</span>}</td>
-                  </tr>
+                  <TableRow key={r.id}>
+                    <TableCell style={{ fontWeight: 500 }}>{r.name}</TableCell><TableCell className="num muted">{r.id}</TableCell>
+                    <TableCell style={{ width: 290 }}><div className="row" style={{ gap: 10 }}><div className="bar"><i style={{ width: pct + '%', background: c, transition: 'width .6s' }} /></div><span className="num" style={{ width: 36, fontSize: 12 }}>{pct}%</span></div></TableCell>
+                    <TableCell className="num text-right" style={{ fontWeight: 600 }}>{r.ok} / {r.total}</TableCell>
+                    <TableCell><Badge variant={r.status === '成功' ? 'green' : r.status === '执行中' ? 'cyan' : 'red'}>{r.status}</Badge></TableCell>
+                    <TableCell className="muted">{r.note}</TableCell>
+                    <TableCell className="text-right">{r.status === '部分失败' ? <Button variant="link" onClick={() => { setLast({ ...last, rows: last.rows.map((x) => (x.id === r.id ? { ...x, ok: x.total, status: '成功', note: '—' } : x)) }); toast(`${r.name} 重试成功`) }}><Icon icon={faRotateRight} /> 重试</Button> : <span className="faint">—</span>}</TableCell>
+                  </TableRow>
                 )
               })}
-            </tbody>
-          </table>
+            </TableBody>
+          </Table>
         </Card>
       )}
     </div>

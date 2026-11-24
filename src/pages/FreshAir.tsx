@@ -1,6 +1,10 @@
 import { useEffect, useState, type ReactNode } from 'react'
 import { faFan, faDroplet, faTemperatureLow, faPaperPlane, faRotate, faSignal, faFilter, faLock, faGears } from '@fortawesome/free-solid-svg-icons'
-import { Card, Icon, Toggle, useAsync, useClock } from '../components/legacy'
+import { Icon, Toggle, useAsync, useClock } from '../components/legacy'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { Card, CardHeader, CardTitle } from '@/components/ui/card'
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { useApp } from '../app/store'
 import * as api from '../api'
 import { DEW_MODES, isStandalone, type FreshAir as FA } from '../api'
@@ -104,7 +108,7 @@ export default function FreshAir() {
 
       <div className={'fa-top' + (hasSettings ? '' : ' wide')}>
         <Card>
-          <div className="card-head"><h3 className="card-title">实时数据 · <span className="num">{u.name}</span></h3><span className={'pill ' + (u.status === 'off' ? 'gray' : u.status === 'filter' ? 'orange' : 'green')}><span className="dot" />{st}</span></div>
+          <CardHeader><CardTitle>实时数据 · <span className="num">{u.name}</span></CardTitle><Badge variant={u.status === 'off' ? 'gray' : u.status === 'filter' ? 'orange' : 'green'}><span className="dot" />{st}</Badge></CardHeader>
           <div className="fa-banner">
             <div className="fb-filter">
               <Ring pct={u.filter} />
@@ -118,7 +122,7 @@ export default function FreshAir() {
             <div className="fb-mode">
               <small><Icon icon={faGears} /> 运行模式</small>
               <b className="num">模式 {u.mode}</b>
-              <span className={'pill ' + (canDew ? 'cyan' : 'gray')}>{canDew ? '支持 露点 / 湿度 控制' : '仅湿度控制'}</span>
+              <Badge variant={canDew ? 'cyan' : 'gray'} className="self-start">{canDew ? '支持 露点 / 湿度 控制' : '仅湿度控制'}</Badge>
             </div>
           </div>
           <div className={'fa-tiles' + (hasSettings ? '' : ' six')}>
@@ -128,7 +132,7 @@ export default function FreshAir() {
 
         {hasSettings && (
           <Card className="set-panel">
-            <div className="card-head" style={{ marginBottom: 12 }}><h3 className="card-title">运行设置</h3><span className="row muted" style={{ fontSize: 13 }}>开关 <Toggle on={draft.on} onChange={(v) => setDraft({ ...draft, on: v })} /></span></div>
+            <CardHeader style={{ marginBottom: 12 }}><CardTitle>运行设置</CardTitle><span className="row muted" style={{ fontSize: 13 }}>开关 <Toggle on={draft.on} onChange={(v) => setDraft({ ...draft, on: v })} /></span></CardHeader>
             <h4>控制类型设置</h4><div className="faint" style={{ fontSize: 11.5 }}>露点设定与湿度设定二选一</div>
             <div className="ctl-type">
               <button className={'opt-btn' + (dewOn ? ' on' : '')} disabled={!canDew} title={canDew ? undefined : '当前模式固定为湿度控制'} onClick={() => canDew && setDraft({ ...draft, control: 'dew' })}><Icon icon={faTemperatureLow} />露点控制</button>
@@ -136,41 +140,41 @@ export default function FreshAir() {
             </div>
             {!canDew && <div className="ctl-hint"><Icon icon={faLock} />当前模式（{u.mode}）固定为湿度控制，不可修改</div>}
             <div className={'setbox' + (dewOn ? ' on' : ' dis')}>
-              <div className="sh"><div><b>露点设定值</b><small>范围 8.0 – 16.0 °C</small></div>{dewOn ? <span className="pill" style={{ background: 'var(--primary-2)', color: '#fff' }}>生效中</span> : <span className="pill gray">未启用</span>}</div>
+              <div className="sh"><div><b>露点设定值</b><small>范围 8.0 – 16.0 °C</small></div>{dewOn ? <Badge style={{ background: 'var(--primary-2)', color: '#fff' }}>生效中</Badge> : <Badge variant="gray">未启用</Badge>}</div>
               <div className="stepper"><button disabled={!dewOn} onClick={() => step('dewSet', -0.5)}>−</button><span className="sv num">{draft.dewSet.toFixed(1)}<small>°C</small></span><button className="plus" disabled={!dewOn} onClick={() => step('dewSet', 0.5)}>+</button></div>
             </div>
             <div className={'setbox' + (!dewOn ? ' on' : ' dis')}>
-              <div className="sh"><div><b>湿度设定值</b><small>范围 35 – 70 %RH</small></div>{!dewOn ? <span className="pill" style={{ background: 'var(--primary-2)', color: '#fff' }}>生效中</span> : <span className="pill gray">未启用</span>}</div>
+              <div className="sh"><div><b>湿度设定值</b><small>范围 35 – 70 %RH</small></div>{!dewOn ? <Badge style={{ background: 'var(--primary-2)', color: '#fff' }}>生效中</Badge> : <Badge variant="gray">未启用</Badge>}</div>
               <div className="stepper"><button disabled={dewOn} onClick={() => step('humSet', -1)}>−</button><span className="sv num">{draft.humSet}<small>%</small></span><button className="plus" disabled={dewOn} onClick={() => step('humSet', 1)}>+</button></div>
             </div>
             <h4 style={{ marginTop: 16 }}>风速设定</h4>
             <div className="fan3">
               {(['低', '中', '高'] as const).map((f) => <button key={f} className={'opt-btn' + (draft.fan === f ? ' on' : '')} onClick={() => setDraft({ ...draft, fan: f })}><Icon icon={faSignal} style={{ fontSize: 11 }} />{f}</button>)}
             </div>
-            <button className="btn primary block lg" onClick={send}><Icon icon={faPaperPlane} />下发设置</button>
+            <Button variant="primary" size="lg" block onClick={send}><Icon icon={faPaperPlane} />下发设置</Button>
           </Card>
         )}
       </div>
 
       <Card pad={false}>
-        <div className="card-pad" style={{ paddingBottom: 14 }}><h3 className="card-title">设备汇总</h3></div>
-        <table className="table">
-          <thead><tr><th>设备</th><th>开关</th><th className="r">模式</th><th className="r">温度</th><th className="r">湿度</th><th className="r">露点</th><th style={{ paddingLeft: 40 }}>控制类型</th><th className="r">设定值</th><th>风速</th><th>滤网寿命</th></tr></thead>
-          <tbody>
+        <div className="px-[22px] py-5" style={{ paddingBottom: 14 }}><CardTitle>设备汇总</CardTitle></div>
+        <Table>
+          <TableHeader><TableRow><TableHead>设备</TableHead><TableHead>开关</TableHead><TableHead className="text-right">模式</TableHead><TableHead className="text-right">温度</TableHead><TableHead className="text-right">湿度</TableHead><TableHead className="text-right">露点</TableHead><TableHead style={{ paddingLeft: 40 }}>控制类型</TableHead><TableHead className="text-right">设定值</TableHead><TableHead>风速</TableHead><TableHead>滤网寿命</TableHead></TableRow></TableHeader>
+          <TableBody>
             {units.map((f) => (
-              <tr key={f.id} onClick={() => setCur(f.id)} style={{ cursor: 'pointer', color: f.on ? undefined : 'var(--muted)' }}>
-                <td style={{ fontWeight: 500, color: 'var(--text)' }}>{f.name}</td>
-                <td><span className={'pill ' + (f.on ? 'green' : 'gray')} style={{ color: f.on ? undefined : 'var(--muted)' }}>{f.on ? '开' : '关'}</span></td>
-                <td className="r num">{f.mode}</td>
-                <td className="r num">{f.supplyTemp.toFixed(1)}°C</td><td className="r num">{f.supplyHum}%</td><td className="r num">{f.supplyDew.toFixed(1)}°C</td>
-                <td style={{ paddingLeft: 40 }}>{f.control === 'dew' ? '露点' : '湿度'}</td>
-                <td className="r num">{f.control === 'dew' ? `${f.dewSet.toFixed(1)}°C` : `${f.humSet}%`}</td>
-                <td>{f.on ? f.fan : '--'}</td>
-                <td style={{ width: 170 }}><div className="row" style={{ gap: 10 }}><div className="bar"><i style={{ width: f.filter + '%', background: !f.on ? '#cbd5e1' : f.filter < 15 ? 'var(--red)' : undefined }} /></div><span className={'num ' + (f.filter < 15 ? 'red' : '')} style={{ width: 30, textAlign: 'right', fontSize: 12 }}>{f.filter}%</span></div></td>
-              </tr>
+              <TableRow key={f.id} onClick={() => setCur(f.id)} style={{ cursor: 'pointer', color: f.on ? undefined : 'var(--muted)' }}>
+                <TableCell style={{ fontWeight: 500, color: 'var(--text)' }}>{f.name}</TableCell>
+                <TableCell><Badge variant={f.on ? 'green' : 'gray'} style={{ color: f.on ? undefined : 'var(--muted)' }}>{f.on ? '开' : '关'}</Badge></TableCell>
+                <TableCell className="num text-right">{f.mode}</TableCell>
+                <TableCell className="num text-right">{f.supplyTemp.toFixed(1)}°C</TableCell><TableCell className="num text-right">{f.supplyHum}%</TableCell><TableCell className="num text-right">{f.supplyDew.toFixed(1)}°C</TableCell>
+                <TableCell style={{ paddingLeft: 40 }}>{f.control === 'dew' ? '露点' : '湿度'}</TableCell>
+                <TableCell className="num text-right">{f.control === 'dew' ? `${f.dewSet.toFixed(1)}°C` : `${f.humSet}%`}</TableCell>
+                <TableCell>{f.on ? f.fan : '--'}</TableCell>
+                <TableCell style={{ width: 170 }}><div className="row" style={{ gap: 10 }}><div className="bar"><i style={{ width: f.filter + '%', background: !f.on ? '#cbd5e1' : f.filter < 15 ? 'var(--red)' : undefined }} /></div><span className={'num ' + (f.filter < 15 ? 'red' : '')} style={{ width: 30, textAlign: 'right', fontSize: 12 }}>{f.filter}%</span></div></TableCell>
+              </TableRow>
             ))}
-          </tbody>
-        </table>
+          </TableBody>
+        </Table>
       </Card>
     </div>
   )

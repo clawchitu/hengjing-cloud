@@ -6,6 +6,7 @@ import {
   faChevronDown, faChevronRight, faMagnifyingGlass, faHouse, faPlugCircleXmark, faClock,
 } from '@fortawesome/free-solid-svg-icons'
 import { Avatar, Icon, LogoMark } from './legacy'
+import { Badge } from '@/components/ui/badge'
 import { useApp } from '../app/store'
 import { gatewayOf, type Project } from '../api'
 
@@ -87,7 +88,7 @@ function ProjectSearch() {
           {hits.length ? hits.map((p) => (
             <div key={p.id} className={'sp-row' + (p.id === project.id ? ' cur' : '')} onMouseDown={(e) => e.preventDefault()} onClick={() => pick(p)}>
               <div><b>{p.name}</b><small>{gname(p.groupId)} · <span className="num">{p.id}</span></small></div>
-              <span className={'pill ' + (p.online ? 'green' : 'gray')}>{p.online ? '在线' : '离线'}</span>
+              <Badge variant={p.online ? 'green' : 'gray'}>{p.online ? '在线' : '离线'}</Badge>
             </div>
           )) : <div className="sp-empty">未找到匹配的项目（仅搜索您可见的集成项目内的项目）</div>}
         </div>
@@ -155,7 +156,7 @@ export default function Layout() {
               <>
                 <Link to="/groups">集成项目</Link><Icon className="sep" icon={faChevronRight} />
                 <Link to="/groups">{project.name}</Link>
-                {!project.online && <span className="pill red crumb-off">离线</span>}
+                {!project.online && <Badge variant="red" className="crumb-off">离线</Badge>}
                 <Icon className="sep" icon={faChevronRight} />
               </>
             ) : (
