@@ -272,7 +272,7 @@ export function createUnifiedController<S>(deps: UnifiedDeps<S>): UnifiedControl
     const echo = echoOf(after)
     const mismatches = echoMismatches(query, echo)
     const verdict = after === null ? null : echoVerdict(mismatches, echo)
-    const byKind = (...kinds: EchoMismatch['kind'][]) => mismatches.filter((m) => kinds.includes(m.kind)).map((m) => m.field)
+    const byKind = (...kinds: EchoMismatch['kind'][]) => [...new Set(mismatches.filter((m) => kinds.includes(m.kind)).map((m) => m.field))]
 
     if (outcome === null) {
       // Reply success=true 只算「已下发」，以回读为准
@@ -293,7 +293,7 @@ export function createUnifiedController<S>(deps: UnifiedDeps<S>): UnifiedControl
         write('unapplied', target, { codes: ['REPLY_OK', 'ECHO_MISMATCH'], fields: byKind('differ') })
         dispatch({ type: 'UNAPPLIED', before, after, mismatches })
       } else {
-        write('unverifiable', target, { codes: ['REPLY_OK', 'NOT_VERIFIED'], fields: byKind('missing', 'unreadable') })
+        write('unverifiable', target, { codes: ['REPLY_OK', 'NOT_VERIFIED'], fields: byKind('missing', 'unreadable', 'differ') })
         dispatch({ type: 'UNVERIFIABLE', before, after, mismatches })
       }
       return state
@@ -311,7 +311,7 @@ export function createUnifiedController<S>(deps: UnifiedDeps<S>): UnifiedControl
       return state
     }
     const afterError = readErr === null ? undefined : `${TEXT.readAfterFailedUnknown}：${errText(readErr)}`
-    write('unknown', target, { codes: ['UNKNOWN', readErr ? 'READ_FAILED' : verdict === 'unchanged' ? 'ECHO_MISMATCH' : 'NOT_VERIFIED'], error: sendError, fields: mismatches.map((m) => m.field) })
+    write('unknown', target, { codes: ['UNKNOWN', readErr ? 'READ_FAILED' : verdict === 'unchanged' ? 'ECHO_MISMATCH' : 'NOT_VERIFIED'], error: sendError, fields: byKind('missing', 'unreadable', 'differ') })
     dispatch({ type: 'UNKNOWN', replied: false, cause: errText(sendError), before, after, afterError, mismatches })
     return state
   }

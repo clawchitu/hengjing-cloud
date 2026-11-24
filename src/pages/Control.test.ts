@@ -413,6 +413,19 @@ describe('下发', () => {
     expect(notes).toContain('下发后 无房间')
   })
 
+  it('下发后回读请求失败（500）→ 结果未知，提示回读失败、刷新核对；不列「设备未回报」，不算无法核对', async () => {
+    let be!: ReturnType<typeof backend>
+    be = backend({ '/ctrl/room-temperature-data-get': () => (be.callsTo('/ctrl/unified-ctrl-set').length ? text('oops', 500) : rooms(0, 26)), '/ctrl/unified-ctrl-set': () => reply(true) })
+    await click(okIn(await prepare()))
+    await screen.findByText('结果未知', { selector: '[data-slot=badge]' }, { timeout: 3000 })
+    expect(screen.queryByText('无法核对', { selector: '[data-slot=badge]' })).toBeNull()
+    const notes = await openNotes()
+    expect(notes).toContain(TEXT.sentUnknown)
+    expect(notes).toContain(TEXT.readAfterFailedUnknown)
+    expect(notes).not.toContain('设备未回报')
+    expect(notes).not.toContain(TEXT.unverifiable)
+  })
+
   it('下发后回读时房间离线（is_connected=false）、旧值碰巧一致 → 结果未知，不报已生效', async () => {
     const off = () => json({ body: encodeMessage(pb.RoomTemperatureDataGetReplySchema, { data: [{ id: 1, name: '客厅', switch: 1, setTemp: 26.5, isConnected: false }, { id: 2, name: '主卧', switch: 1, setTemp: 26.5, isConnected: true }] }) })
     let be!: ReturnType<typeof backend>

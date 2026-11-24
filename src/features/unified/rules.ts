@@ -163,6 +163,7 @@ const valid = (v: number | null | undefined): v is number => typeof v === 'numbe
 
 /**
  * 逐字段核对：只核对下发了的字段；温度按 0.01 容差比较（float32）。空数组 = 全部一致。
+ * 同一字段可能同时有一条 differ 和一条 missing（逐房间读数里既有不一致、又有没回报的）。
  * after 为 null（回读失败）时每个字段都是 missing
  */
 export function echoMismatches(q: WriteQuery<203>, after: UnifiedEcho | null | undefined): EchoMismatch[] {
@@ -186,9 +187,9 @@ export function echoMismatches(q: WriteQuery<203>, after: UnifiedEcho | null | u
       const gotText = isSw && got !== SWITCH_ON && got !== SWITCH_OFF ? String(got) : describeQuery({ ...NONE, [k]: got })[0]?.value ?? String(got)
       const part = perRoom && bad.length < perRoom.length ? TEXT.echoPart(perRoom.length, bad.length) : ''
       out.push({ field: k, kind: 'differ', message: TEXT.echoDiffer(label, sentText, gotText) + part })
-      continue
     }
-    // 没有任何读数（回读失败、没有房间），或有房间没回报：无法核对
+    // 没有任何读数（回读失败、没有房间），或有房间没回报：无法核对。
+    // 同一字段里有的房间不一致、有的房间没回报：两条都记（不一致照常列出，整体按无法核对算）
     if (!vals.length || present.length < vals.length) out.push({ field: k, kind: 'missing', message: TEXT.echoMissing(label) })
   }
   return out

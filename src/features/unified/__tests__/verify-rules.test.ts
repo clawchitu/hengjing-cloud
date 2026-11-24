@@ -133,6 +133,14 @@ describe('混合字段：能核对的照常判，整体按最不确定的算', (
     expect(kinds(end)).toEqual([['roomSwitch', 'missing'], ['roomTemp', 'differ']])
   })
 
+  it('同一字段：一个房间读到关闭（不一致）、一个房间没回报（无效值）→ 无法核对，不一致照常列出', async () => {
+    backendWith(() => roomsBody([{ switch: 0, setTemp: 26, isConnected: true }, { switch: 65536, setTemp: 26, isConnected: true }]))
+    const end = await run({ roomSwitch: 1 })
+    expect(end.status).toBe('unverifiable')
+    expect(kinds(end)).toEqual([['roomSwitch', 'differ'], ['roomSwitch', 'missing']])
+    expect(end.status === 'unverifiable' && end.mismatches[0].message).toBe('房间开关下发 开启，回读 关闭（2 个房间中 1 个）')
+  })
+
   it('只有能核对的字段、且读到的不一致 → 未变化', async () => {
     backendWith(() => roomsBody(OFF2))
     const end = await run({ roomSwitch: 1 })

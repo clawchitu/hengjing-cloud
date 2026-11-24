@@ -98,7 +98,8 @@ function rowDetail(r: BatchRow): string {
     case 'failure':
       return [s.error, s.afterError, TEXT.retryHint, s.before ? echo(s.before, s.after) : ''].filter(Boolean).join('；')
     case 'unknown':
-      return [s.error, s.cause, s.afterError, ...s.mismatches.map((m) => m.message), TEXT.retryHint, echo(s.before, s.after)].filter(Boolean).join('；')
+      // 回读请求本身失败（after=null）：只提示回读失败，不列逐字段的「设备未回报」（那是回读成功但没读数，不是一回事）
+      return [s.error, s.cause, s.afterError, ...(s.after === null ? [] : s.mismatches.map((m) => m.message)), TEXT.retryHint, echo(s.before, s.after)].filter(Boolean).join('；')
     case 'idle':
       return s.errors.join('；') || TEXT.aborted
     default:

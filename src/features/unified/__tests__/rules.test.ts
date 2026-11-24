@@ -128,14 +128,17 @@ describe('echoMismatches（逐字段核对）', () => {
       { field: 'roomSwitch', kind: 'missing', message: TEXT.echoMissing(TEXT.roomSwitch) },
     ])
   })
-  it('逐房间核对：有读到不一致 → differ（标出几个房间）；读到的都一致但有房间没回报 → missing；全部一致 → 空', () => {
+  it('逐房间核对：有读到不一致 → differ（标出几个房间）；有房间没回报 → 另记 missing；全部一致 → 空', () => {
     const q2 = { systemSwitch: -1, systemMode: 0, roomSwitch: 1, roomTemp: -1 }
     expect(echoMismatches(q2, { roomSwitch: null, perRoom: { roomSwitch: [1, 0, null] } })).toEqual([
       { field: 'roomSwitch', kind: 'differ', message: TEXT.echoDiffer(TEXT.roomSwitch, TEXT.on, TEXT.off) + TEXT.echoPart(3, 1) },
+      { field: 'roomSwitch', kind: 'missing', message: TEXT.echoMissing(TEXT.roomSwitch) },
     ])
     expect(echoMismatches(q2, { roomSwitch: null, perRoom: { roomSwitch: [1, null] } })).toEqual([{ field: 'roomSwitch', kind: 'missing', message: TEXT.echoMissing(TEXT.roomSwitch) }])
     expect(echoMismatches(q2, { roomSwitch: null, perRoom: { roomSwitch: [] } })).toEqual([{ field: 'roomSwitch', kind: 'missing', message: TEXT.echoMissing(TEXT.roomSwitch) }])
     expect(echoMismatches(q2, { roomSwitch: 1, perRoom: { roomSwitch: [1, 1] } })).toEqual([])
+    // 同一字段既有不一致、又有没回报：两条都记
+    expect(echoMismatches(q2, { roomSwitch: null, perRoom: { roomSwitch: [0, null] } }).map((m) => m.kind)).toEqual(['differ', 'missing'])
   })
   it('echoVerdict：只有 differ → unchanged；有 missing / unreadable → unverifiable；空 → applied', () => {
     expect(echoVerdict([])).toBe('applied')
