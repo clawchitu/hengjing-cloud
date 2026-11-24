@@ -24,7 +24,7 @@ import { __resetSessionViewForTests } from '../data/session'
 import { __resetWritesForTests, LIMITS, realSource as thermoRealSource } from '../features/thermostat'
 import Layout from '../components/Layout'
 import { OrgGate } from '../app/OrgGate'
-import { __resetWriteLockForTests, configureWriteLock, acquire as acquireLock, release as releaseLock, STORAGE_PREFIX, verify as verifyLock } from '../api/writeLock'
+import { __resetWriteLockForTests, configureWriteLock, lockOf as lockOfKey, subscribe as subscribeLock, acquire as acquireLock, release as releaseLock, STORAGE_PREFIX, verify as verifyLock } from '../api/writeLock'
 import Thermostat from './Thermostat'
 
 beforeAll(() => {
@@ -1409,13 +1409,53 @@ describe('#35 第六轮：较旧的一致读数被更新的不一致读数取代
     await draftAndSend()
     await confirmOk()
     await waitFor(() => expect(n).toBe(1))
-    void act(async () => { await client.refetchQueries({ type: 'active' }) }) // B 发起，卡住
+    const bDone = act(async () => { await client.refetchQueries({ type: 'active' }) }) // B 发起，卡住
     await waitFor(() => expect(n).toBe(2))
     await a.release()
     await waitFor(() => expect(within(card('客厅')).getAllByRole('alert').map((x) => x.textContent).join()).toContain('指令已下发，设备状态暂未变化'))
     expect(toasts()).not.toContain('已生效')
     expect(document.querySelector('[data-lock="unknown"]')).toBeTruthy()
     await b.release()
+    await bDone
+  })
+})
+
+describe('#35 第七轮（Fable 裁定）：latest() 通过后、commit 前发起更新的读取', () => {
+  it('commit 这一刻发现已被取代：否决放锁，不提示成功、锁保持；界面仍显示「正在核对」而不是「未变化」；之后新读一致才放', async () => {
+    let wrote = false
+    let n = 0
+    const b = deferred(() => reply200(rooms))
+    let later = [ROOM, OFF_ROOM]
+    backend({
+      '/ctrl/room-temperature-set': () => { wrote = true; return ok201NoApply() },
+      '/ctrl/room-temperature-data-get': () => (!wrote ? reply200(rooms) : ++n === 1 ? reply200([{ ...ROOM, setTemp: 26 }, OFF_ROOM]) : n === 2 ? b.handler() : reply200(later)),
+    })
+    // 核对读取结束（verifying 复位）的那次同步通知里发起 B：在核对函数的提前检查之后、写锁调 commit 之前
+    let fired = false
+    const off = subscribeLock(() => {
+      const l = lockOfKey('screen:SCREEN-T')
+      if (!fired && wrote && n === 1 && l && !l.verifying) { fired = true; void client.refetchQueries({ type: 'active' }) }
+    })
+    try {
+      await draftAndSend()
+      await confirmOk()
+      await waitFor(() => expect(n).toBe(2))
+      await waitFor(() => expect(lockOfKey('screen:SCREEN-T')).toMatchObject({ lastVerify: 'mismatch', lastVetoed: true }))
+      await flush(50)
+      expect(toasts()).not.toContain('已生效')
+      await waitFor(() => expect(document.querySelector('[data-lock="unknown"]')).toBeTruthy())
+      expect(card('客厅').textContent).toContain('正在核对')
+      expect(card('客厅').textContent).not.toContain('设备状态暂未变化')
+      expect(document.querySelector('[data-lock="unknown"]')?.textContent).toContain('已下发，正在核对')
+      expect(document.querySelector('[data-lock="unknown"]')?.textContent).not.toContain('设备状态暂未变化')
+      expect(card('客厅').querySelector('[data-pending]')?.textContent).toContain('设定温度 25.5 → 26.0°C')
+      await b.release()
+      later = [{ ...ROOM, setTemp: 26 }, OFF_ROOM]
+      await waitFor(() => expect(lockOfKey('screen:SCREEN-T')?.verifying).toBe(false))
+      fireEvent.click(within(document.querySelector('[data-lock="unknown"]') as HTMLElement).getByRole('button', { name: '核对' }))
+      await waitFor(() => expect(document.querySelector('[data-lock]')).toBeNull())
+      await waitFor(() => expect(toasts()).toContain('客厅 已生效'))
+    } finally { off() }
   })
 })
 

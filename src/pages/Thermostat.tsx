@@ -319,6 +319,8 @@ const hhmmss = (t: number) => new Date(t).toTimeString().slice(0, 8)
  * outcome 说「已下发，结果未知」/「结果未知」。只给同账号看（别的账号的锁 lockOf 不带 lastFields，页面也只用泛化提示）
  */
 function lockTitle(lock: LockInfo): { title: string; fields: [string, FieldResult][] } {
+  // 一致但在提交这一刻被否决（读数已被更新的读取取代）：仍按正在核对显示，不列字段
+  if (lock.lastVetoed) return { title: '已下发，正在核对…', fields: [] }
   const fields = Object.entries(lock.lastFields ?? {})
   if (!fields.length) return { title: lock.outcome === 'ok' ? '已下发，结果未知' : '结果未知', fields }
   const sum = describeFields(lock.lastFields!)

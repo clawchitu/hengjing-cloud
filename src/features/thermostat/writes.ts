@@ -235,6 +235,8 @@ export async function runOp<P, L>(o: OpSpec<P, L>): Promise<RunResult> {
       return {
         same: true,
         commit: () => {
+          // 定序点（Fable 裁定的收口规则）：放锁与「这次读数仍是最新」在同一同步帧里判断；已被更新的读取取代 → 否决放锁
+          if (got.latest && !got.latest()) { candidate = null; return false }
           applied = true
           before = null
           applyCandidate()
@@ -268,6 +270,8 @@ export async function runOp<P, L>(o: OpSpec<P, L>): Promise<RunResult> {
       }
       before = null
       seen = { v: info.lastVerify, f: info.lastFields }
+      // 一致但被否决（读数已被更新的读取取代）：不显示「未变化」，仍按正在核对显示，等退避重核
+      if (info.lastVetoed) { candidate = null; if (sameSession()) patch({ readback: 'pending' }); firstCheck(null); return }
       // 写锁认可了这次（不一致的）核对：候选读数这时才写缓存
       applyCandidate()
       const fields = info.lastFields ?? {}
