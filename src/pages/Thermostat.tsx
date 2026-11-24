@@ -1,9 +1,11 @@
 import { useState } from 'react'
 import { faPowerOff, faLeaf, faFan } from '@fortawesome/free-solid-svg-icons'
-import { Chart, Icon, Seg, Toggle, axis, tooltip, useAsync } from '../components/legacy'
+import { Chart, Icon, Seg, axis, tooltip, useAsync } from '../components/legacy'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Select, SelectContent, SelectItem, SelectTrigger } from '@/components/ui/select'
+import { Switch } from '@/components/ui/switch'
 import { useStats, type Range } from './Sensors'
 import { useApp } from '../app/store'
 import * as api from '../api'
@@ -21,7 +23,7 @@ function RoomCard({ r, selected, onSelect, onToggle }: { r: Room; selected: bool
         <div><div className="room-name">{r.name}</div><div className="room-id num">{r.id} · {r.floor}</div></div>
         <div className="row" onClick={(e) => e.stopPropagation()}>
           {off ? <Badge variant="gray">已关闭</Badge> : r.mode === '节能' ? <Badge variant="amber"><Icon icon={faLeaf} />节能</Badge> : <Badge variant="gray" style={{ color: 'var(--muted)' }}>标准</Badge>}
-          <Toggle on={r.on} onChange={onToggle} />
+          <Switch checked={r.on} onCheckedChange={onToggle} aria-label={`${r.name} 开关`} />
         </div>
       </div>
       <div className="room-lbl">室内温度</div>
@@ -102,7 +104,10 @@ export default function Thermostat() {
       <Card style={{ marginTop: 20 }}>
         <CardHeader><div><CardTitle>温度 / 湿度 / 露点 统计</CardTitle><CardDescription>{statRoom?.name} · {range === '24小时' ? '24 小时逐时数据' : `近${range === '7日' ? ' 7 ' : ' 30 '}日日均值`}</CardDescription></div>
           <div className="row" style={{ gap: 12 }}>
-            <select className="select" value={statRoom?.id} onChange={(e) => setSel(e.target.value)}>{rooms.map((r) => <option key={r.id} value={r.id}>{r.name} · {r.id}</option>)}</select>
+            <Select value={statRoom?.id ?? ''} onValueChange={setSel}>
+              <SelectTrigger aria-label="统计房间" sizer={rooms.map((r) => `${r.name} · ${r.id}`)} />
+              <SelectContent>{rooms.map((r) => <SelectItem key={r.id} value={r.id}>{r.name} · {r.id}</SelectItem>)}</SelectContent>
+            </Select>
             <Seg value={range} options={['24小时', '7日', '30日']} onChange={setRange} />
           </div></CardHeader>
         {stats ? <Chart option={roomChart(stats.hours?.map((h) => h.t) ?? stats.days!.map((d) => d.date), stats.hours ? stats.hours.map((h) => [h.temp, h.dew, h.hum]) : stats.days!.map((d) => [d.temp.avg, d.dew.avg, d.hum.avg]), !!stats.hours)} height={280} /> : <div style={{ height: 280 }} />}

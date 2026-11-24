@@ -4,6 +4,8 @@ import { useLocation, useNavigate } from 'react-router-dom'
 import { faEyeSlash, faEye, faChartLine, faSliders, faShieldHalved, faLock, faThermometerHalf, faWind, faDroplet, faCube } from '@fortawesome/free-solid-svg-icons'
 import { faUser as faUserR } from '@fortawesome/free-regular-svg-icons'
 import { Icon, LogoMark } from '../components/legacy'
+import { Checkbox } from '@/components/ui/checkbox'
+import { InputGroup, InputGroupInput } from '@/components/ui/input'
 import { useApp } from '../app/store'
 import * as api from '../api'
 
@@ -146,15 +148,15 @@ export default function Login() {
           <h1>欢迎登录</h1>
           <div className="hint">请输入您的账号信息以访问管理平台</div>
           <label>用户名</label>
-          <div className="field"><Icon icon={faUserR} /><input value={u} onChange={(e) => setU(e.target.value)} placeholder="请输入用户名" autoComplete="username" /></div>
+          <InputGroup variant="field" className="mb-5"><Icon icon={faUserR} /><InputGroupInput className="text-[13.5px] text-foreground" value={u} onChange={(e) => setU(e.target.value)} placeholder="请输入用户名" autoComplete="username" /></InputGroup>
           <label>密码</label>
-          <div className="field">
+          <InputGroup variant="field" className="mb-5">
             <Icon icon={faLock} />
-            <input type={show ? 'text' : 'password'} value={pw} onChange={(e) => setPw(e.target.value)} placeholder="请输入密码" autoComplete="current-password" style={{ letterSpacing: show ? 0 : 4 }} />
-            <button type="button" className="eye" onClick={() => setShow((s) => !s)}><Icon icon={show ? faEye : faEyeSlash} /></button>
-          </div>
+            <InputGroupInput className="text-[13.5px] text-foreground" type={show ? 'text' : 'password'} value={pw} onChange={(e) => setPw(e.target.value)} placeholder="请输入密码" autoComplete="current-password" style={{ letterSpacing: show ? 0 : 4 }} />
+            <button type="button" className="border-0 bg-transparent p-0 text-faint" onClick={() => setShow((s) => !s)}><Icon icon={show ? faEye : faEyeSlash} /></button>
+          </InputGroup>
           <div className="login-row">
-            <label><input type="checkbox" className="checkbox" checked={remember} onChange={(e) => setRemember(e.target.checked)} />记住我</label>
+            <label><Checkbox checked={remember} onCheckedChange={(v) => setRemember(v === true)} />记住我</label>
             <a className="cyan" onClick={() => toast('已向绑定手机发送重置链接')} style={{ cursor: 'pointer' }}>忘记密码?</a>
           </div>
           <button className="btn-login" disabled={busy}>{busy ? '登录中…' : '登 录'}</button>

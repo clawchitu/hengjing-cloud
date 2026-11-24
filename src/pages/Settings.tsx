@@ -1,6 +1,6 @@
 import { useState } from 'react'
-import { Toggle } from '../components/legacy'
 import { Card, CardTitle } from '@/components/ui/card'
+import { Switch } from '@/components/ui/switch'
 import { useApp } from '../app/store'
 
 export default function Settings() {
@@ -20,7 +20,7 @@ export default function Settings() {
         {rows.map(([k, t, d]) => (
           <div key={k} className="row" style={{ justifyContent: 'space-between', padding: '14px 0', borderTop: '1px solid var(--line-2)' }}>
             <div><b style={{ fontWeight: 600 }}>{t}</b><div className="muted" style={{ fontSize: 12.5, marginTop: 2 }}>{d}</div></div>
-            <Toggle on={s[k]} onChange={(v) => { setS({ ...s, [k]: v }); toast(`${t}已${v ? '开启' : '关闭'}`) }} />
+            <Switch checked={s[k]} onCheckedChange={(v) => { setS({ ...s, [k]: v }); toast(`${t}已${v ? '开启' : '关闭'}`) }} aria-label={t} />
           </div>
         ))}
       </Card>

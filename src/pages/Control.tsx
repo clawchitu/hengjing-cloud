@@ -4,6 +4,9 @@ import { Icon, useAsync } from '../components/legacy'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Checkbox } from '@/components/ui/checkbox'
+import { InputGroup, InputGroupInput } from '@/components/ui/input'
+import { Select, SelectContent, SelectItem, SelectTrigger } from '@/components/ui/select'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { useApp } from '../app/store'
 import * as api from '../api'
@@ -72,27 +75,29 @@ export default function Control() {
         <Card>
           <div className="step-h"><span className="sn">1</span>选择项目</div>
           {isAdmin && (
-            <select className="select" style={{ width: '100%', height: 40, marginBottom: 10, color: 'var(--text)' }} value={dealerId} onChange={(e) => { setDealerId(e.target.value); setGid(''); setPicked([]) }}>
-              {scope.dealers.map((d) => <option key={d.id} value={d.id}>经销商：{d.name}</option>)}
-            </select>
+            <Select value={dealerId} onValueChange={(v) => { setDealerId(v); setGid(''); setPicked([]) }}>
+              <SelectTrigger aria-label="经销商" className="mb-2.5 h-10 w-full text-foreground" />
+              <SelectContent>{scope.dealers.map((d) => <SelectItem key={d.id} value={d.id}>经销商：{d.name}</SelectItem>)}</SelectContent>
+            </Select>
           )}
           <div style={{ position: 'relative', marginBottom: 12 }}>
             <Icon icon={faLayerGroup} style={{ position: 'absolute', left: 14, top: 12, color: 'var(--primary)' }} />
-            <select className="select" style={{ width: '100%', height: 40, paddingLeft: 38, fontWeight: 500, color: 'var(--text)' }} value={gid} onChange={(e) => { setGid(e.target.value); setPicked([]) }}>
-              {groups.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
-            </select>
+            <Select value={gid} onValueChange={(v) => { setGid(v); setPicked([]) }}>
+              <SelectTrigger aria-label="集成项目" className="h-10 w-full pl-[38px] font-medium text-foreground" />
+              <SelectContent>{groups.map((g) => <SelectItem key={g.id} value={g.id}>{g.name}</SelectItem>)}</SelectContent>
+            </Select>
             <span className="faint num" style={{ position: 'absolute', right: 34, top: 12, fontSize: 12, pointerEvents: 'none' }}>{gid}</span>
           </div>
-          <div className="row input" style={{ height: 40, marginBottom: 14, color: 'var(--faint)' }}><Icon icon={faMagnifyingGlass} /><input style={{ border: 0, outline: 0, flex: 1, minWidth: 0 }} placeholder="按项目名称检索" value={pq} onChange={(e) => setPq(e.target.value)} /></div>
+          <InputGroup className="mb-[14px] h-10"><Icon icon={faMagnifyingGlass} /><InputGroupInput className="min-w-0" placeholder="按项目名称检索" value={pq} onChange={(e) => setPq(e.target.value)} /></InputGroup>
           <div className="row" style={{ justifyContent: 'space-between', marginBottom: 10, fontSize: 13 }}>
-            <label className="row" style={{ cursor: 'pointer' }}><input type="checkbox" className="checkbox" checked={picked.length === online.length && online.length > 0} onChange={(e) => setPicked(e.target.checked ? online.map((p) => p.id) : [])} />全选在线项目</label>
+            <label className="row" style={{ cursor: 'pointer' }}><Checkbox checked={picked.length === online.length && online.length > 0} onCheckedChange={(v) => setPicked(v === true ? online.map((p) => p.id) : [])} />全选在线项目</label>
             <span className="muted">已选 <b className="num" style={{ color: 'var(--text)' }}>{picked.length}</b> / {inGroup.length}</span>
           </div>
           {shownP.map((p) => {
             const on = picked.includes(p.id)
             return (
               <div key={p.id} className={'pick' + (on ? ' on' : '') + (!p.online ? ' dis' : '')} onClick={() => p.online && setPicked(on ? picked.filter((x) => x !== p.id) : [...picked, p.id])}>
-                <input type="checkbox" className="checkbox" checked={on} disabled={!p.online} readOnly />
+                <Checkbox checked={on} disabled={!p.online} aria-label={p.name} />
                 <div><b>{p.name}</b><small className="num">{p.online ? `${p.id} · ${p.version}${hasRooms(p) ? '' : ' · 新风单机版'}` : '离线 · 不可下发'}</small></div>
                 <span className="dot" />
               </div>
@@ -112,7 +117,7 @@ export default function Control() {
             <>
               <div className="sec-h"><span><Icon icon={faDoorOpen} className="muted" />房间开关</span></div>
               <div className="opt3">{(['全部开启', '全部关闭', '不变'] as const).map((x) => <button key={x} className={'opt-btn' + (roomSw === x ? ' on' : '')} onClick={() => setRoomSw(x)}>{x}</button>)}</div>
-              <div className="sec-h"><span><Icon icon={faTemperatureHalf} className="muted" />房间温度设定</span><label className="row muted" style={{ fontWeight: 400, fontSize: 12.5, cursor: 'pointer' }}><input type="checkbox" className="checkbox" checked={keep} onChange={(e) => setKeep(e.target.checked)} />保持不变</label></div>
+              <div className="sec-h"><span><Icon icon={faTemperatureHalf} className="muted" />房间温度设定</span><label className="row muted" style={{ fontWeight: 400, fontSize: 12.5, cursor: 'pointer' }}><Checkbox checked={keep} onCheckedChange={(v) => setKeep(v === true)} />保持不变</label></div>
               <div className="temp-box" style={keep ? { opacity: 0.5, pointerEvents: 'none' } : undefined}>
                 <div className="tv"><button className="round" onClick={() => setTemp(fix(temp - 0.5))}>−</button><b className="num">{temp.toFixed(1)}<small>°C</small></b><button className="round plus" onClick={() => setTemp(fix(temp + 0.5))}>+</button></div>
                 <div className="c muted" style={{ fontSize: 12, textAlign: 'center', marginTop: 4 }}>推荐夏季 26°C</div>

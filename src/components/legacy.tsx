@@ -48,10 +48,6 @@ export function Seg<T extends string>({ value, options, onChange, className = ''
   )
 }
 
-export function Toggle({ on, onChange, disabled }: { on: boolean; onChange?: (v: boolean) => void; disabled?: boolean }) {
-  return <button className={'toggle' + (on ? ' on' : '')} disabled={disabled} onClick={() => onChange?.(!on)} aria-pressed={on} />
-}
-
 export function Chart({ option, height = 300, style }: { option: object; height?: number; style?: CSSProperties }) {
   return <ReactECharts option={option as EChartsOption} style={{ height, width: '100%', ...style }} notMerge lazyUpdate opts={{ renderer: 'svg' }} />
 }

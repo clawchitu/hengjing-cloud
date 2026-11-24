@@ -324,7 +324,6 @@ tr.cur-row .bico { background: #cffafe; color: var(--primary); }
 
 /* ------------------------------------------------------------ v2 additions */
 /* project search (topbar) */
-.search { position: relative; width: 280px; }
 .search-pop { position: absolute; top: calc(100% + 6px); left: 0; right: 0; background: #fff; border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 12px 32px rgba(15,23,42,.14); padding: 6px; z-index: 60; max-height: 360px; overflow-y: auto; }
 .sp-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 10px; border-radius: 8px; cursor: pointer; color: var(--text); }
 .sp-row:hover { background: var(--bg); }
@@ -351,7 +350,6 @@ tr.cur-row .bico { background: #cffafe; color: var(--primary); }
 /* 集成项目: dealer filter (admin) */
 .dealer-pick { background: #fff; border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; margin-bottom: 14px; }
 .dealer-pick label { display: block; font-size: 12px; font-weight: 600; color: var(--text-2); margin-bottom: 6px; }
-.dealer-pick .select { width: 100%; height: 38px; font-weight: 500; color: var(--text); }
 .dealer-pick small { display: block; font-size: 11.5px; color: var(--faint); margin-top: 6px; }
 
 /* home 常用项目 */
@@ -404,8 +402,6 @@ tr.cur-row .bico { background: #cffafe; color: var(--primary); }
 .full { grid-column: 1 / -1; }
 
 .home-mid.full { grid-template-columns: minmax(0, 1fr); }
-.dp-search { display: flex; align-items: center; gap: 8px; height: 36px; border: 1px solid var(--line); border-radius: 8px; padding: 0 10px; margin-bottom: 8px; color: var(--faint); }
-.dp-search input { border: 0; outline: 0; flex: 1; min-width: 0; background: transparent; color: var(--text); }
 .ctl-type .opt-btn:disabled { cursor: not-allowed; }
 .ctl-type .opt-btn:disabled:not(.on) { opacity: .45; background: #f8fafc; }
 .ctl-type .opt-btn.on:disabled { opacity: 1; }

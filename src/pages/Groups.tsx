@@ -5,6 +5,8 @@ import { Icon, Pager, Seg } from '../components/legacy'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardHeader, CardTitle } from '@/components/ui/card'
+import { InputGroup, InputGroupInput } from '@/components/ui/input'
+import { Select, SelectContent, SelectItem, SelectTrigger } from '@/components/ui/select'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { useApp } from '../app/store'
 import { PROGRAMS } from '../api'
@@ -33,14 +35,15 @@ export default function Groups() {
   const dealerPick = isAdmin ? (
             <div className="dealer-pick">
               <label>经销商</label>
-              <div className="dp-search"><Icon icon={faMagnifyingGlass} /><input placeholder="搜索经销商名称 / 编码 / 区域" value={dq} onChange={(e) => {
+              <InputGroup className="mb-2 px-2.5"><Icon icon={faMagnifyingGlass} /><InputGroupInput className="min-w-0 text-foreground" placeholder="搜索经销商名称 / 编码 / 区域" value={dq} onChange={(e) => {
                 const q = e.target.value; setDq(q)
                 const hits = scope.dealers.filter((d) => matchDealer(d, q))
                 if (hits.length && !hits.some((d) => d.id === dealerId)) { setDealerId(hits[0].id); setGid('') }
-              }} /></div>
-              <select className="select" value={dealerId} onChange={(e) => { setDealerId(e.target.value); setGid('') }}>
-                {dealerHits.length ? dealerHits.map((d) => <option key={d.id} value={d.id}>{d.name}</option>) : <option value={dealerId} disabled>未找到匹配的经销商</option>}
-              </select>
+              }} /></InputGroup>
+              <Select value={dealerId} onValueChange={(v) => { setDealerId(v); setGid('') }}>
+                <SelectTrigger aria-label="经销商" className="h-[38px] w-full font-medium text-foreground" />
+                <SelectContent>{dealerHits.length ? dealerHits.map((d) => <SelectItem key={d.id} value={d.id}>{d.name}</SelectItem>) : <SelectItem value={dealerId} disabled>未找到匹配的经销商</SelectItem>}</SelectContent>
+              </Select>
               <small>{dq ? `匹配 ${dealerHits.length} / ${scope.dealers.length} 个经销商` : `${scope.dealers.length} 个经销商`} · 先选择经销商，再查看其集成项目</small>
             </div>
   ) : null
@@ -53,6 +56,7 @@ export default function Groups() {
     </div>
   )
   const inG = projects.filter((p) => p.groupId === gid)
+  const areas = ['全部区域', ...new Set(inG.map((p) => p.district))]
   const list = inG.filter((p) => (!pq || (p.name + p.id).toLowerCase().includes(pq.toLowerCase())) && (area === '全部区域' || p.district === area) && (st === '全部' || (st === '在线') === p.online))
   const SIZE = 6
   const shown = list.slice((page - 1) * SIZE, page * SIZE)
@@ -70,7 +74,7 @@ export default function Groups() {
       <div className="groups">
         <div>
           {dealerPick}
-          <Card pad={false} className="row" style={{ height: 40, padding: '0 14px', marginBottom: 14, color: 'var(--faint)', boxShadow: 'none' }}><Icon icon={faMagnifyingGlass} /><input style={{ border: 0, outline: 0, flex: 1, background: 'transparent' }} placeholder="搜索集成项目名称 / 编码" value={gq} onChange={(e) => setGq(e.target.value)} /></Card>
+          <Card pad={false} className="row" style={{ height: 40, padding: '0 14px', marginBottom: 14, color: 'var(--faint)', boxShadow: 'none' }}><Icon icon={faMagnifyingGlass} /><InputGroupInput placeholder="搜索集成项目名称 / 编码" value={gq} onChange={(e) => setGq(e.target.value)} /></Card>
           {groups.filter((x) => !gq || (x.name + x.id).includes(gq)).map((x) => {
             const ps = projects.filter((p) => p.groupId === x.id), o = ps.filter((p) => p.online).length, pct = (o / ps.length) * 100
             return (
@@ -106,8 +110,11 @@ export default function Groups() {
             <CardHeader pad style={{ marginBottom: 0, paddingBottom: 14, alignItems: 'center' }}>
               <CardTitle>项目列表</CardTitle>
               <div className="row" style={{ gap: 10 }}>
-                <div className="row input" style={{ width: 210, color: 'var(--faint)' }}><Icon icon={faMagnifyingGlass} /><input style={{ border: 0, outline: 0, flex: 1, minWidth: 0 }} placeholder="项目名称 / ID" value={pq} onChange={(e) => setPq(e.target.value)} /></div>
-                <select className="select" value={area} onChange={(e) => setArea(e.target.value)}><option>全部区域</option>{[...new Set(inG.map((p) => p.district))].map((d) => <option key={d}>{d}</option>)}</select>
+                <InputGroup className="w-[210px]"><Icon icon={faMagnifyingGlass} /><InputGroupInput className="min-w-0" placeholder="项目名称 / ID" value={pq} onChange={(e) => setPq(e.target.value)} /></InputGroup>
+                <Select value={area} onValueChange={setArea}>
+                  <SelectTrigger aria-label="区域" sizer={areas} />
+                  <SelectContent>{areas.map((d) => <SelectItem key={d} value={d}>{d}</SelectItem>)}</SelectContent>
+                </Select>
                 <Seg value={st} options={['全部', '在线', '离线']} onChange={setSt} />
               </div>
             </CardHeader>
