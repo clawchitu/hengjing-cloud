@@ -1,28 +1,19 @@
-import { useState } from 'react'
-import { Card, CardTitle } from '@/components/ui/card'
-import { Switch } from '@/components/ui/switch'
-import { useApp } from '../app/store'
+// 系统设置（S11）。演示版的 4 个通知开关（项目离线短信提醒、企业微信通知、夜间免打扰、页面提示音）后端没有接口，
+// 也不是能只存在本地的偏好（前三项是服务端推送，提示音依赖的离线告警功能不存在），
+// 按负责人 11/24 答复 Q12「没有接口支撑的元素一律隐藏」去掉（方案 1.2「系统设置页的 4 个通知开关」）。
+// 整页因此没有内容；按 Q12 入口也应隐藏，但侧栏入口在每张截图里、路由在 main.tsx，另开小 PR 处理，这里先显示空态。
+import { faGear } from '@fortawesome/free-solid-svg-icons'
+import { Icon } from '../components/legacy'
+import { Card } from '@/components/ui/card'
 
 export default function Settings() {
-  const { toast } = useApp()
-  const [s, setS] = useState({ sms: true, wx: true, night: true, sound: false })
-  const rows: [keyof typeof s, string, string][] = [
-    ['sms', '项目离线短信提醒', '项目网关离线超过 10 分钟时短信通知值班人员'],
-    ['wx', '企业微信通知', '项目离线 / 恢复在线消息推送至企业微信运维群'],
-    ['night', '夜间免打扰', '23:00–07:00 暂停推送，次日汇总'],
-    ['sound', '页面提示音', '当前项目离线时播放提示音'],
-  ]
   return (
     <div className="page">
-      <div className="page-head"><div><h1>系统设置</h1><div className="sub">{__HJC_MOCK__ ? '通知与平台偏好（演示数据，仅保存在本地会话）' : '通知与平台偏好（仅保存在本地会话）'}</div></div></div>
-      <Card style={{ maxWidth: 720 }}>
-        <CardTitle style={{ marginBottom: 10 }}>通知设置</CardTitle>
-        {rows.map(([k, t, d]) => (
-          <div key={k} className="row" style={{ justifyContent: 'space-between', padding: '14px 0', borderTop: '1px solid var(--line-2)' }}>
-            <div><b style={{ fontWeight: 600 }}>{t}</b><div className="muted" style={{ fontSize: 12.5, marginTop: 2 }}>{d}</div></div>
-            <Switch checked={s[k]} onCheckedChange={(v) => { setS({ ...s, [k]: v }); toast(`${t}已${v ? '开启' : '关闭'}`) }} aria-label={t} />
-          </div>
-        ))}
+      <div className="page-head"><div><h1>系统设置</h1></div></div>
+      <Card className="placeholder" role="status">
+        <div className="ph-ico"><Icon icon={faGear} /></div>
+        <h3>暂无可用设置</h3>
+        <p>通知类设置（短信、企业微信、夜间免打扰、提示音）暂无后端接口支持，当前版本不提供。</p>
       </Card>
     </div>
   )

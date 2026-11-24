@@ -7,26 +7,20 @@ import { expect, test } from './fixtures'
 const tick = (page: Page, ms = 100) => page.clock.runFor(ms)
 
 test('Switch：空格切换，aria-checked 跟随', async ({ page, login }) => {
-  await login('dealer')
-  await page.goto('/settings')
+  // 系统设置页的通知开关已按 Q12 去掉（S11），改用新风单机版「运行设置」的开关：它只改本地草稿，不下发
+  await login('dealer', 'PRJ-10252')
+  await page.goto('/fresh-air')
   await tick(page, 1500)
-  const sw = page.getByRole('switch', { name: '项目离线短信提醒' })
-  await expect(sw).toHaveAttribute('aria-checked', 'true')
+  const sw = page.getByRole('switch', { name: '开关', exact: true })
+  const before = await sw.getAttribute('aria-checked')
+  const after = before === 'true' ? 'false' : 'true'
   await sw.focus()
   await page.keyboard.press('Space')
   await tick(page)
-  await expect(sw).toHaveAttribute('aria-checked', 'false')
-  await expect(page.getByText('项目离线短信提醒已关闭')).toBeVisible()
+  await expect(sw).toHaveAttribute('aria-checked', after)
   await page.keyboard.press('Space')
   await tick(page)
-  await expect(sw).toHaveAttribute('aria-checked', 'true')
-  // 默认关闭的那一项
-  const sound = page.getByRole('switch', { name: '页面提示音' })
-  await expect(sound).toHaveAttribute('aria-checked', 'false')
-  await sound.focus()
-  await page.keyboard.press('Space')
-  await tick(page)
-  await expect(sound).toHaveAttribute('aria-checked', 'true')
+  await expect(sw).toHaveAttribute('aria-checked', before!)
 })
 
 test('Checkbox：空格切换', async ({ page }) => {

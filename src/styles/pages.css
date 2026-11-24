@@ -329,12 +329,7 @@ tr.cur-row .bico { background: #cffafe; color: var(--primary); }
 .offline-banner .ob-main { flex: 1; min-width: 0; }
 .offline-banner .ob-main h2, .offline-banner .ob-main b:first-child { font-size: 19px; font-weight: 700; margin: 0 0 4px; display: block; }
 .offline-banner .ob-main p, .offline-banner .ob-main span, .offline-banner .ob-main small { color: #fee2e2; font-size: 13px; line-height: 1.6; margin: 0; }
-.offline-banner .ob-last { text-align: right; background: rgba(0,0,0,.18); border-radius: 10px; padding: 10px 16px; flex: none; }
-.offline-banner .ob-last small { display: block; font-size: 11.5px; color: #fecaca; }
-.offline-banner .ob-last b { display: block; font-size: 18px; font-weight: 700; margin: 3px 0; }
 .offline-page { padding-bottom: 0; }
-.offline-data { filter: grayscale(1); opacity: .5; pointer-events: none; user-select: none; position: relative; }
-.offline-data .page { padding: 0 0 32px; }
 
 /* 集成项目: dealer filter (admin) */
 .dealer-pick { background: #fff; border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; margin-bottom: 14px; }
