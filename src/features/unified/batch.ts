@@ -154,7 +154,7 @@ export const DEADLINE_REPLIED_OK = '已下发，结果未知：下发后回读�
 export const DEADLINE_REPLIED_FAIL = '控制屏明确拒绝（未自动重试）；下发后回读在 35 秒截止前未完成'
 /** 下发前读到房间全部关着，这次又要设温度（且没同时开房间）：不发（后端答复⑦） */
 /** 下发后回读途中登录账号变了、写锁已放开或过了有效期：这次读数作废 */
-export const READ_VOID_TEXT = '回读途中登录账号或写锁状态已变化，本次读数作废'
+export const READ_VOID_TEXT = '回读期间登录账号已切换或本次下发已结束核对，读数未采用'
 export const ROOMS_OFF_TEXT = '下发前读到房间都关着，不能设定温度，未下发'
 
 export function rowStatus(s: UnifiedState<unknown>, started: boolean): RowStatus {
@@ -320,7 +320,9 @@ export function createUnifiedBatch(deps: BatchDeps) {
       const key = e.token.key
       void verify(key)
       // 有核对正在跑（它读之前这些字段还没结束）：这次 verify 会被跳过，等它跑完再核对一次（没有未结束的字段，直接放开）
-      void e.checking?.catch(() => false).then(() => setTimeout(() => { void verify(key) }, 0))
+      // 延迟回调真正执行时再确认一次 token 仍持锁：等待期间锁可能已放开、同屏又被新的下发占用，不按锁键去碰新锁
+      const token = e.token
+      void e.checking?.catch(() => false).then(() => setTimeout(() => { if (holds(token)) void verify(key) }, 0))
       return
     }
     if (e.reply === 'ok') settle(e.token, 'unknown')
@@ -358,6 +360,8 @@ export function createUnifiedBatch(deps: BatchDeps) {
           // 已发出后的那次（下发后回读）：读之前向写锁取凭据（记下读取开始时的账号与锁 token），读数只作为候选
           readBack: async (pid, sig) => {
             const ticket = entry.sent && entry.token ? beginRead(entry.token) : undefined
+            // 读开始时锁已不归这次下发（到期、被放开后又被新的下发占用）：这次读取直接作废。明确被拒的锁本来就已放开，照常读
+            if (ticket === null && entry.reply !== 'rejected') throw new Error(READ_VOID_TEXT)
             const snap = await readBack(pid, sig)
             // 读取途中账号变了 / 锁换了或放了 / 过了有效期：这次读取作废，按回读失败交给状态机（结果未知），读数不进结果判定
             if (ticket && !readStillValid(ticket)) throw new Error(READ_VOID_TEXT)
