@@ -5,14 +5,18 @@
 // - 每次刷新都会换新的 refresh_token，旧值立即作废 → 同一时刻只能有一个刷新在跑（单飞）；
 // - access_token 过期前 60 秒主动续期；请求返回「未认证」（401 code 16 或网关 403 token err）时
 //   续期一次并重放一次，再失败就清掉登录态并通知 onSessionExpired。
-// 多标签页之间的互斥（Web Locks）在 S5 接入。
+// 多标签页之间用 Web Locks 互斥：拿到锁后先看存储里的 refresh_token 是否已被别的标签页换掉，
+// 换掉了就直接用新令牌，不再发刷新（否则会拿已作废的旧值去刷新，把所有标签页踢下线）。
+// localStorage 是各标签页共享的；sessionStorage 不共享（复制出来的标签页带着同一个 refresh_token，
+// 之后各存各的），所以续期成功后再用 BroadcastChannel 把「旧 refresh → 新令牌」告诉其他标签页，
+// 还持有旧值的标签页直接换上新令牌。
 //
 // 写接口只能走 requestWrite()（先过 guard.ts 防护、不重试、超时/断网提示结果未知）；
 // request() 遇到写接口路径直接拒绝。
 import { getConfig } from './config'
 import { ApiError, errorFromResponse, errorFromThrown } from './errors'
 import { assertWriteAllowed, isNonCanonicalPath, isWritePath, WRITE_ROUTES, type WriteOp } from './guard'
-import { clearTokens, readTokens, tokensFromResponse, writeTokens, type Tokens } from './tokens'
+import { clearTokens, jwtSub, readTokens, tokensFromResponse, writeTokens, type Tokens } from './tokens'
 
 export interface RequestOptions {
   method?: 'GET' | 'POST'
@@ -21,28 +25,57 @@ export interface RequestOptions {
   auth?: boolean
   timeoutMs?: number
   signal?: AbortSignal
+  /** 指定用哪个 access_token，不读存储、不续期、不重放（退出时用已经从存储取出的令牌） */
+  accessToken?: string
 }
 
 /** 提前续期的余量 */
 export const REFRESH_LEEWAY_MS = 60_000
+/** 刷新被拒后等其他标签页广播新令牌的时间 */
+const ROTATION_GRACE_MS = 300
 
 // ---------------------------------------------------------------------------
-// 会话过期通知（多个并发请求同时失败时 3 秒内只通知一次）
+// 会话过期通知。同一个会话的多个并发请求同时失败时 3 秒内只通知一次；
+// 去重按会话（refresh_token）区分，重新登录后的新会话过期照常通知。
 
 type Listener = (reason: ApiError) => void
 const listeners = new Set<Listener>()
 let lastExpiredAt = -Infinity
+let lastExpiredKey: string | undefined
 export function onSessionExpired(fn: Listener): () => void {
   listeners.add(fn)
   return () => { listeners.delete(fn) }
 }
 function expireSession(reason: ApiError) {
+  // 令牌已经清掉了：说明是刚才那个会话的后续失败，沿用上一次的键
+  const key = readTokens()?.refreshToken ?? lastExpiredKey ?? ''
   clearTokens()
   const now = Date.now()
-  if (now - lastExpiredAt < 3000) return
+  if (key === lastExpiredKey && now - lastExpiredAt < 3000) return
   lastExpiredAt = now
+  lastExpiredKey = key
   for (const fn of listeners) fn(reason)
 }
+
+// ---------------------------------------------------------------------------
+// 跨标签页同步续期结果（见文件头）
+
+interface Rotation { type: 'rotated'; from: string; to: Tokens }
+let channel: BroadcastChannel | null | undefined
+/** 订阅别的标签页的续期广播。应用启动时调用（session.ts 的 initSession），不要等到本页第一次刷新 */
+export function listenRotations() { rotationChannel() }
+function rotationChannel(): BroadcastChannel | null {
+  if (channel !== undefined) return channel
+  channel = typeof BroadcastChannel !== 'undefined' ? new BroadcastChannel('hjc-session') : null
+  channel?.addEventListener('message', (e: MessageEvent<Rotation>) => adoptRotation(e.data))
+  return channel
+}
+/** 别的标签页续期了：本页还持有同一个旧 refresh_token 就换成新令牌（写回原来的存储） */
+export function adoptRotation(m: Rotation | null | undefined) {
+  if (!m || m.type !== 'rotated' || !m.to) return
+  if (readTokens()?.refreshToken === m.from) writeTokens(m.to)
+}
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
 // ---------------------------------------------------------------------------
 // 底层：一次 fetch，不做续期
@@ -88,12 +121,23 @@ async function send<T>(path: string, opts: RequestOptions, accessToken: string |
 
 let inflight: Promise<Tokens> | null = null
 
-/** 刷新令牌。并发调用共用同一个请求。失败时清掉登录态并通知过期 */
+const LOCK_NAME = 'hjc-token-refresh'
+/** 跨标签页互斥；不支持 Web Locks 的环境（旧浏览器、node）退化为只在页内单飞 */
+function withRefreshLock<T>(fn: () => Promise<T>): Promise<T> {
+  const locks = typeof navigator !== 'undefined' ? (navigator as Navigator & { locks?: LockManager }).locks : undefined
+  return locks?.request ? locks.request(LOCK_NAME, fn) as Promise<T> : fn()
+}
+
+/** 刷新令牌。页内并发调用共用同一个请求，多标签页之间串行。失败时清掉登录态并通知过期 */
 export function refreshSession(): Promise<Tokens> {
   if (inflight) return inflight
-  inflight = (async () => {
+  rotationChannel()
+  const seen = readTokens()?.refreshToken
+  inflight = withRefreshLock(async () => {
     const cur = readTokens()
     if (!cur) throw new ApiError('unauthenticated', '登录已过期，请重新登录')
+    // 等锁期间别的标签页已经续期（或重新登录）：直接用存储里的新令牌
+    if (seen !== undefined && cur.refreshToken !== seen) return cur
     try {
       const r = await send<{ access_token?: string; refresh_token?: string; expires_in?: number }>(
         '/auth/refresh', { body: { refresh_token: cur.refreshToken } }, cur.accessToken)
@@ -105,21 +149,23 @@ export function refreshSession(): Promise<Tokens> {
         throw new ApiError('unauthenticated', '登录已过期，请重新登录')
       }
       writeTokens(next)
+      rotationChannel()?.postMessage({ type: 'rotated', from: cur.refreshToken, to: next } satisfies Rotation)
       return next
     } catch (e) {
       const err = e instanceof ApiError ? e : errorFromThrown(e, false)
-      // 失败的是旧会话：存储里已是另一个会话（或已退出），不清它
+      // refresh 被拒可能是别的标签页刚轮换过、广播还没到：稍等再看一次
+      if (channel) await sleep(ROTATION_GRACE_MS)
       const now = readTokens()
-      if (!now || now.refreshToken !== cur.refreshToken) throw err
-      // 网络问题不等于令牌失效，不清登录态；令牌被拒才算过期
-      if (err.kind === 'unauthenticated' || err.kind === 'forbidden' || err.kind === 'bad_request') {
-        const expired = new ApiError('unauthenticated', '登录已过期，请重新登录', { status: err.status, code: err.code, cause: err })
-        expireSession(expired)
-        throw expired
-      }
-      throw err
+      // 存储里已是新令牌（别的标签页续期，或本页重新登录）：直接用；已退出：不再清
+      if (now && now.refreshToken !== cur.refreshToken) return now
+      if (!now) throw err
+      // 续期失败一律按过期处理、回登录页（含断网、超时、服务器错误）：refresh_token 每次轮换，
+      // 失败后无法确定服务端是否已作废旧值，继续用旧值只会更乱
+      const expired = new ApiError('unauthenticated', '登录已过期，请重新登录', { status: err.status, code: err.code, cause: err })
+      expireSession(expired)
+      throw expired
     }
-  })().finally(() => { inflight = null })
+  }).finally(() => { inflight = null })
   return inflight
 }
 
@@ -161,6 +207,7 @@ export async function requestWrite<T>(op: WriteOp, projectIds: readonly string[]
 
 async function authed<T>(path: string, opts: RequestOptions): Promise<T> {
   if (opts.auth === false) return send<T>(path, opts, null)
+  if (opts.accessToken) return send<T>(path, opts, opts.accessToken)
   const token = await freshAccessToken()
   if (!token) {
     const err = new ApiError('unauthenticated', '登录已过期，请重新登录')
@@ -174,10 +221,14 @@ async function authed<T>(path: string, opts: RequestOptions): Promise<T> {
     // 被拒的令牌如果已被别的请求续期替换，直接用新令牌重放；否则续期一次
     const now = readTokens()
     const next = now && now.accessToken !== token ? now.accessToken : (await refreshSession()).accessToken
+    // 重放绑定发起时的用户：期间换了账号登录，就不能拿新账号的令牌去执行旧账号发起的请求，
+    // 也不能因为这次失败把新会话登出
+    if (jwtSub(next) !== jwtSub(token)) throw e
     try {
       return await send<T>(path, opts, next)
     } catch (e2) {
-      if (e2 instanceof ApiError && e2.kind === 'unauthenticated') expireSession(e2)
+      // 只在存储里仍是重放用的那个令牌时才算这个会话过期
+      if (e2 instanceof ApiError && e2.kind === 'unauthenticated' && readTokens()?.accessToken === next) expireSession(e2)
       throw e2
     }
   }
@@ -187,5 +238,8 @@ async function authed<T>(path: string, opts: RequestOptions): Promise<T> {
 export function __resetHttpForTests() {
   inflight = null
   lastExpiredAt = -Infinity
+  lastExpiredKey = undefined
   listeners.clear()
+  channel?.close()
+  channel = undefined
 }
