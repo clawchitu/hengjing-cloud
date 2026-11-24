@@ -69,7 +69,7 @@ const mockSource: OrgSource = {
 // real
 
 export const realSource: OrgSource = {
-  dealers: async (_ctx, signal) => (await getDistributors({ signal })).map(toDealer),
+  dealers: async (_ctx, signal) => (await getDistributors({ signal })).map(toDealer).filter((d): d is Dealer => d !== null),
   groups: async (_ctx, dealerId, signal) => {
     // 虚拟经销商「平台」：取全部再过滤没有归属经销商的
     if (dealerId === PLATFORM_DEALER_ID) return (await getIntegratedProjects({}, { signal })).map(toGroup).filter((g) => g.dealerId === PLATFORM_DEALER_ID)

@@ -46,6 +46,13 @@ describe('真实数据源（只读接口）', () => {
     expect(be.callsTo('/integrated-projects')[0].body).toEqual({})
   })
 
+  it('碰撞夹具：后端经销商 id 等于哨兵时被丢弃，选不到，也就不会误走「取全部再过滤」', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    fakeBackend({ '/distributors': () => json({ distributor_entities: [{ id: PLATFORM_DEALER_ID, name: '撞名' }, { id: '62d7aa299e984547ba4b9372', name: '正常' }] }) })
+    expect((await realSource.dealers(ctx)).map((d) => d.id)).toEqual(['62d7aa299e984547ba4b9372'])
+    warn.mockRestore()
+  })
+
   it('空响应 {}（proto3 不输出空列表）→ 空数组', async () => {
     fakeBackend({ '/ctrl/projects': () => json({}), '/integrated-projects': () => json({}), '/distributors': () => json({}), '/apps': () => json({}) })
     expect(await realSource.projects(ctx, {})).toEqual([])

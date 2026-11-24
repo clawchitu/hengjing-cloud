@@ -11,6 +11,7 @@ import { Command, CommandEmpty, CommandItem, CommandList } from '@/components/ui
 import { Popover, PopoverAnchor, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { cn } from '@/lib/utils'
 import { useApp } from '../app/store'
+import { projectsInGroup } from '../data/org'
 import { gatewayOf, type Project } from '../api'
 
 export const NAV_MAIN = [
@@ -99,8 +100,8 @@ function ProjectSwitch() {
           <div className="lbl">当前项目</div>
           <div className="name">{project.name}<Icon className="chev" icon={faChevronDown} /></div>
           <div className="st">
-            {project.online ? <span className="on"><span className="dot" /> 在线</span> : <span className="off"><span className="dot" /> 离线</span>}
-            <span className="num">{project.id}</span>
+            {!project.id ? <span>暂无可用项目</span> : project.online ? <span className="on"><span className="dot" /> 在线</span> : <span className="off"><span className="dot" /> 离线</span>}
+            <span className="num">{project.code}</span>
           </div>
         </div>
       </PopoverTrigger>
@@ -144,7 +145,7 @@ function ProjectSwitch() {
                 {scope.groups.filter((g) => g.dealerId === d.id).map((g) => (
                   <div key={g.id} role="group" aria-label={user.role === 'admin' ? `${d.short} · ${g.name}` : g.name}>
                     <div aria-hidden className="px-2.5 pt-2 pb-1 text-[11px] text-faint">{g.name}</div>
-                    {scope.projects.filter((p) => p.groupId === g.id).map((p) => (
+                    {projectsInGroup(g, scope.projects).map((p) => (
                       <CommandItem
                         key={p.id}
                         value={p.id}
@@ -152,7 +153,7 @@ function ProjectSwitch() {
                         data-current={p.id === project.id || undefined}
                         className={cn('rounded-[7px] text-[13px]', p.id === project.id ? 'bg-primary-soft font-semibold text-primary' : 'hover:bg-background')}
                       >
-                        <span>{p.name}</span><small className="num text-[11px] text-faint">{p.online ? p.id : '离线'}</small>
+                        <span>{p.name}</span><small className="num text-[11px] text-faint">{p.online ? p.code : '离线'}</small>
                       </CommandItem>
                     ))}
                   </div>
@@ -179,8 +180,9 @@ function ProjectSearch() {
   const formRef = useRef<HTMLFormElement>(null)
   const contentId = useId()
   const s = q.trim().toLowerCase()
-  const hits = s ? scope.projects.filter((p) => (p.name + ' ' + p.id).toLowerCase().includes(s)).slice(0, 8) : []
-  const gname = (id: string) => scope.groups.find((g) => g.id === id)?.name ?? ''
+  const hits = s ? scope.projects.filter((p) => (p.name + ' ' + p.code).toLowerCase().includes(s)).slice(0, 8) : []
+  // 一个项目可能属于多个集成项目：列出全部所属组名
+  const gname = (p: Project) => scope.groups.filter((g) => projectsInGroup(g, [p]).length).map((g) => g.name).join('、')
   const shown = open && !!s
   const active = shown && value && hits.some((p) => p.id === value) ? itemId : undefined
   // 关闭（Esc、Tab 离开、点外部、选中）和重新打开都清掉高亮：重开后回车只会选第一条，不会选到之前高亮过的项
@@ -260,7 +262,7 @@ function ProjectSearch() {
                     data-current={p.id === project.id || undefined}
                     className={cn('gap-2.5 rounded-md text-foreground', p.id === project.id ? 'bg-primary-soft' : 'hover:bg-background')}
                   >
-                    <div><b className="block text-[13px] font-semibold">{p.name}</b><small className="mt-0.5 block text-[11.5px] text-faint">{gname(p.groupId)} · <span className="num">{p.id}</span></small></div>
+                    <div><b className="block text-[13px] font-semibold">{p.name}</b><small className="mt-0.5 block text-[11.5px] text-faint">{gname(p)} · <span className="num">{p.code}</span></small></div>
                     <Badge variant={p.online ? 'green' : 'gray'}>{p.online ? '在线' : '离线'}</Badge>
                   </CommandItem>
                 ))}
@@ -316,7 +318,9 @@ export default function Layout() {
   const nav = useNavigate()
   const cur = ALL.find((n) => loc.pathname.startsWith(n.to))
   const isProjectPage = NAV_PROJECT.some((n) => n.to === cur?.to)
-  const offline = isProjectPage && !project.online
+  // 没有可见项目（真实接口账号下无项目）时 project 是 id 为空的占位：不算离线，设备页显示空态、不挂载
+  const noProject = !project.id
+  const offline = isProjectPage && !noProject && !project.online
 
   useEffect(() => { window.scrollTo(0, 0) }, [loc.pathname])
 
@@ -356,7 +360,7 @@ export default function Layout() {
               <>
                 <Link to="/groups">集成项目</Link><Icon className="sep" icon={faChevronRight} />
                 <Link to="/groups">{project.name}</Link>
-                {!project.online && <Badge variant="red" className="crumb-off">离线</Badge>}
+                {!noProject && !project.online && <Badge variant="red" className="crumb-off">离线</Badge>}
                 <Icon className="sep" icon={faChevronRight} />
               </>
             ) : (
@@ -370,7 +374,9 @@ export default function Layout() {
             <div className="who"><b>{user.name}</b><small>{user.org} · {user.roleLabel}</small></div>
           </div>
         </header>
-        {offline ? (
+        {isProjectPage && noProject ? (
+          <div className="page"><div className="empty-fav" role="status"><b>暂无可用项目</b><small>当前账号下没有可查看的项目，请到「集成项目」确认，或联系管理员</small></div></div>
+        ) : offline ? (
           <div className="page offline-page">
             <OfflineBanner p={project} />
             <div className="offline-data" aria-disabled inert><Fragment key={project.id}><Outlet /></Fragment></div>

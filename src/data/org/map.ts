@@ -6,8 +6,13 @@ import type { Dealer, Group, Project, Scope } from './types'
 /**
  * 平台账号下没有 distributor_id 的集成项目（平台创建的）归到这个虚拟经销商「平台」，
  * 侧栏分组、经销商选择都能看到它们。按它取集成项目时不传 distributor_id，前端过滤。
+ * 命名空间：后端 id 是 24 位十六进制 ObjectId，不会含冒号；哨兵带「virtual:」前缀，与后端 id 不可能相同。
+ * 万一后端真的返回了等于哨兵的 id（数据异常），toDealer 丢弃该经销商、toGroup 把它标成不可达的
+ * 「invalid:」归属并告警，不会被当成平台分组或误走「取全部再过滤」的分支。
  */
-export const PLATFORM_DEALER_ID = '__platform__'
+export const PLATFORM_DEALER_ID = 'virtual:platform'
+const COLLIDED = 'invalid:'
+const warnCollision = (what: string) => console.warn(`[org] 后端返回的${what} id 与虚拟经销商哨兵相同，已忽略`)
 export const PLATFORM_DEALER: Dealer = Object.freeze({ id: PLATFORM_DEALER_ID, name: '平台', short: '平台', region: '' })
 
 /** 在线判定：后端只在 true 时输出 online，缺失（或任何非 true 的值）都按离线 */
@@ -38,11 +43,17 @@ export function toProject(e: ProjectEntity): Project {
   }
 }
 
+function groupDealerId(d: string): string {
+  if (!d) return PLATFORM_DEALER_ID
+  if (d === PLATFORM_DEALER_ID) { warnCollision('集成项目的 distributor_'); return COLLIDED + d }
+  return d
+}
+
 export function toGroup(e: IntegratedProjectEntity): Group {
   return {
     id: e.id,
     code: str(e.code),
-    dealerId: str(e.distributor_id) || PLATFORM_DEALER_ID,
+    dealerId: groupDealerId(str(e.distributor_id)),
     name: str(e.name),
     type: '',
     typeColor: 'cyan',
@@ -54,7 +65,9 @@ export function toGroup(e: IntegratedProjectEntity): Group {
   }
 }
 
-export function toDealer(e: DistributorEntity): Dealer {
+/** 后端 id 与哨兵冲突时返回 null（调用方丢弃） */
+export function toDealer(e: DistributorEntity): Dealer | null {
+  if (e.id === PLATFORM_DEALER_ID) { warnCollision('经销商'); return null }
   const name = str(e.name)
   return { id: e.id, name, short: str(e.abbreviation) || name, region: str(e.region), code: e.code }
 }

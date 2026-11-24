@@ -219,6 +219,7 @@ describe('真实数据源', () => {
     await act(async () => { result.current.refetch(); await new Promise((r) => setTimeout(r, 20)) })
     expect(result.current.status).toBe('success')
     expect(result.current.error).toBeNull()
+    expect(result.current.staleError?.kind).toBe('forbidden') // 可观察：页面能提示数据可能过期
     expect(result.current.data.length).toBe(3)
   })
 

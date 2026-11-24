@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 // 页面级用例：真实数据形状（无区县名、app_code 字符串、一个项目属于两个集成项目、经销商列表晚到）
 // 驱动 Groups、Control 和 OrgGate。只用假后端，不连任何真实服务。
-import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { QueryClientProvider } from '@tanstack/react-query'
 import { createElement, type ReactNode } from 'react'
 import { MemoryRouter } from 'react-router-dom'
@@ -18,6 +18,8 @@ import { __resetCurrentForTests } from '../data/org/current'
 import { __resetSessionViewForTests } from '../data/session'
 import Control from './Control'
 import Groups from './Groups'
+import Layout from '../components/Layout'
+import { MemoryRouter as Router, Route, Routes } from 'react-router-dom'
 
 beforeAll(() => {
   // Radix 在 jsdom 里需要的几个浏览器接口
@@ -25,6 +27,7 @@ beforeAll(() => {
   proto.hasPointerCapture ??= () => false
   proto.releasePointerCapture ??= () => {}
   proto.scrollIntoView ??= () => {}
+  window.scrollTo = () => {}
   globalThis.ResizeObserver ??= class { observe() {} unobserve() {} disconnect() {} } as unknown as typeof ResizeObserver
 })
 
@@ -169,12 +172,22 @@ describe('OrgGate', () => {
     await screen.findByText('设备页内容')
   })
 
-  it('没有可见项目显示空态，不渲染页面', async () => {
+  it('加载中和失败页都有「退出登录」', async () => {
+    const d = deferred()
+    backend({ '/ctrl/projects': async () => { await d.gate; return text('no permission', 403) } })
+    await signIn('u', 'pw', true)
+    mount(createElement(OrgGate, null, child))
+    expect(screen.getByRole('button', { name: '退出登录' })).toBeTruthy()
+    await act(async () => { d.release() })
+    await screen.findByText('加载失败')
+    expect(screen.getByRole('button', { name: '退出登录' })).toBeTruthy()
+  })
+
+  it('没有可见项目不拦整页（首页等照常渲染）', async () => {
     backend({ '/integrated-projects': () => json({}) })
     await signIn('u', 'pw', true)
     mount(createElement(OrgGate, null, child))
-    await screen.findByText('暂无可用项目')
-    expect(screen.queryByText('设备页内容')).toBeNull()
+    await screen.findByText('设备页内容')
   })
 
   it('mock 模式首屏同步渲染（截图不变的前提）', () => {
@@ -182,5 +195,94 @@ describe('OrgGate', () => {
     localStorage.setItem('hjc-auth', JSON.stringify({ username: 'cosyhome', role: 'dealer' }))
     mount(createElement(OrgGate, null, child))
     expect(screen.getByText('设备页内容')).toBeTruthy()
+  })
+})
+
+/** Layout + 一个子路由（不截图，只断言结构） */
+function mountLayout(path: string) {
+  const client = createQueryClient()
+  const page = (name: string) => createElement('div', null, name + '页内容')
+  return render(createElement(QueryClientProvider, { client }, createElement(AppProvider, null,
+    createElement(Router, { initialEntries: [path] }, createElement(Routes, null,
+      createElement(Route, { element: createElement(Layout) },
+        createElement(Route, { path: '/home', element: page('首页') }),
+        createElement(Route, { path: '/sensors', element: page('传感器') }),
+      ))))))
+}
+
+describe('Layout（真实数据形状）', () => {
+  it('侧栏项目切换：一个项目属于两个集成项目时两组下都有它，显示 code', async () => {
+    backend()
+    await signIn('u', 'pw', true)
+    mountLayout('/home')
+    await screen.findByText('首页页内容')
+    await act(async () => { fireEvent.click(screen.getByText('当前项目').closest('[role="button"]')!) })
+    const g1 = await screen.findByRole('group', { name: /五恒集成项目/ })
+    const g2 = screen.getByRole('group', { name: /单机版/ })
+    expect(within(g1).getByText('测试项目0829')).toBeTruthy()
+    expect(within(g2).getByText('测试项目0829')).toBeTruthy()
+    expect(within(g1).getByText('240829001')).toBeTruthy() // 在线项目显示 code，不是后端 id
+    expect(screen.queryByText('p1')).toBeNull()
+  })
+
+  it('顶栏搜索：按 code 搜得到，组名列出全部所属集成项目', async () => {
+    backend()
+    await signIn('u', 'pw', true)
+    mountLayout('/home')
+    await screen.findByText('首页页内容')
+    await act(async () => { fireEvent.change(screen.getByPlaceholderText('搜索项目名称 / 项目ID'), { target: { value: '240829' } }) })
+    expect(await screen.findByText(/五恒集成项目、单机版/)).toBeTruthy()
+  })
+
+  it('没有可见项目：首页照常渲染；设备页显示空态、不挂载页面，也不显示离线', async () => {
+    backend({ '/integrated-projects': () => json({}) })
+    await signIn('u', 'pw', true)
+    const r = mountLayout('/home')
+    await screen.findByText('首页页内容')
+    expect(screen.getByText('暂无可用项目')).toBeTruthy() // 侧栏
+    expect(screen.queryByText('离线')).toBeNull()
+    r.unmount()
+    mountLayout('/sensors')
+    await screen.findAllByText('暂无可用项目')
+    expect(screen.queryByText('传感器页内容')).toBeNull()
+    expect(screen.queryByRole('alert')).toBeNull() // 离线横幅是 role=alert
+    expect(screen.queryByText('离线')).toBeNull()
+  })
+
+  it('有项目且离线时照常显示离线横幅（门控不影响真实离线）', async () => {
+    localStorage.setItem('hjc-project', 'p3')
+    backend()
+    await signIn('u', 'pw', true)
+    mountLayout('/sensors')
+    await screen.findByText('传感器页内容')
+    expect(screen.getByRole('alert').textContent).toContain('项目离线')
+  })
+})
+
+describe('/distributors 失败但其他成功', () => {
+  it('Groups：经销商选择处显示错误和重试，「平台」分组仍可选并显示其集成项目；重试成功后出现真实经销商', async () => {
+    let fail = true
+    backend({
+      '/distributors': () => (fail ? text('no permission', 403) : json({ distributor_entities: [{ id: 'D1', name: '科希家研发苏州main' }] })),
+      '/integrated-projects': () => json({ entities: [...GROUPS, { id: 'g0', code: '1', name: '平台建的集成项目', project_ids: ['p3'] }] }),
+    })
+    await signIn('u', 'pw', true)
+    mount(createElement(Groups))
+    const alert = await screen.findByRole('alert')
+    expect(alert.textContent).toContain('经销商列表加载失败')
+    expect((await screen.findAllByText('平台建的集成项目')).length).toBeGreaterThan(0)
+    fail = false
+    await act(async () => { fireEvent.click(within(alert).getByRole('button', { name: '重试' })) })
+    await waitFor(() => expect(screen.queryByRole('alert')).toBeNull())
+    expect(await screen.findByText(/科希家研发苏州main/, { selector: '.sub' })).toBeTruthy()
+  })
+
+  it('Control：经销商选择处显示错误和重试', async () => {
+    backend({ '/distributors': () => text('no permission', 403) })
+    await signIn('u', 'pw', true)
+    mount(createElement(Control))
+    const alert = await screen.findByRole('alert')
+    expect(alert.textContent).toContain('经销商列表加载失败')
+    expect(within(alert).getByRole('button', { name: '重试' })).toBeTruthy()
   })
 })

@@ -1,7 +1,7 @@
-// 组织数据门控：集成项目和项目列表就绪、且至少有一个可见项目之后才渲染里面的内容（Layout 和各页面）。
-// - 加载中：不渲染（和登录态恢复时一样），不会把占位项目当成「离线」显示，也不会挂载设备页；
-// - 失败：显示错误和「重试」；
-// - 没有可见项目：显示空态（S6b 再细化）。
+// 组织数据门控（包在 Layout 外，main.tsx 一层；守卫管登录，这里管组织数据就绪，已与赤兔对齐）：
+// - 集成项目或项目列表加载中：整页显示加载态（可退出登录），不会把占位项目当成「离线」，也不挂载页面；
+// - 首次加载失败：整页显示错误、「重试」和「退出登录」；
+// - 没有可见项目：不拦，首页、集成项目、统一控制、设置照常进；4 个设备页由 Layout 显示空态（见 Layout.tsx）。
 // mock 模式数据首屏同步就绪，直接渲染 children，截图不变。
 import type { ReactNode } from 'react'
 import { Button } from '@/components/ui/button'
@@ -23,16 +23,14 @@ function Panel({ title, text, children }: { title: string; text: string; childre
 
 export function OrgGate({ children }: { children: ReactNode }) {
   const org = useOrgScope()
-  if (org.status === 'loading') return <Panel title="正在加载" text="正在获取集成项目和项目列表…" />
-  if (org.status === 'error') return (
-    <Panel title="加载失败" text={org.error?.message || defaultText('server')}>
-      <Button variant="primary" onClick={org.refetch}>重试</Button>
+  if (org.status === 'loading') return (
+    <Panel title="正在加载" text="正在获取集成项目和项目列表…">
       <Button onClick={logout}>退出登录</Button>
     </Panel>
   )
-  if (org.data.projects.length === 0) return (
-    <Panel title="暂无可用项目" text="当前账号下没有集成项目或项目，请联系管理员。">
-      <Button variant="primary" onClick={org.refetch}>刷新</Button>
+  if (org.status === 'error') return (
+    <Panel title="加载失败" text={org.error?.message || defaultText('server')}>
+      <Button variant="primary" onClick={org.refetch}>重试</Button>
       <Button onClick={logout}>退出登录</Button>
     </Panel>
   )

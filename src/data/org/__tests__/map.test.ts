@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { snapshotProject, type WriteProject } from '../../../api/guard'
 import { APP_CODE, capabilitiesOf, hasRooms, isStandalone, toAppCode } from '../capabilities'
 import { isOnlineEntity, joinScope, PLATFORM_DEALER, PLATFORM_DEALER_ID, withPlatformDealer, projectsInGroup, projectsInGroups, resolveCurrentProject, resolveDealerId, toDealer, toGroup, toProject } from '../map'
@@ -65,8 +65,23 @@ describe('实体映射', () => {
     expect(toGroup({ id: 'g0' })).toMatchObject({ dealerId: PLATFORM_DEALER_ID, projectIds: [] })
   })
   it('DistributorEntity → Dealer：简称缺失时用全称', () => {
-    expect(toDealer({ id: 'D1', name: '科希家研发苏州main', abbreviation: '科希家研发' }).short).toBe('科希家研发')
-    expect(toDealer({ id: 'D2', name: '某经销商' }).short).toBe('某经销商')
+    expect(toDealer({ id: 'D1', name: '科希家研发苏州main', abbreviation: '科希家研发' })?.short).toBe('科希家研发')
+    expect(toDealer({ id: 'D2', name: '某经销商' })?.short).toBe('某经销商')
+  })
+  it('虚拟经销商哨兵不可能与后端 ObjectId 相同；万一相同（碰撞夹具）也不会被当成平台分组', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    expect(PLATFORM_DEALER_ID).not.toMatch(/^[0-9a-f]{24}$/)
+    expect(PLATFORM_DEALER_ID).toContain(':')
+    // 真实 ObjectId 原样保留
+    expect(toDealer({ id: '62d7aa299e984547ba4b9372', name: '甲' })?.id).toBe('62d7aa299e984547ba4b9372')
+    expect(toGroup({ id: 'g', distributor_id: '62d7aa299e984547ba4b9372' }).dealerId).toBe('62d7aa299e984547ba4b9372')
+    // 碰撞：经销商丢弃，集成项目标成不可达归属，都告警
+    expect(toDealer({ id: PLATFORM_DEALER_ID, name: '撞名的经销商' })).toBeNull()
+    const g = toGroup({ id: 'gx', distributor_id: PLATFORM_DEALER_ID, project_ids: ['a'] })
+    expect(g.dealerId).not.toBe(PLATFORM_DEALER_ID)
+    expect(withPlatformDealer([], [g])).toEqual([])
+    expect(warn).toHaveBeenCalledTimes(2)
+    warn.mockRestore()
   })
 })
 

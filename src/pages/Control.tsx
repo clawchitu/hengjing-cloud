@@ -9,7 +9,8 @@ import { InputGroup, InputGroupInput } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger } from '@/components/ui/select'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { useApp } from '../app/store'
-import { projectsInGroup, useDealerPick } from '../data/org'
+import { projectsInGroup, useDealerPick, useDealers } from '../data/org'
+import { DealersError } from '../components/DealersError'
 import * as api from '../api'
 import { hasRooms } from '../api'
 
@@ -21,6 +22,7 @@ export default function Control() {
   const { projects } = scope
   // S6a：经销商默认值随列表异步到达（派生值）；经销商账号没有选择器，直接用账号范围内的全部集成项目
   const [dealerId, setDealerId] = useDealerPick(scope.dealers)
+  const dealersQ = useDealers()
   const groups = isAdmin ? scope.groups.filter((g) => g.dealerId === dealerId) : scope.groups
   const [gidRaw, setGid] = useState('')
   const gid = groups.some((g) => g.id === gidRaw) ? gidRaw : groups[0]?.id ?? ''
@@ -83,6 +85,7 @@ export default function Control() {
               <SelectContent>{scope.dealers.map((d) => <SelectItem key={d.id} value={d.id}>经销商：{d.name}</SelectItem>)}</SelectContent>
             </Select>
           )}
+          {isAdmin && <DealersError dealers={dealersQ} />}
           <div style={{ position: 'relative', marginBottom: 12 }}>
             <Icon icon={faLayerGroup} style={{ position: 'absolute', left: 14, top: 12, color: 'var(--primary)' }} />
             <Select value={gid} onValueChange={(v) => { setGid(v); setPicked([]) }}>

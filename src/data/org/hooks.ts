@@ -16,7 +16,10 @@ import type { Dealer, Group, LoadStatus, Project, Scope } from './types'
 export interface Loadable<T> {
   data: T
   status: LoadStatus
+  /** 只在 status=error（从没拿到过数据）时有 */
   error: ApiError | null
+  /** 有旧数据时后台刷新失败的错误（status 仍为 success，页面可提示「数据可能已过期」） */
+  staleError: ApiError | null
   /** 已成功加载且没有数据 */
   isEmpty: boolean
   refetch: () => void
@@ -67,11 +70,12 @@ function useOrgQuery<T>(
   })
   const qRefetch = q.refetch
   const refetch = useCallback(() => { void qRefetch() }, [qRefetch])
-  if (!on) return { data: fallback, status: authed ? 'success' : 'loading', error: null, isEmpty: authed && isEmptyData(fallback), refetch: noop }
+  if (!on) return { data: fallback, status: authed ? 'success' : 'loading', error: null, staleError: null, isEmpty: authed && isEmptyData(fallback), refetch: noop }
   const data = (q.data ?? fallback) as T
   // 有数据（含后台刷新失败时保留的旧数据）就是 success；只有从没拿到过数据时失败才报 error
   const status: LoadStatus = q.data !== undefined ? 'success' : q.isError ? 'error' : 'loading'
-  return { data, status, error: status === 'error' ? toApiError(q.error) : null, isEmpty: status === 'success' && isEmptyData(data), refetch }
+  const err = toApiError(q.error)
+  return { data, status, error: status === 'error' ? err : null, staleError: status === 'success' && q.isError ? err : null, isEmpty: status === 'success' && isEmptyData(data), refetch }
 }
 
 const isEmptyData = (d: unknown) => (Array.isArray(d) ? d.length === 0 : d && typeof d === 'object' ? Object.keys(d).length === 0 : !d)
@@ -87,9 +91,11 @@ export function useDealers(): Loadable<Dealer[]> {
   const { ctx, userKey } = useOrgCtx()
   const platform = !ctx.dealerAccount
   const list = useOrgQuery<Dealer[]>(orgKeys.dealers(userKey), (c, s) => orgSource().dealers(c, s), mockOrg.dealers, NONE, isMockMode() || platform)
-  // 平台账号：有没有归属经销商的集成项目时，列表末尾补虚拟经销商「平台」（演示数据没有这种集成项目，不变）
+  // 平台账号：有没有归属经销商的集成项目时，列表末尾补虚拟经销商「平台」（演示数据没有这种集成项目，不变）。
+  // 不依赖 /distributors 成功：列表失败时「平台」仍可选（status 仍为 error，页面显示错误和重试）；加载中先不补，
+  // 免得默认值先落到「平台」再跳到第一个真实经销商
   const all = useIntegratedProjects({ enabled: platform })
-  const data = useMemo(() => (platform && list.status === 'success' ? withPlatformDealer(list.data, all.data) : list.data), [platform, list.status, list.data, all.data])
+  const data = useMemo(() => (platform && list.status !== 'loading' ? withPlatformDealer(list.data, all.data) : list.data), [platform, list.status, list.data, all.data])
   return data === list.data ? list : { ...list, data, isEmpty: list.status === 'success' && data.length === 0 }
 }
 
@@ -151,7 +157,7 @@ export function useOrgScope(): OrgScope {
   const { status, error } = combine(g, p)
   const [rd, rg, rp] = [d.refetch, g.refetch, p.refetch]
   const refetch = useCallback(() => { rd(); rg(); rp() }, [rd, rg, rp])
-  return { data: scope, status, error, dealersError: d.status === 'error' ? d.error : null, isEmpty: status === 'success' && scope.projects.length === 0, refetch }
+  return { data: scope, status, error, staleError: g.staleError ?? p.staleError, dealersError: d.status === 'error' ? d.error : null, isEmpty: status === 'success' && scope.projects.length === 0, refetch }
 }
 
 export interface CurrentProject {
@@ -212,8 +218,10 @@ export function useResetOnAccountChange() {
   useLayoutEffect(() => {
     if (prev.current && prev.current !== userKey) {
       // removeQueries 本身也会中止进行中的请求（用例验证了 signal 被 abort）；cancelQueries 保险起见先发
-      void qc.cancelQueries()
-      qc.removeQueries()
+      // 新账号的组织查询（['org', 新 userKey]）此时可能已在本次渲染里建好并挂着观察者，不能删
+      const stale = (q: { queryKey: readonly unknown[] }) => !(q.queryKey[0] === 'org' && userKey !== null && q.queryKey[1] === userKey)
+      void qc.cancelQueries({ predicate: stale })
+      qc.removeQueries({ predicate: stale })
     }
     prev.current = userKey
   }, [userKey, qc])

@@ -9,6 +9,7 @@ import { InputGroup, InputGroupInput } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger } from '@/components/ui/select'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { useApp } from '../app/store'
+import { DealersError } from '../components/DealersError'
 import { projectsInGroup, projectsInGroups, useDealerPick, useDealers, useIntegratedProjects, useProjects } from '../data/org'
 import { NO_DEALER, dealerPickModel } from './dealerPick'
 import { PROGRAMS } from '../api'
@@ -22,7 +23,8 @@ export default function Groups() {
   const nav = useNavigate()
   const { projectId, setProjectId, toast, user } = useApp()
   const isAdmin = user.role === 'admin'
-  const dealers = useDealers().data
+  const dealersQ = useDealers()
+  const dealers = dealersQ.data
   // 经销商列表异步到达时默认选第一个（派生值，不是只在初始化取一次的 useState 初值）
   const [dealerId, setDealerId] = useDealerPick(dealers)
   const [dq, setDq] = useState('')
@@ -59,6 +61,7 @@ export default function Groups() {
                 <SelectContent>{dp.items.map((d) => <SelectItem key={d.value} value={d.value} disabled={d.disabled}>{d.label}</SelectItem>)}</SelectContent>
               </Select>
               <small>{dq ? `匹配 ${dealerHits.length} / ${dealers.length} 个经销商` : `${dealers.length} 个经销商`} · 先选择经销商，再查看其集成项目</small>
+              <DealersError dealers={dealersQ} />
             </div>
   ) : null
   if (!g) return (
