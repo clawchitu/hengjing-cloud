@@ -164,9 +164,9 @@ export interface CurrentProject {
   /** 当前项目；可见项目为空（加载中、失败、无数据）时为 null */
   project: Project | null
   /**
-   * 切换当前项目，返回是否成功。目标在当前可见范围里：同步写入并返回 true；
-   * 不在（例如按经销商取的集成项目比全量缓存新）：先重新取项目列表和全量集成项目再确认一次，返回 Promise，
-   * 仍不在就返回 false、不写存储。调用方用 whenProjectSet() 处理两种返回，只有成功才跳转、提示成功
+   * 切换当前项目，同步返回是否成功。目标在当前可见范围里：写入并返回 true；
+   * 不在（例如按经销商取的集成项目比全量缓存新）：返回 false、不写存储、不上报，同时在后台刷新一次组织范围
+   * （只刷新数据，不提交任何选择）。调用方用 whenProjectSet()，只有成功才跳转、提示成功
    */
   setProjectId: (id: string) => SetProjectResult
   /** 每次切换上报完成后加一（常用项目据此刷新） */
@@ -175,12 +175,11 @@ export interface CurrentProject {
   error: ApiError | null
 }
 
-export type SetProjectResult = boolean | Promise<boolean>
+export type SetProjectResult = boolean
 
-/** 处理 setProjectId 的结果：同步结果立即回调（演示数据与常规切换保持同步，界面时序不变），异步结果等确认后回调 */
+/** 处理 setProjectId 的结果（同步）：成功才执行 ok（提示、跳转），否则执行 fail */
 export function whenProjectSet(r: SetProjectResult, ok: () => void, fail: () => void) {
-  if (typeof r === 'boolean') { if (r) ok(); else fail(); return }
-  void r.then((v) => (v ? ok() : fail()), fail)
+  if (r) ok(); else fail()
 }
 
 /**
@@ -197,7 +196,6 @@ export function useCurrentProject(): CurrentProject {
   const project = resolveCurrentProject(scope.data.projects, stored)
   const user = ctx.user
   const visible = scope.data.projects
-  const dealerAccount = ctx.dealerAccount
   const setProjectId = useCallback((id: string): SetProjectResult => {
     const commit = () => {
       setStoredProjectId(id)
@@ -206,15 +204,13 @@ export function useCurrentProject(): CurrentProject {
       return true
     }
     if (visible.some((p) => p.id === id)) return commit()
-    // 不在缓存的可见范围里：重新取项目列表和全量集成项目再确认；仍不在（演示数据、过期链接、无权限）就不写存储、不上报
-    const pk = orgKeys.projects(userKey, {}), gk = orgKeys.groups(userKey, null)
-    return Promise.all([qc.refetchQueries({ queryKey: pk, exact: true }), qc.refetchQueries({ queryKey: gk, exact: true })]).then(() => {
-      const fresh = joinScope([], qc.getQueryData<Group[]>(gk) ?? [], qc.getQueryData<Project[]>(pk) ?? [], { dealerAccount })
-      if (fresh.projects.some((p) => p.id === id)) return commit()
-      console.warn('[org] 忽略不在可见范围内的项目', id)
-      return false
-    }, () => false)
-  }, [user, visible, qc, userKey, dealerAccount])
+    // 不在缓存的可见范围里（演示数据、过期链接、缓存旧了）：失败，不写存储、不上报；后台刷新项目列表和全量集成项目，
+    // 刷新结果只更新数据，不提交任何选择（用户再点一次时按新数据判断）
+    console.warn('[org] 忽略不在可见范围内的项目', id)
+    void qc.refetchQueries({ queryKey: orgKeys.projects(userKey, {}), exact: true })
+    void qc.refetchQueries({ queryKey: orgKeys.groups(userKey, null), exact: true })
+    return false
+  }, [user, visible, qc, userKey])
   return { project, setProjectId, selectTick, status: scope.status, error: scope.error }
 }
 

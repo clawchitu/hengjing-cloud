@@ -341,19 +341,27 @@ describe('侧栏菜单键盘导航（多组重复项）', () => {
 describe('Groups「查看数据」：按经销商取的集成项目比全量缓存新', () => {
   const P4 = { id: 'p4', code: '261124001', name: '新加的项目', app_code: '1', online: true }
   const NEW_G1 = { ...GROUPS[0], project_ids: ['p1', 'p3', 'p4'] }
-  /** 全量集成项目（不带 distributor_id）：前 staleCalls 次返回旧版本（g1 里还没有 p4），之后返回新版本 */
-  function setup(staleCalls: number) {
+  /** 全量集成项目（不带 distributor_id）：第一次返回旧版本（g1 里还没有 p4），之后返回新版本；可以挂起后面的返回 */
+  function setup() {
     let full = 0
+    let gate: Promise<void> = Promise.resolve()
+    let release = () => {}
     backend({
       '/ctrl/projects': () => json({ project_entities: [...PROJECTS, P4] }),
-      '/integrated-projects': (c) => {
+      '/integrated-projects': async (c) => {
         const body = (c.body ?? {}) as Record<string, unknown>
         if (body.distributor_id) return json({ entities: [NEW_G1, ...GROUPS.slice(1)] })
         full += 1
-        return json({ entities: full <= staleCalls ? GROUPS : [NEW_G1, ...GROUPS.slice(1)] })
+        if (full === 1) return json({ entities: GROUPS })
+        await gate
+        return json({ entities: [NEW_G1, ...GROUPS.slice(1)] })
       },
     })
-    return { fullCalls: () => full }
+    return {
+      fullCalls: () => full,
+      hold: () => { gate = new Promise((r) => { release = r }) },
+      release: () => release(),
+    }
   }
   function mountGroups() {
     const client = createQueryClient()
@@ -367,29 +375,31 @@ describe('Groups「查看数据」：按经销商取的集成项目比全量缓�
     const row = (await screen.findByText(name)).closest('tr')!
     await act(async () => { fireEvent.click(within(row).getByRole('button', { name: /查看数据/ })) })
   }
+  const toasts = () => document.querySelector('.toasts')?.textContent ?? ''
 
-  it('重新取全量后确认在范围内 → 切换成功、提示「已进入」并跳转', async () => {
-    const be = setup(1)
+  it('范围外：同步失败、提示稍后重试、不跳转、不写存储，并在后台刷新一次；刷新到达后再点一次成功', async () => {
+    const be = setup()
     await signIn('u', 'pw', true)
     mountGroups()
+    await screen.findByText('新加的项目')
+    expect(be.fullCalls()).toBe(1)
+    be.hold() // 让后台刷新先挂着：失败提示必须是同步给出的，不等刷新
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    await clickView('新加的项目')
+    expect(toasts()).toContain('项目列表已更新，请稍后重试')
+    expect(toasts()).not.toContain('已进入')
+    expect(screen.queryByText('传感器页内容')).toBeNull()
+    expect(localStorage.getItem('hjc-project')).toBeNull()
+    expect(be.fullCalls()).toBe(2) // 触发了一次后台刷新
+    // 刷新结果到达：只更新数据，不提交选择
+    await act(async () => { be.release(); await new Promise((r) => setTimeout(r, 20)) })
+    expect(localStorage.getItem('hjc-project')).toBeNull()
+    expect(screen.queryByText('传感器页内容')).toBeNull()
+    warn.mockRestore()
+    // 用户再点一次：按新数据判断，成功
     await clickView('新加的项目')
     await screen.findByText('传感器页内容')
     expect(localStorage.getItem('hjc-project')).toBe('p4')
-    expect(document.querySelector('.toasts')?.textContent).toContain('已进入「新加的项目」')
-    expect(be.fullCalls()).toBe(2) // 首次 + 切换前重新确认一次
-  })
-
-  it('重新取后仍不在范围内 → 提示失败、不跳转、不写存储', async () => {
-    const be = setup(Infinity)
-    await signIn('u', 'pw', true)
-    mountGroups()
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    await clickView('新加的项目')
-    await waitFor(() => expect(document.querySelector('.toasts')?.textContent).toContain('不在当前账号可查看的范围内'))
-    expect(document.querySelector('.toasts')?.textContent).not.toContain('已进入')
-    expect(screen.queryByText('传感器页内容')).toBeNull()
-    expect(localStorage.getItem('hjc-project')).toBeNull()
-    expect(be.fullCalls()).toBe(2)
-    warn.mockRestore()
+    expect(toasts()).toContain('已进入「新加的项目」')
   })
 })

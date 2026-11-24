@@ -127,7 +127,7 @@ export default function Home() {
         {favs && favs.length === 0 && <div className="empty-fav"><Icon icon={faStar} /><b>暂无常用项目</b><small>在「集成项目」或顶部搜索中选择项目后，这里会显示您最常用的项目</small></div>}
         <div className="hj-grid g4">
           {(favs ?? []).map(({ project: p, count }) => (
-            <div key={p.id} className="proj-card" title={`已选择 ${count} 次`} onClick={() => whenProjectSet(setProjectId(p.id), () => { if (!p.online) toast(`${p.name} 当前离线，显示最后在线数据`, true); nav('/sensors') }, () => toast(`「${p.name}」不在当前账号可查看的范围内，无法切换`, true))}>
+            <div key={p.id} className="proj-card" title={`已选择 ${count} 次`} onClick={() => whenProjectSet(setProjectId(p.id), () => { if (!p.online) toast(`${p.name} 当前离线，显示最后在线数据`, true); nav('/sensors') }, () => toast('项目列表已更新，请稍后重试', true))}>
               <div className="pc-h"><Badge variant={p.online ? 'green' : 'gray'} style={{ color: p.online ? undefined : 'var(--muted)' }}>{p.online ? '在线' : '离线'}</Badge><span className="faint num" style={{ fontSize: 12 }}>{p.id}</span></div>
               <h4>{p.name}</h4>
               <div className="pc-loc">{p.city} · {p.district} · {p.kind}</div>
