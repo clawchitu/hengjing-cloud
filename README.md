@@ -4,6 +4,21 @@
 
 - 开发方案：[`docs/plan-v1.md`](docs/plan-v1.md)
 - 部署说明：[`docs/deploy.md`](docs/deploy.md)（线上演示版 https://hvac-demo.haoqianglyu.com ）
+- 真实环境走查清单：[`docs/走查清单.md`](docs/走查清单.md)
+- 生产交付包与对方运维部署说明：[`docs/部署说明.md`](docs/部署说明.md)，打包脚本 `scripts/build-prod.sh`
+
+## 测试站与演示站
+
+| 站点 | 数据 | 说明 |
+| --- | --- | --- |
+| https://hvac-demo.haoqianglyu.com | 真实接口 | Worker 把 `/api/*` 转发到测试服（`test.cosyhome.com.cn`），用测试环境账号登录；没有演示账号。下发类操作只允许对 260911001、240829001 两个项目做 |
+| https://hvac-mock.haoqianglyu.com | 演示数据 | 前端内置 `src/mock/` 数据，不连任何后端，用演示账号登录 |
+
+两个站共用一份构建和 `worker/index.js`，区别由 `wrangler.toml` 的 `DATA_SOURCE` 决定，发布方式见 [`docs/deploy.md`](docs/deploy.md)。账号密码不写进仓库，向负责人索取。
+
+## 生产交付包
+
+`scripts/build-prod.sh` 生成给对方 nginx（int.cosyhome.com.cn）部署的静态包，不部署、不连接任何接口。包内 `config.js` 指向生产接口 `https://control.cosyhome.com.cn/v1`，且下发白名单为空、`writeMode` 为 `off`，即生产环境禁止一切下发，直到负责人另行确认。详见 [`docs/部署说明.md`](docs/部署说明.md)。
 
 ## 协作约定：所有改动走 PR
 
