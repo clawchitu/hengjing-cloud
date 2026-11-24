@@ -4,7 +4,7 @@
 // 连续确认时焦点回到最初的触发器。演示数据模式，不连任何后端。
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { QueryClientProvider } from '@tanstack/react-query'
-import { createElement, Fragment, useEffect, useState } from 'react'
+import { createElement, Fragment, StrictMode, useEffect, useState } from 'react'
 import { BrowserRouter, Route, Routes, useNavigate } from 'react-router-dom'
 import { toast as sonner } from 'sonner'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -15,7 +15,7 @@ import { __resetCurrentForTests } from '../data/org/current'
 import { AppProvider, useApp } from './store'
 import { createConfirmController, useCancelConfirmOnLeave, useConfirm, type ConfirmOwner } from './feedback'
 
-type Confirm = ReturnType<typeof useApp>['confirm']
+type Confirm = ReturnType<typeof useConfirm>
 const box: {
   confirm?: Confirm; nav?: (to: string) => void
   ownerConfirm?: Confirm; sent: number; setOffline?: (v: boolean) => void; setProject?: (id: string) => void
@@ -41,24 +41,23 @@ function mountOwner(keyed = true) {
 }
 const ownerOpen = async (o: Parameters<Confirm>[0]) => { let r!: ReturnType<typeof track>; await act(async () => { r = track(box.ownerConfirm!(o)) }); return r }
 
+/** 用 useConfirm() 发起确认的常驻组件（像 Layout 的「退出登录」：路由切换时不卸载） */
 function Probe() {
-  const { confirm } = useApp()
+  const confirm = useConfirm()
   useEffect(() => { box.confirm = confirm }, [confirm])
   return null
 }
-/** 模拟 Layout：在 Router 里调用离开即失效的桥接 */
-function RoutedProbe() {
+/** 模拟 Layout：常驻在 Router 里、调用离开即失效的桥接，下面是随路由切换的页面 */
+function LayoutLike() {
   useCancelConfirmOnLeave()
   const nav = useNavigate()
   useEffect(() => { box.nav = nav }, [nav])
-  return createElement(Probe)
+  return createElement(Fragment, null, createElement(Probe), createElement(Routes, null,
+    createElement(Route, { path: '/a', element: createElement('div', null, 'A') }),
+    createElement(Route, { path: '/b', element: createElement('div', null, 'B') })))
 }
 function mount(routed = false) {
-  const inner = routed
-    ? createElement(BrowserRouter, null, createElement(Routes, null,
-      createElement(Route, { path: '/a', element: createElement(RoutedProbe) }),
-      createElement(Route, { path: '/b', element: createElement(RoutedProbe) })))
-    : createElement(Probe)
+  const inner = routed ? createElement(BrowserRouter, null, createElement(LayoutLike)) : createElement(Probe)
   return render(createElement(QueryClientProvider, { client: createQueryClient() }, createElement(AppProvider, null, inner)))
 }
 const confirm = (o: Parameters<Confirm>[0]) => box.confirm!(o)
@@ -385,6 +384,23 @@ describe('confirm()', () => {
       info.mockRestore()
     })
 
+    it('会话失效导致发起页面卸载（卸载先于会话 effect）：原因记为登录状态已变化，不提示「页面已变化」', async () => {
+      const info = vi.spyOn(console, 'info').mockImplementation(() => {})
+      // 模拟 Guard：未登录时把页面换掉（页面卸载发生在 AppProvider 的会话 effect 之前）
+      function Guarded() { return useApp().authed ? createElement(OwnerPage) : createElement('div', null, '登录页') }
+      render(createElement(QueryClientProvider, { client: createQueryClient() }, createElement(AppProvider, null,
+        createElement(BrowserRouter, null, createElement(Guarded)))))
+      const r = await ownerOpen({ title: '全部开启', body: 'x', okText: '确认下发' })
+      await act(async () => { logout() })
+      await flush()
+      await flush()
+      expect(r).toEqual({ value: false, settled: 1 })
+      expect(info).toHaveBeenCalledWith('[确认弹窗] 「全部开启」已失效（登录状态已变化），已自动关闭，按取消处理')
+      expect(info).not.toHaveBeenCalledWith(expect.stringContaining('发起它的页面已卸载'))
+      expect(document.querySelector('[data-sonner-toaster]')?.textContent ?? '').not.toContain('页面已变化')
+      info.mockRestore()
+    })
+
     it('正常取消 / Esc / Provider 卸载：不记录、不提示', async () => {
       const info = vi.spyOn(console, 'info').mockImplementation(() => {})
       const { unmount } = mount()
@@ -396,5 +412,52 @@ describe('confirm()', () => {
       expect(info).not.toHaveBeenCalled()
       info.mockRestore()
     })
+  })
+
+  it('项目已切换（setProjectId 已同步写入存储）、React 还没提交时点旧的「确认」：false，不下发', async () => {
+    mountOwner(false)
+    const r = await ownerOpen({ title: '全部开启', body: 'x', okText: '确认下发' })
+    const ok = screen.getByRole('button', { name: '确认下发' })
+    // 同一个同步块里：切换当前项目（只写了外部存储，React 尚未提交，所有者的 projectId 还是旧的），紧接着点旧按钮
+    box.setProject!('PRJ-10243')
+    ok.dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 1 }))
+    await flush()
+    expect(r).toEqual({ value: false, settled: 1 })
+    expect(box.sent).toBe(0)
+  })
+
+  it('真实 StrictMode：挂载 effect 里发起确认 —— 模拟卸载那一次按 false 结算且不提示，重新挂载后发起的照常可确认', async () => {
+    const info = vi.spyOn(console, 'info').mockImplementation(() => {})
+    const results: boolean[] = []
+    function MountConfirm() {
+      const confirm = useConfirm()
+      useEffect(() => {
+        void confirm({ title: '挂载时确认', body: 'x', okText: '好' }).then((ok) => { results.push(ok); if (ok) box.sent++ })
+      }, [confirm])
+      return null
+    }
+    // 页面在应用挂载之后才出现（同路由切换后新页面挂载）：StrictMode 只对这棵新子树做“模拟卸载 → 重新挂载”，走所有者的卸载清理
+    let show!: (v: boolean) => void
+    function Host() {
+      const [v, setV] = useState(false)
+      useEffect(() => { show = setV }, [])
+      return v ? createElement(MountConfirm) : null
+    }
+    render(createElement(StrictMode, null, createElement(QueryClientProvider, { client: createQueryClient() },
+      createElement(AppProvider, null, createElement(BrowserRouter, null, createElement(Host))))))
+    await flush()
+    await act(async () => { show(true) })
+    await flush()
+    await flush()
+    expect(screen.getAllByRole('alertdialog')).toHaveLength(1)
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: '好' })) })
+    await flush()
+    // 第一次挂载发起的那个（被 StrictMode 的模拟卸载结算）是 false，重新挂载后发起的是 true，只下发一次
+    expect(results).toEqual([false, true])
+    expect(box.sent).toBe(1)
+    expect(screen.queryByRole('alertdialog')).toBeNull()
+    expect(info).not.toHaveBeenCalled()
+    expect(document.querySelector('[data-sonner-toaster]')?.textContent ?? '').not.toContain('页面已变化')
+    info.mockRestore()
   })
 })

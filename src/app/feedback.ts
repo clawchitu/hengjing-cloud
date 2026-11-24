@@ -20,8 +20,11 @@ export type ConfirmOptions = { title: string; body: ReactNode; okText?: string; 
  * 一次确认请求。id 是请求的身份：界面上的按钮 / Esc 只结算自己渲染出来的那一次（id 不是当前请求就忽略）。
  * trigger = 发起时的焦点元素（关闭后焦点回到这里），keyboard = 发起它的是不是键盘
  */
-/** 请求所属上下文：route = 路由（history key + pathname），session = 登录态与账号 */
-export type ConfirmScope = { route: string; session: string }
+/**
+ * 请求所属上下文（都要能同步读取）：route = 路由（history key + pathname），session = 登录态与账号，
+ * project = 外部存储里的当前项目 id（data/org/current 的 getStoredProjectId；setProjectId 先同步写它，React 之后才提交）
+ */
+export type ConfirmScope = { route: string; session: string; project?: string }
 export type ConfirmRequest = ConfirmOptions & { id: number; trigger: HTMLElement | null; keyboard: boolean; scope: ConfirmScope }
 /** 请求失效的原因 */
 export type ExpireReason = 'route' | 'session' | 'owner-unmounted' | 'project-changed'
@@ -52,6 +55,9 @@ const MODIFIER_KEYS = ['Shift', 'Control', 'Alt', 'Meta']
  *   ④ 所有者（useConfirm()）：发起确认的组件实例卸载（如当前项目变离线，Layout 换成离线分支卸载页面；或当前项目变化，
  *      key={project.id} 的页面重挂）时，在 layout effect 清理里同步按 false 结算并关闭；接受「确认」时还要核对所有者仍存活、
  *      且它当前看到的项目 id 与发起时一致。URL 和账号都不变的“页面已不是那个页面”由这一条兜住；
+ *   ⑤ 当前项目：scope 里含外部存储的当前项目 id，接受「确认」时同步比较 —— 项目已切换（setProjectId 已写入存储）、
+ *      React 还没提交（所有者的 projectId 还没更新）时点旧确认也是 false。存储值从空（回退到第一个项目）变成同一个项目的 id
+ *      也算变化、按取消处理（偏保守；弹窗是模态的，打开期间界面上切不了项目）；
  * - 路由 scope 的边界：React Router 的导航（含同路径只改 query / hash）都会生成新的 history key，因此都会让确认失效（按“历史条目
  *   变化即离开”处理）；脚本直接 history.replaceState 且保留 key 与 pathname（只改 query / hash）时检测不到，本项目没有这种写法；
  * - 触发器：发起时的焦点元素。弹窗开着时再次调用（焦点在弹窗里）沿用当前请求的触发器；连续确认时沿用上一个请求的触发器：
@@ -70,14 +76,16 @@ export function createConfirmController(getScope: () => ConfirmScope = () => ({ 
     const now = getScope()
     if (current.scope.session !== now.session) return 'session'
     if (current.scope.route !== now.route) return 'route'
+    if ((current.scope.project ?? '') !== (now.project ?? '')) return 'project-changed'
     if (current.owner && !current.owner.alive) return 'owner-unmounted'
     if (current.owner && current.owner.projectId !== current.projectId) return 'project-changed'
     return null
   }
+  let active = true
   const expire = (reason: ExpireReason, how: 'clicked' | 'closed', keyboard: boolean) => {
     const title = current!.title
     finish(keyboard, false)
-    onExpired({ title, reason, how })
+    if (active) onExpired({ title, reason, how })
   }
   let lastTrigger: HTMLElement | null = null
   let lastInput: 'pointer' | 'keyboard' | null = null
@@ -96,7 +104,7 @@ export function createConfirmController(getScope: () => ConfirmScope = () => ({ 
   }
 
   return {
-    /** owner：发起它的组件实例（useConfirm() 传入）；useApp().confirm 不带所有者，只核对路由 / 会话 */
+    /** owner：发起它的组件实例（useConfirm() 传入；页面只能经 useConfirm() 发起，不带所有者只用于控制器自身的测试） */
     request(o: ConfirmOptions, owner: ConfirmOwner | null = null): Promise<boolean> {
       return new Promise<boolean>((resolve) => {
         const prev = current
@@ -131,11 +139,25 @@ export function createConfirmController(getScope: () => ConfirmScope = () => ({ 
     },
     /** 所有者卸载：它发起的未结算请求按 false 结算（别的实例发起的不动） */
     cancelOwner(owner: ConfirmOwner) {
-      if (current && current.owner === owner) expire('owner-unmounted', 'closed', false)
+      if (!current || current.owner !== owner) return
+      const title = current.title
+      // 原因优先取上下文：会话失效时页面卸载先于会话 effect，这里要记成 session（不提示「页面已变化」，登录过期另有提示）
+      const reason = expired() ?? 'owner-unmounted'
+      finish(false, false)
+      // 通知放到微任务里：StrictMode 开发模式下的“模拟卸载 → 重新挂载”在同一次提交里同步完成，届时所有者已恢复存活，不提示
+      queueMicrotask(() => { if (!owner.alive && active) onExpired({ title, reason, how: 'closed' }) })
     },
     /** AppProvider 卸载：当前未结算的请求无条件按 false 结算 */
     cancel() {
       if (current) finish(false, false)
+    },
+    /**
+     * AppProvider 的 layout effect 调用：卸载时（先于子组件的清理执行）置为不活动并静默结算，
+     * 随后子组件（所有者）的卸载清理不再提示「页面已变化」；StrictMode 重新执行时恢复
+     */
+    setActive(v: boolean) {
+      active = v
+      if (!v && current) finish(false, false)
     },
     /** 取出“刚结算的那次”应该把焦点还给谁（只取一次） */
     takeClosing() {

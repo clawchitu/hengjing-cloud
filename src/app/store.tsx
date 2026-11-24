@@ -4,22 +4,25 @@
 //   组织数据      src/data/org          useOrgScope() / useDealers() / useIntegratedProjects() / useProjects()
 //   当前项目      src/data/org          useCurrentProject()（hjc-project 持久化）
 // useApp() 保留为兼容门面，把上面几块拼成拆分前的形状，现有页面不用改；新代码直接用对应的 hook。
-import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { createContext, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { ConfirmHost } from '@/components/ConfirmHost'
 import { Toaster } from '@/components/ui/sonner'
-import { ConfirmControllerContext as Ctl, createConfirmController, routeScope, showToast, type ConfirmOptions, type ExpireReason } from './feedback'
+import { ConfirmControllerContext as Ctl, createConfirmController, routeScope, showToast, type ExpireReason } from './feedback'
 import type { Project, Role, Scope, User } from '../api'
 import type { ApiError } from '../api/errors'
 import type { SessionInfo } from '../api/session'
 import { can, getSessionView, logout, mockSignIn, useSession, useSessionBoot } from '../data/session'
 import { useCurrentProject, useOrgScope, useResetOnAccountChange, type LoadStatus, type SetProjectResult } from '../data/org'
+import { getStoredProjectId } from '../data/org/current'
 
 type Auth = { username: string; role: Role }
 
+/**
+ * useApp() 只提供 toast。确认弹窗不再从这里取（S3a 第四轮起删掉了 useApp().confirm）：写操作确认必须用 app/feedback 的
+ * useConfirm()，它把请求绑定到发起它的组件实例，随页面卸载、路由 / 会话 / 当前项目变化同步失效（见 docs/分工.md 第 3 节）
+ */
 interface Feedback {
   toast: (text: string, err?: boolean) => void
-  /** 兼容入口：不绑定发起它的组件实例，只核对路由 / 会话。页面里用 app/feedback 的 useConfirm()（签名相同，随页面卸载失效） */
-  confirm: (o: ConfirmOptions) => Promise<boolean>
 }
 
 interface Ctx extends Feedback {
@@ -90,7 +93,6 @@ export function useApp(): Ctx {
     project,
     selectTick: cur.selectTick,
     toast: fb.toast,
-    confirm: fb.confirm,
   }
 }
 
@@ -99,7 +101,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [ctl] = useState(() => createConfirmController(
     () => {
       const v = getSessionView()
-      return { route: routeScope(), session: v.authed ? v.userKey ?? '' : '-' }
+      // project：外部存储里的当前项目 id（setProjectId 先同步写它，React 之后才提交），接受确认时与发起时比较
+      return { route: routeScope(), session: v.authed ? v.userKey ?? '' : '-', project: getStoredProjectId() }
     },
     // 失效判为 false 时不静默：留一行原因便于排查，并提示用户（会话变化时登出 / 过期已有各自的提示，不再叠加）
     ({ title, reason, how }) => {
@@ -108,7 +111,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
     },
   ))
   useEffect(() => ctl.trackInput(document), [ctl])
-  // Provider 卸载：未结算的确认按 false 结算，不悬空
+  // Provider 卸载：未结算的确认按 false 结算，不悬空；layout 清理先于子组件（所有者）的清理执行，整棵树卸载时不提示「页面已变化」
+  useLayoutEffect(() => { ctl.setActive(true); return () => ctl.setActive(false) }, [ctl])
   useEffect(() => () => ctl.cancel(), [ctl])
 
   // 真实接口模式：接上会话并恢复登录态；退出或换账号时清掉上一个账号的组织数据缓存
@@ -124,8 +128,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
     prevAuthed.current = sess.authed
   }, [sess, ctl])
 
-  // toast / confirm 都是稳定引用：toast 的队列在 Sonner 里、弹窗状态在 controller 里，弹窗开关不让 useApp() 的使用方跟着重渲染
-  const value: Feedback = useMemo(() => ({ toast: showToast, confirm: ctl.request }), [ctl])
+  // toast 是稳定引用：队列在 Sonner 里；确认弹窗的状态在 controller 里，弹窗开关不让 useApp() 的使用方跟着重渲染
+  const value: Feedback = useMemo(() => ({ toast: showToast }), [])
 
   return (
     <Ctl.Provider value={ctl}>
