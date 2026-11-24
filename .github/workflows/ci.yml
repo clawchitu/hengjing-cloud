@@ -1,0 +1,69 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    name: 规范检查 / 类型检查 / 单元测试 / 构建
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - name: 代码规范（oxlint）
+        run: npm run lint
+      - name: 类型检查（tsc -b，各 tsconfig 已设 noEmit）
+        run: npm run typecheck
+      - name: 单元测试（vitest）
+        run: npm test
+      - name: 构建（vite build）
+        run: npx vite build
+
+  e2e:
+    name: 截图对比（Playwright，演示数据模式）
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # 与本机 npm run e2e 用同一个官方镜像，保证字体和渲染一致
+    container:
+      image: mcr.microsoft.com/playwright:v1.65.1-noble
+      options: --ipc=host
+    env:
+      CI: '1'
+      HOME: /root
+    steps:
+      - uses: actions/checkout@v4
+      - run: npm ci --no-audit --no-fund
+      - name: Playwright 截图对比
+        run: npx playwright test
+      - name: 上传报告和差异图
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: |
+            playwright-report/
+            test-results/
+          retention-days: 14
+      - name: 上传本次截图（缺基线时用于补录）
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: screenshots
+          path: e2e/__screenshots__/
+          if-no-files-found: ignore
+          retention-days: 14
