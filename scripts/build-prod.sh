@@ -19,10 +19,14 @@ cd "$ROOT"
 
 API_BASE="${API_BASE:-https://control.cosyhome.com.cn/v1}"
 OUT_DIR="${OUT_DIR:-$ROOT/release}"
+mkdir -p "$OUT_DIR"
+OUT_DIR="$(cd "$OUT_DIR" && pwd)"   # 转绝对路径，后面会 cd 进子目录
 
 case "$API_BASE" in
-  *\'*|*\"*|*\\*|*[[:space:]]*) echo "API_BASE 含非法字符：$API_BASE" >&2; exit 1 ;;
+  /api|http://*|https://*) ;;
+  *) echo "API_BASE 只能是 /api 或 http(s):// 开头的完整地址：$API_BASE" >&2; exit 1 ;;
 esac
+if [[ ! "$API_BASE" =~ ^[A-Za-z0-9:/._~-]+$ ]]; then echo "API_BASE 含非法字符：$API_BASE" >&2; exit 1; fi
 
 VERSION="$(node -p "require('./package.json').version")"
 COMMIT="$(git rev-parse --short HEAD 2>/dev/null || echo nogit)"
@@ -73,10 +77,11 @@ if grep -rIl "test\.cosyhome\.com\.cn" "$STAGE" >/dev/null 2>&1; then
 fi
 
 echo "==> 打包"
+if [ -n "$DIRTY" ]; then echo "警告：工作区有未提交改动，正式交付请在合并后的 main、干净工作区重新打包" >&2; fi
 ZIP="$OUT_DIR/$NAME.zip"
 rm -f "$ZIP"
 ( cd "$STAGE" && zip -qr "$ZIP" . )
-( cd "$OUT_DIR" && shasum -a 256 "$NAME.zip" > "$NAME.zip.sha256" )
+( cd "$OUT_DIR" && { shasum -a 256 "$NAME.zip" 2>/dev/null || sha256sum "$NAME.zip"; } > "$NAME.zip.sha256" )
 
 echo "完成：$ZIP"
 cat "$OUT_DIR/$NAME.zip.sha256"
