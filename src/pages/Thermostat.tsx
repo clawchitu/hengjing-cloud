@@ -1,23 +1,26 @@
 import { useState } from 'react'
 import { faPowerOff, faLeaf, faFan } from '@fortawesome/free-solid-svg-icons'
-import { Card, Chart, Icon, Seg, Toggle, axis, tooltip, useAsync } from '../components/legacy'
+import { Chart, Icon, Seg, Toggle, axis, tooltip, useAsync } from '../components/legacy'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { Card, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { useStats, type Range } from './Sensors'
 import { useApp } from '../app/store'
 import * as api from '../api'
 import { PROGRAMS, hasRooms, type Room } from '../api'
 
 function Tag({ on, label, dim }: { on: boolean; label: string; dim?: boolean }) {
-  return <span className={'pill ' + (on ? 'cyan' : 'gray')} style={dim ? { opacity: 0.8 } : undefined}>{!dim && <span className="dot" style={{ width: 5, height: 5, color: on ? 'var(--green-2)' : '#cbd5e1' }} />}{label} {on ? '开' : '关'}</span>
+  return <Badge variant={on ? 'cyan' : 'gray'} style={dim ? { opacity: 0.8 } : undefined}>{!dim && <span className="dot" style={{ width: 5, height: 5, color: on ? 'var(--green-2)' : '#cbd5e1' }} />}{label} {on ? '开' : '关'}</Badge>
 }
 
 function RoomCard({ r, selected, onSelect, onToggle }: { r: Room; selected: boolean; onSelect: () => void; onToggle: (v: boolean) => void }) {
   const off = !r.on
   return (
-    <div className={'card room' + (selected ? ' sel' : '') + (off ? ' off' : '')} onClick={onSelect}>
+    <Card pad={false} className={'room' + (selected ? ' sel' : '') + (off ? ' off' : '')} onClick={onSelect}>
       <div className="room-top">
         <div><div className="room-name">{r.name}</div><div className="room-id num">{r.id} · {r.floor}</div></div>
         <div className="row" onClick={(e) => e.stopPropagation()}>
-          {off ? <span className="pill gray">已关闭</span> : r.mode === '节能' ? <span className="pill amber"><Icon icon={faLeaf} />节能</span> : <span className="pill gray" style={{ color: 'var(--muted)' }}>标准</span>}
+          {off ? <Badge variant="gray">已关闭</Badge> : r.mode === '节能' ? <Badge variant="amber"><Icon icon={faLeaf} />节能</Badge> : <Badge variant="gray" style={{ color: 'var(--muted)' }}>标准</Badge>}
           <Toggle on={r.on} onChange={onToggle} />
         </div>
       </div>
@@ -36,7 +39,7 @@ function RoomCard({ r, selected, onSelect, onToggle }: { r: Room; selected: bool
         <Tag on={!off && r.floorHeat} label="地冷" dim={off} />
         <Tag on={!off && r.fanCoil} label="风盘" dim={off} />
       </div>
-    </div>
+    </Card>
   )
 }
 
@@ -80,8 +83,8 @@ export default function Thermostat() {
           <div className="sub">{project.name}<span className="sep">·</span>{rooms.length} 个房间温控面板<span className="sep">·</span>末端：顶辐射 / 地冷（暖）/ 风盘</div>
         </div>
         <div className="actions">
-          <button className="btn" onClick={() => all(false)}><Icon icon={faPowerOff} />全部关闭</button>
-          <button className="btn primary" onClick={() => all(true)}><Icon icon={faPowerOff} />全部开启</button>
+          <Button onClick={() => all(false)}><Icon icon={faPowerOff} />全部关闭</Button>
+          <Button variant="primary" onClick={() => all(true)}><Icon icon={faPowerOff} />全部开启</Button>
         </div>
       </div>
       <div className="hj-grid g4" style={{ marginBottom: 16 }}>
@@ -97,11 +100,11 @@ export default function Thermostat() {
         ))}
       </div>
       <Card style={{ marginTop: 20 }}>
-        <div className="card-head"><div><h3 className="card-title">温度 / 湿度 / 露点 统计</h3><div className="card-sub">{statRoom?.name} · {range === '24小时' ? '24 小时逐时数据' : `近${range === '7日' ? ' 7 ' : ' 30 '}日日均值`}</div></div>
+        <CardHeader><div><CardTitle>温度 / 湿度 / 露点 统计</CardTitle><CardDescription>{statRoom?.name} · {range === '24小时' ? '24 小时逐时数据' : `近${range === '7日' ? ' 7 ' : ' 30 '}日日均值`}</CardDescription></div>
           <div className="row" style={{ gap: 12 }}>
             <select className="select" value={statRoom?.id} onChange={(e) => setSel(e.target.value)}>{rooms.map((r) => <option key={r.id} value={r.id}>{r.name} · {r.id}</option>)}</select>
             <Seg value={range} options={['24小时', '7日', '30日']} onChange={setRange} />
-          </div></div>
+          </div></CardHeader>
         {stats ? <Chart option={roomChart(stats.hours?.map((h) => h.t) ?? stats.days!.map((d) => d.date), stats.hours ? stats.hours.map((h) => [h.temp, h.dew, h.hum]) : stats.days!.map((d) => [d.temp.avg, d.dew.avg, d.hum.avg]), !!stats.hours)} height={280} /> : <div style={{ height: 280 }} />}
       </Card>
     </div>

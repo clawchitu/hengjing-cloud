@@ -70,9 +70,7 @@
 .nav-item.active { background: var(--navy-active); color: #fff; font-weight: 500; }
 .nav-item.active::before { content: ''; position: absolute; left: 0; top: 4px; bottom: 4px; width: 2.5px; border-radius: 2px; background: var(--primary-2); }
 .nav-item.active .ico { color: var(--primary-2); }
-.nav-item .badge { margin-left: auto; }
 .nav-main .nav-item { height: 36px; margin-bottom: 3px; }
-.badge { min-width: 18px; height: 18px; padding: 0 5px; border-radius: 5px; background: var(--red); color: #fff; font-size: 10.5px; font-weight: 600; display: inline-grid; place-items: center; }
 .proj-switch { margin: 14px 2px 18px; background: var(--navy-2); border: 1px solid rgba(255,255,255,.06); border-radius: 10px; padding: 10px 12px; position: relative; cursor: pointer; }
 .proj-switch .lbl { font-size: 10.5px; color: #64748b; }
 .proj-switch .name { color: #fff; font-weight: 600; font-size: 14px; margin: 4px 0 4px; display: flex; justify-content: space-between; align-items: center; }
@@ -113,11 +111,6 @@
 .actions { display: flex; gap: 10px; align-items: center; flex: none; }
 
 /* ------------------------------------------------------------ primitives */
-.card { background: var(--card); border-radius: var(--radius); border: 1px solid #e9eef4; box-shadow: var(--shadow); }
-.card-pad { padding: 20px 22px; }
-.card-title { font-size: 15.5px; font-weight: 700; margin: 0; display: flex; align-items: center; gap: 8px; }
-.card-sub { color: var(--muted); font-size: 12px; margin-top: 4px; }
-.card-head { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 16px; gap: 12px; }
 /* 原名 .grid：与 Tailwind 的 grid 工具类同名，会给 shadcn 组件强加 16px 间距，故改名 */
 .hj-grid { display: grid; gap: 16px; }
 .row { display: flex; align-items: center; gap: 8px; }
@@ -129,16 +122,6 @@
 .amber { color: #d97706; }
 .cyan { color: var(--primary); }
 
-.btn { height: 36px; padding: 0 16px; border-radius: 8px; border: 1px solid var(--line); background: #fff; display: inline-flex; align-items: center; justify-content: center; gap: 8px; font-size: 13.5px; font-weight: 500; color: var(--text-2); white-space: nowrap; transition: all .15s; }
-.btn:hover { border-color: #cbd5e1; background: #f8fafc; }
-.btn.primary { background: var(--primary); border-color: var(--primary); color: #fff; box-shadow: 0 0 0 3px rgba(8,145,178,.18); }
-.btn.primary:hover { background: #0e7490; }
-.btn.ghost-primary { background: var(--primary-soft); color: var(--primary); border-color: transparent; }
-.btn.lg { height: 42px; font-size: 14.5px; }
-.btn.block { width: 100%; }
-.btn:disabled { opacity: .5; cursor: not-allowed; }
-.btn .cnt { background: rgba(255,255,255,.22); border-radius: 4px; padding: 0 6px; font-size: 12px; }
-.link { color: var(--primary); background: none; border: 0; padding: 0; font-weight: 500; }
 
 .seg { display: inline-flex; background: var(--bg); border-radius: 8px; padding: 3px; gap: 2px; }
 .seg button { border: 0; background: transparent; padding: 0 12px; height: 28px; border-radius: 6px; color: var(--muted); font-size: 13px; }
@@ -151,27 +134,7 @@
 .toggle.on { background: var(--primary-2); }
 .toggle.on::after { left: 21px; }
 
-.pill { display: inline-flex; align-items: center; gap: 4px; height: 22px; padding: 0 8px; border-radius: 6px; font-size: 11.5px; font-weight: 500; white-space: nowrap; }
-.pill.green { background: var(--green-soft); color: var(--green); }
-.pill.gray { background: #f1f5f9; color: var(--faint); }
-.pill.cyan { background: var(--primary-soft); color: var(--primary); }
-.pill.orange { background: #fff7ed; color: #ea580c; }
-.pill.amber { background: #fffbeb; color: #d97706; }
-.pill.red { background: #fff1f2; color: var(--red-2); }
-.pill.blue { background: #eff6ff; color: #2563eb; }
-.pill.purple { background: #f5f3ff; color: #7c3aed; }
-.pill.dark { background: #e2e8f0; color: #334155; }
-.lvl { display: inline-grid; place-items: center; height: 22px; padding: 0 9px; border-radius: 5px; font-size: 12px; color: #fff; font-weight: 500; }
-.lvl.紧急 { background: var(--red); } .lvl.重要 { background: var(--orange); } .lvl.一般 { background: var(--amber-2); } .lvl.提示 { background: var(--sky); }
 
-.table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
-.table th { background: #f8fafc; color: var(--muted); font-weight: 500; font-size: 12.5px; text-align: left; padding: 10px 12px; white-space: nowrap; }
-.table td { padding: 9.5px 12px; border-top: 1px solid var(--line-2); white-space: nowrap; }
-.table th:first-child, .table td:first-child { padding-left: 22px; }
-.table th:last-child, .table td:last-child { padding-right: 22px; }
-.table .r { text-align: right; }
-.table .c { text-align: center; }
-.table tbody tr:hover td { background: #fafcfe; }
 .bar { height: 6px; border-radius: 6px; background: #eef2f6; overflow: hidden; flex: 1; }
 .bar > i { display: block; height: 100%; border-radius: 6px; background: var(--green-2); }
 
@@ -244,5 +207,4 @@
 .divider { display: flex; align-items: center; gap: 12px; color: var(--faint); font-size: 11px; margin: 26px 0 16px; }
 .divider::before, .divider::after { content: ''; height: 1px; background: #e2e8f0; flex: 1; }
 .alt-login { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-.alt-login .btn { height: 38px; font-size: 13px; }
 .login-ver { text-align: center; color: var(--faint); font-size: 11px; margin-top: 40px; }

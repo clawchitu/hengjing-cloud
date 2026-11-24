@@ -1,6 +1,7 @@
 import { createContext, useCallback, useContext, useMemo, useState, type ReactNode } from 'react'
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome'
 import { faCircleCheck, faCircleXmark, faTriangleExclamation } from '@fortawesome/free-solid-svg-icons'
+import { Button } from '@/components/ui/button'
 import * as api from '../api'
 import type { Project, Role, Scope, User } from '../api'
 
@@ -90,8 +91,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
             <h3><FontAwesomeIcon icon={faTriangleExclamation} style={{ color: dlg.danger ? 'var(--red)' : 'var(--amber)' }} />{dlg.title}</h3>
             <div className="body">{dlg.body}</div>
             <div className="foot">
-              <button className="btn" onClick={() => close(false)}>取消</button>
-              <button className="btn primary" onClick={() => close(true)}>{dlg.okText ?? '确认'}</button>
+              <Button onClick={() => close(false)}>取消</Button>
+              <Button variant="primary" onClick={() => close(true)}>{dlg.okText ?? '确认'}</Button>
             </div>
           </div>
         </div>

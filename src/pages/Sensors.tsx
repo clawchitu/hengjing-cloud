@@ -1,6 +1,10 @@
 import { useEffect, useState } from 'react'
 import { faBuilding, faLocationDot, faRotate, faTemperatureHalf, faDroplet, faTemperatureLow, faSmog, faLeaf, faDownload, type IconDefinition } from '@fortawesome/free-solid-svg-icons'
-import { Card, Chart, Icon, Seg, axis, tooltip, useAsync, useClock } from '../components/legacy'
+import { Chart, Icon, Seg, axis, tooltip, useAsync, useClock } from '../components/legacy'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { Card, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { useApp } from '../app/store'
 import * as api from '../api'
 import type { DayPoint, HourPoint, MetricKey, Sensor } from '../api'
@@ -49,7 +53,7 @@ export default function Sensors() {
   const kpis = METRICS.filter((m) => on.some((s) => has(s, m.key)))
   const curMetrics = cur ? METRICS.filter((m) => has(cur, m.key)) : []
   const metric = curMetrics.find((m) => m.key === metricRaw) ?? curMetrics[0]
-  const tag = (t: string) => t === '良好' ? 'green' : t === '离线' ? 'gray' : 'orange'
+  const tag = (t: string) => t === '良好' ? 'green' as const : t === '离线' ? 'gray' as const : 'orange' as const
 
   // chart
   const isDaily = !!stats?.days
@@ -117,12 +121,12 @@ export default function Sensors() {
         })}
       </div>
       <Card style={{ marginBottom: 20 }}>
-        <div className="card-head"><h3 className="card-title">传感器列表 <span className="faint" style={{ fontWeight: 400, fontSize: 13 }}>{sensors.length} 台</span></h3>
-          <div className="legend-dots"><span><span className="dot green" style={{ width: 7, height: 7 }} />良好</span><span><span className="dot" style={{ color: '#f59e0b', width: 7, height: 7 }} />超标</span><span><span className="dot" style={{ color: '#cbd5e1', width: 7, height: 7 }} />离线</span></div></div>
+        <CardHeader><CardTitle>传感器列表 <span className="faint" style={{ fontWeight: 400, fontSize: 13 }}>{sensors.length} 台</span></CardTitle>
+          <div className="legend-dots"><span><span className="dot green" style={{ width: 7, height: 7 }} />良好</span><span><span className="dot" style={{ color: '#f59e0b', width: 7, height: 7 }} />超标</span><span><span className="dot" style={{ color: '#cbd5e1', width: 7, height: 7 }} />离线</span></div></CardHeader>
         <div className="hj-grid g4">
           {sensors.map((s) => (
             <div key={s.id} className={'sensor' + (s.id === cur?.id ? ' on' : '') + (!s.online ? ' off' : '')} onClick={() => (s.online ? setSel(s.id) : toast(`${s.room}传感器离线，最后在线 ${s.last}`, true))}>
-              <div className="sh"><div><b>{s.room}</b><small className="num">{s.id} · {s.floor}</small></div><span className={'pill ' + tag(s.tag)}>{s.tag}</span></div>
+              <div className="sh"><div><b>{s.room}</b><small className="num">{s.id} · {s.floor}</small></div><Badge variant={tag(s.tag)}>{s.tag}</Badge></div>
               <div className="sv num">
                 <div><span>温度</span><b>{s.online ? `${s.temp}°` : '—'}</b></div>
                 <div><span>湿度</span><b>{s.online ? `${s.hum}%` : '—'}</b></div>
@@ -137,24 +141,24 @@ export default function Sensors() {
         </div>
       </Card>
       <Card style={{ marginBottom: 20 }}>
-        <div className="card-head"><div><h3 className="card-title">数据统计 · {cur?.room ?? '—'}</h3><div className="card-sub">{range === '24小时' ? '24 小时趋势（逐时）' : `近${range === '7日' ? ' 7 ' : ' 30 '}日趋势（日均 / 日最高 / 日最低）`}，虚线为舒适区阈值</div></div>
-          {metric && <Seg value={metric.tab} options={curMetrics.map((m) => m.tab)} onChange={(t) => setMetric(METRICS.find((m) => m.tab === t)!.key)} />}</div>
+        <CardHeader><div><CardTitle>数据统计 · {cur?.room ?? '—'}</CardTitle><CardDescription>{range === '24小时' ? '24 小时趋势（逐时）' : `近${range === '7日' ? ' 7 ' : ' 30 '}日趋势（日均 / 日最高 / 日最低）`}，虚线为舒适区阈值</CardDescription></div>
+          {metric && <Seg value={metric.tab} options={curMetrics.map((m) => m.tab)} onChange={(t) => setMetric(METRICS.find((m) => m.tab === t)!.key)} />}</CardHeader>
         {opt ? <Chart option={opt} height={300} /> : <div style={{ height: 300 }} className="chart-loading">{cur ? '加载中…' : '暂无在线传感器'}</div>}
       </Card>
       <Card pad={false}>
-        <div className="card-head card-pad" style={{ marginBottom: 0, paddingBottom: 14 }}><div><h3 className="card-title">指标统计汇总</h3><div className="card-sub">{cur?.room ?? '—'} · {range}</div></div><button className="btn" onClick={() => toast(`已导出：空气质量统计_${cur?.room ?? ''}_${range}.csv`)}><Icon icon={faDownload} />导出</button></div>
-        <table className="table">
-          <thead><tr><th>指标</th><th className="r">平均值</th><th className="r">最大值</th><th className="r">最小值</th><th className="r">标准范围</th><th className="r">{range === '24小时' ? '超标时长' : '超标天数'}</th><th style={{ paddingLeft: 40 }}>达标率</th></tr></thead>
-          <tbody>
+        <CardHeader pad style={{ marginBottom: 0, paddingBottom: 14 }}><div><CardTitle>指标统计汇总</CardTitle><CardDescription>{cur?.room ?? '—'} · {range}</CardDescription></div><Button onClick={() => toast(`已导出：空气质量统计_${cur?.room ?? ''}_${range}.csv`)}><Icon icon={faDownload} />导出</Button></CardHeader>
+        <Table>
+          <TableHeader><TableRow><TableHead>指标</TableHead><TableHead className="text-right">平均值</TableHead><TableHead className="text-right">最大值</TableHead><TableHead className="text-right">最小值</TableHead><TableHead className="text-right">标准范围</TableHead><TableHead className="text-right">{range === '24小时' ? '超标时长' : '超标天数'}</TableHead><TableHead style={{ paddingLeft: 40 }}>达标率</TableHead></TableRow></TableHeader>
+          <TableBody>
             {rows.map(({ m, avg: a, max, min, over, overN, pct }) => (
-              <tr key={m.key}>
-                <td>{m.label}</td><td className="r num">{fmtN(a, m.digits)}</td><td className={'r num ' + (out(m, max) ? 'red' : '')}>{fmtN(max, m.digits)}</td><td className="r num">{fmtN(min, m.digits)}</td><td className="r num muted">{m.rangeText}</td>
-                <td className={'r num ' + (overN ? 'amber' : '')} style={{ fontWeight: overN ? 600 : 400 }}>{over}</td>
-                <td style={{ paddingLeft: 40, width: 240 }}><div className="row" style={{ gap: 10 }}><div className="bar"><i style={{ width: pct + '%', background: pct < 95 ? '#f59e0b' : undefined }} /></div><span className="num" style={{ width: 36, textAlign: 'right' }}>{pct}%</span></div></td>
-              </tr>
+              <TableRow key={m.key}>
+                <TableCell>{m.label}</TableCell><TableCell className="num text-right">{fmtN(a, m.digits)}</TableCell><TableCell className={'num text-right ' + (out(m, max) ? 'red' : '')}>{fmtN(max, m.digits)}</TableCell><TableCell className="num text-right">{fmtN(min, m.digits)}</TableCell><TableCell className="num text-right muted">{m.rangeText}</TableCell>
+                <TableCell className={'num text-right ' + (overN ? 'amber' : '')} style={{ fontWeight: overN ? 600 : 400 }}>{over}</TableCell>
+                <TableCell style={{ paddingLeft: 40, width: 240 }}><div className="row" style={{ gap: 10 }}><div className="bar"><i style={{ width: pct + '%', background: pct < 95 ? '#f59e0b' : undefined }} /></div><span className="num" style={{ width: 36, textAlign: 'right' }}>{pct}%</span></div></TableCell>
+              </TableRow>
             ))}
-          </tbody>
-        </table>
+          </TableBody>
+        </Table>
       </Card>
     </div>
   )

@@ -1,5 +1,6 @@
 import { useState } from 'react'
-import { Card, Toggle } from '../components/legacy'
+import { Toggle } from '../components/legacy'
+import { Card, CardTitle } from '@/components/ui/card'
 import { useApp } from '../app/store'
 
 export default function Settings() {
@@ -15,7 +16,7 @@ export default function Settings() {
     <div className="page">
       <div className="page-head"><div><h1>系统设置</h1><div className="sub">通知与平台偏好（演示数据，仅保存在本地会话）</div></div></div>
       <Card style={{ maxWidth: 720 }}>
-        <h3 className="card-title" style={{ marginBottom: 10 }}>通知设置</h3>
+        <CardTitle style={{ marginBottom: 10 }}>通知设置</CardTitle>
         {rows.map(([k, t, d]) => (
           <div key={k} className="row" style={{ justifyContent: 'space-between', padding: '14px 0', borderTop: '1px solid var(--line-2)' }}>
             <div><b style={{ fontWeight: 600 }}>{t}</b><div className="muted" style={{ fontSize: 12.5, marginTop: 2 }}>{d}</div></div>

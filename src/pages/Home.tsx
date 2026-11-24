@@ -1,7 +1,10 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { faLocationDot, faChevronDown, faRotateRight, faDroplet, faWind, faTemperatureLow, faGauge, faEye, faSun, faCloudSun, faCloudRain, faCloud, faMoon, faUmbrella, faLeaf, faLayerGroup, faBuilding, faSignal, faPlugCircleXmark, faArrowRight, faStar, faTemperatureHalf, faClock } from '@fortawesome/free-solid-svg-icons'
-import { Card, Chart, Icon, Seg, axis, tooltip, useAsync } from '../components/legacy'
+import { Chart, Icon, Seg, axis, tooltip, useAsync } from '../components/legacy'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { Card, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { useApp } from '../app/store'
 import * as api from '../api'
 
@@ -54,8 +57,8 @@ export default function Home() {
       <div className="page-head">
         <div><h1>{greet}，{user.name} 👋</h1><div className="sub">今天是 2025年6月18日 星期三 · 农历五月廿三，以下是您所在区域的天气预报</div></div>
         <div className="actions">
-          <button className="btn lg" style={{ fontWeight: 500, color: 'var(--text)' }} onClick={() => toast('演示环境仅提供上海市浦东新区天气')}><Icon icon={faLocationDot} className="cyan" />{w.city}<Icon icon={faChevronDown} size="xs" className="faint" /></button>
-          <button className="btn lg" style={{ width: 42, padding: 0 }} onClick={() => { setSpin(true); setTimeout(() => { setSpin(false); toast('天气已更新') }, 800) }}><Icon icon={faRotateRight} spin={spin} /></button>
+          <Button size="lg" style={{ fontWeight: 500, color: 'var(--text)' }} onClick={() => toast('演示环境仅提供上海市浦东新区天气')}><Icon icon={faLocationDot} className="cyan" />{w.city}<Icon icon={faChevronDown} size="xs" className="faint" /></Button>
+          <Button size="lg" style={{ width: 42, padding: 0 }} onClick={() => { setSpin(true); setTimeout(() => { setSpin(false); toast('天气已更新') }, 800) }}><Icon icon={faRotateRight} spin={spin} /></Button>
         </div>
       </div>
 
@@ -83,7 +86,7 @@ export default function Home() {
           </div>
         </div>
         <Card className="week">
-          <div className="card-head" style={{ marginBottom: 8 }}><h3 className="card-title">未来 7 天</h3><span className="faint num" style={{ fontSize: 12 }}>更新于 14:30</span></div>
+          <CardHeader style={{ marginBottom: 8 }}><CardTitle>未来 7 天</CardTitle><span className="faint num" style={{ fontSize: 12 }}>更新于 14:30</span></CardHeader>
           {w.week.map((d) => {
             const [ic, c] = WX[d.icon]
             return (
@@ -100,8 +103,8 @@ export default function Home() {
 
       <div className="home-mid full">
         <Card>
-          <div className="card-head" style={{ marginBottom: 4 }}><div><h3 className="card-title">24 小时预报</h3><div className="card-sub">室外温度与相对湿度变化趋势</div></div>
-            <div className="legend-dots"><span><i style={{ width: 14, height: 3, background: '#f28c38', display: 'inline-block' }} />温度 °C</span><span><i style={{ width: 14, height: 3, background: '#06b6d4', display: 'inline-block' }} />湿度 %</span></div></div>
+          <CardHeader style={{ marginBottom: 4 }}><div><CardTitle>24 小时预报</CardTitle><CardDescription>室外温度与相对湿度变化趋势</CardDescription></div>
+            <div className="legend-dots"><span><i style={{ width: 14, height: 3, background: '#f28c38', display: 'inline-block' }} />温度 °C</span><span><i style={{ width: 14, height: 3, background: '#06b6d4', display: 'inline-block' }} />湿度 %</span></div></CardHeader>
           <Chart option={opt} height={236} />
           <div className="hourly">{w.hourIcons.map(([ic, h]) => <div key={h}><Icon icon={WX[ic][0]} style={{ color: WX[ic][1] }} /><span className="num">{h}</span></div>)}</div>
         </Card>
@@ -115,16 +118,16 @@ export default function Home() {
       </div>
 
       <Card>
-        <div className="card-head"><div><h3 className="card-title">常用项目</h3><div className="card-sub">按您切换当前项目的次数统计，显示最常用的 4 个</div></div>
+        <CardHeader><div><CardTitle>常用项目</CardTitle><CardDescription>按您切换当前项目的次数统计，显示最常用的 4 个</CardDescription></div>
           <div className="row" style={{ gap: 14 }}>
             <span className="demo-seg"><small>演示计数</small><Seg value={preset} options={['0', '2', '4+']} onChange={(v) => seed(v as '0' | '2' | '4+')} /></span>
-            <button className="link" onClick={() => nav('/groups')}>全部项目 <Icon icon={faArrowRight} /></button>
-          </div></div>
+            <Button variant="link" onClick={() => nav('/groups')}>全部项目 <Icon icon={faArrowRight} /></Button>
+          </div></CardHeader>
         {favs && favs.length === 0 && <div className="empty-fav"><Icon icon={faStar} /><b>暂无常用项目</b><small>在「集成项目」或顶部搜索中选择项目后，这里会显示您最常用的项目</small></div>}
         <div className="hj-grid g4">
           {(favs ?? []).map(({ project: p, count }) => (
             <div key={p.id} className="proj-card" title={`已选择 ${count} 次`} onClick={() => { setProjectId(p.id); if (!p.online) toast(`${p.name} 当前离线，显示最后在线数据`, true); nav('/sensors') }}>
-              <div className="pc-h"><span className={'pill ' + (p.online ? 'green' : 'gray')} style={{ color: p.online ? undefined : 'var(--muted)' }}>{p.online ? '在线' : '离线'}</span><span className="faint num" style={{ fontSize: 12 }}>{p.id}</span></div>
+              <div className="pc-h"><Badge variant={p.online ? 'green' : 'gray'} style={{ color: p.online ? undefined : 'var(--muted)' }}>{p.online ? '在线' : '离线'}</Badge><span className="faint num" style={{ fontSize: 12 }}>{p.id}</span></div>
               <h4>{p.name}</h4>
               <div className="pc-loc">{p.city} · {p.district} · {p.kind}</div>
               {p.online ? (
