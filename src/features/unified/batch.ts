@@ -69,7 +69,7 @@ export interface BatchRow {
   code: string
   name: string
   status: RowStatus
-  /** 结束时刻（HH:MM:SS） */
+  /** 结束时刻（YYYY-MM-DD HH:MM:SS） */
   at?: string
   state: UnifiedState<UnifiedSnapshot>
 }
@@ -103,7 +103,9 @@ export function rowStatus(s: UnifiedState<unknown>, started: boolean): RowStatus
   }
 }
 
-const hhmmss = (d: Date) => d.toTimeString().slice(0, 8)
+const pad = (n: number) => String(n).padStart(2, '0')
+/** 本地时间 YYYY-MM-DD HH:MM:SS */
+const stamp = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${d.toTimeString().slice(0, 8)}`
 
 export function createUnifiedBatch(deps: BatchDeps) {
   const readBack = deps.readBack ?? readUnifiedSnapshot
@@ -162,7 +164,7 @@ export function createUnifiedBatch(deps: BatchDeps) {
         const entry: Entry = { p, ctl, started: false, unsub: () => {} }
         entry.unsub = ctl.subscribe(() => {
           const st = ctl.getState()
-          if (entry.started && !entry.at && (st.status === 'success' || st.status === 'failure' || st.status === 'unknown' || st.status === 'idle')) entry.at = hhmmss(now())
+          if (entry.started && !entry.at && (st.status === 'success' || st.status === 'failure' || st.status === 'unknown' || st.status === 'idle')) entry.at = stamp(now())
           if (state.phase === 'running') emit({})
         })
         entries.push(entry)
@@ -199,7 +201,7 @@ export function createUnifiedBatch(deps: BatchDeps) {
           e.started = true
           emit({})
           await e.ctl.confirm()
-          if (!e.at) e.at = hhmmss(now())
+          if (!e.at) e.at = stamp(now())
           emit({})
         }
         // 没轮到的（页面卸载后）也标成已开始，显示为「未下发」

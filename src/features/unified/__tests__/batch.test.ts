@@ -90,7 +90,7 @@ describe('start：逐个下发，三种结果，不重试', () => {
     expect(done.rows.map((r) => r.status)).toEqual(['success', 'success'])
     const s = done.rows[0].state
     expect(s.status === 'success' && [s.before, s.after, s.verified]).toEqual([{ rooms: 2, roomSwitch: 0, roomTemp: 26 }, { rooms: 2, roomSwitch: 1, roomTemp: 26 }, true])
-    expect(done.rows[0].at).toBe('10:00:00')
+    expect(done.rows[0].at).toBe('2026-11-24 10:00:00')
   })
 
   it('控制屏拒绝 → 失败，只发一次，不重试；下一个项目照常', async () => {
