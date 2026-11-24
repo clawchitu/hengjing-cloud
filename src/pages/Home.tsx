@@ -51,6 +51,9 @@ export default function Home() {
   }
   const st = stat.data
   const n = (v: number | undefined) => (v === undefined ? '—' : v)
+  // 有在线状态未知的项目时（只在前端回退计算时出现），在线 / 离线只能给出范围：在线 ≥ 已知在线，离线 ≤ 已知离线 + 未知
+  const unknown = st?.unknown ?? 0
+  const range = (v: number | undefined, sign: '≥' | '≤') => (v === undefined ? '—' : unknown ? `${sign}${sign === '≥' ? v : v + unknown}` : v)
   const open = (p: Project) => whenProjectSet(setProjectId(p.id), () => { if (!p.online) toast(`${p.name} 当前离线，显示最后在线数据`, true); nav('/sensors') }, (t) => toast(t, true))
   const now = new Date()
   const hour = now.getHours()
@@ -118,14 +121,14 @@ export default function Home() {
         <Card style={{ marginBottom: 20 }}><CardHeader><div><CardTitle>天气</CardTitle><CardDescription>暂无天气数据</CardDescription></div></CardHeader></Card>
       )}
 
-      <div className="hj-grid g4" style={{ marginBottom: st?.unknown ? 8 : 20 }}>
+      <div className="hj-grid g4" style={{ marginBottom: unknown ? 8 : 20 }}>
         <Card className="stat" pad={false}><div className="si" style={{ background: '#ecfeff', color: '#0891b2' }}><Icon icon={faLayerGroup} /></div><div><span>集成项目</span><b className="num">{n(st?.groups)}</b></div></Card>
         <Card className="stat" pad={false}><div className="si" style={{ background: '#eff6ff', color: '#2563eb' }}><Icon icon={faBuilding} /></div><div><span>项目总数</span><b className="num">{n(st?.projects)}</b></div></Card>
-        <Card className="stat" pad={false}><div className="si" style={{ background: '#ecfdf5', color: '#059669' }}><Icon icon={faSignal} /></div><div><span>在线项目</span><b className="num">{n(st?.online)}<small> / {n(st?.projects)}</small></b></div></Card>
-        <Card className="stat" pad={false}><div className="si" style={{ background: '#fff1f2', color: '#e11d48' }}><Icon icon={faPlugCircleXmark} /></div><div><span>离线项目</span><b className="num">{n(st?.offline)}<small> / {n(st?.projects)}</small></b></div></Card>
+        <Card className="stat" pad={false}><div className="si" style={{ background: '#ecfdf5', color: '#059669' }}><Icon icon={faSignal} /></div><div><span>在线项目</span><b className="num">{range(st?.online, '≥')}<small> / {n(st?.projects)}</small></b></div></Card>
+        <Card className="stat" pad={false}><div className="si" style={{ background: '#fff1f2', color: '#e11d48' }}><Icon icon={faPlugCircleXmark} /></div><div><span>离线项目</span><b className="num">{range(st?.offline, '≤')}<small> / {n(st?.projects)}</small></b></div></Card>
       </div>
-      {/* 只在前端回退计算、且有关联项目不在项目列表里时出现（演示数据不会出现）：这些项目在线状态未知，按接口口径算作离线 */}
-      {!!st?.unknown && <div role="status" className="orange" style={{ fontSize: 12.5, marginBottom: 20 }}>数据不完整：有 {st.unknown} 个集成项目关联的项目不在项目列表中，在线状态未知，已计入离线</div>}
+      {/* 只在前端回退计算、且有关联项目不在项目列表里时出现（演示数据不会出现）：这些项目在线状态未知，不算在线也不算离线 */}
+      {!!unknown && <div role="status" className="orange" style={{ fontSize: 12.5, marginBottom: 20 }}>数据不完整：{unknown} 个项目在线状态未知（集成项目关联了，但不在项目列表中），在线 / 离线数为范围</div>}
 
       <Card>
         {/* 「演示计数」开关去掉（方案 1.2）；卡片里的温湿度 / CO₂ 与「最后在线」接口无此字段（Q9 ③④），去掉 */}

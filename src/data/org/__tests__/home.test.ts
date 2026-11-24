@@ -241,14 +241,14 @@ describe('useOrgStat（首页统计卡）', () => {
 })
 
 describe('useOrgStat：回退口径（接口文档 6.1：project_total = project_ids 去重数）', () => {
-  it('关联 id 在项目列表里缺失：仍计入总数、按定义算进离线，并标出未知个数', async () => {
+  it('关联 id 在项目列表里缺失（实际可能在线）：仍计入总数，但不当离线也不当在线，单独记为未知', async () => {
     backend({ '/integrated-projects': () => json({ entities: [...GROUPS, { id: 'g3', code: '4', name: '有缺失', distributor_id: 'D1', project_ids: ['p1', 'gone1', 'gone2'] }] }) }, [])
     await signIn('u', 'pw', true)
     const { wrapper: w } = wrapper()
     const { result } = renderHook(() => useOrgStat(), { wrapper: w })
     await waitFor(() => expect(result.current.data).not.toBeNull())
-    // p1、p2、p3 + gone1、gone2 = 5；在线只有 p1
-    expect(result.current.data).toEqual({ groups: 3, projects: 5, online: 1, offline: 4, unknown: 2 })
+    // p1、p2、p3 + gone1、gone2 = 5；已知在线 p1，已知离线 p2、p3；gone1、gone2 状态未知（可能在线），不算进离线
+    expect(result.current.data).toEqual({ groups: 3, projects: 5, online: 1, offline: 2, unknown: 2 })
   })
 })
 
@@ -264,6 +264,19 @@ describe('切换项目：重复选择与「无权查看」的失效', () => {
     act(() => { expect(result.current.setProjectId('p3')).toBe(true) })
     await flush()
     expect(be.callsTo('/project/click/p3')).toHaveLength(1)
+  })
+
+  it('没有保存的当前项目时，点回退显示的项目（第一个可见项目）是真实选择：写入存储并上报（约定）', async () => {
+    const be = backend({ '/project/click/p1': () => json({}) })
+    await signIn('u', 'pw', true)
+    const { wrapper: w } = wrapper()
+    const { result } = renderHook(() => useCurrentProject(), { wrapper: w })
+    await waitFor(() => expect(result.current.project?.id).toBe('p1'))
+    expect(localStorage.getItem(PROJECT_KEY)).toBeNull() // 回退显示，未存储
+    act(() => { expect(result.current.setProjectId('p1')).toBe(true) })
+    await flush()
+    expect(localStorage.getItem(PROJECT_KEY)).toBe('p1')
+    expect(be.callsTo('/project/click/p1')).toHaveLength(1)
   })
 
   async function forbiddenP9(groups: { current: typeof GROUPS }) {

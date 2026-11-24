@@ -257,12 +257,13 @@ export interface OrgStat {
   groups: number
   /** 集成项目里的项目数（project_ids 去重） */
   projects: number
+  /** 确认在线的项目数 */
   online: number
-  /** projects - online（接口文档 6.1 的定义） */
+  /** 确认离线的项目数。没有未知项目时 = projects - online（接口文档 6.1 的定义） */
   offline: number
   /**
    * 只有前端回退计算时有：集成项目关联了、但项目列表里没有的项目数。这些项目拿不到在线状态，
-   * 按定义算进离线，页面提示「数据不完整」
+   * 既不算在线也不算离线（实际在线数在 online 到 online + unknown 之间），页面显示范围并提示「数据不完整」
    */
   unknown?: number
 }
@@ -285,12 +286,12 @@ export function useOrgStat(): Omit<Loadable<OrgStat | null>, 'isEmpty'> & { sour
   })
   const { groups, projects } = scope.data
   // 口径照接口文档 6.1：project_total 是集成项目 project_ids 去重后的个数（不是与项目列表的交集），
-  // project_offline = project_total - project_online。列表里没有的关联项目在线状态未知，单独记数供页面提示
+  // project_offline = project_total - project_online。列表里没有的关联项目在线状态未知：不当离线，单独记数
   const local = useMemo<OrgStat>(() => {
     const ids = new Set(groups.flatMap((g) => g.projectIds))
     const known = projects.filter((p) => ids.has(p.id))
     const online = known.filter((p) => p.online).length
-    return { groups: groups.length, projects: ids.size, online, offline: ids.size - online, unknown: ids.size - known.length }
+    return { groups: groups.length, projects: ids.size, online, offline: known.length - online, unknown: ids.size - known.length }
   }, [groups, projects])
   const qRefetch = q.refetch
   const refetch = useCallback(() => { void qRefetch() }, [qRefetch])

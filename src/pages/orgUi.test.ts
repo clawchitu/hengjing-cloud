@@ -263,12 +263,13 @@ describe('首页：组织范围失败与数据不完整', () => {
     expect(container.querySelector('.proj-card')?.textContent).toContain('科希家办公室')
   })
 
-  it('统计回退时有关联项目不在项目列表里：提示数据不完整', async () => {
+  it('统计回退时有关联项目不在项目列表里：在线 / 离线显示范围（未知不当离线），并提示数据不完整', async () => {
     backend({ '/integrated-projects': (c) => json({ entities: (c.body as Record<string, unknown> | undefined)?.distributor_id ? GROUPS : [...GROUPS, { id: 'g9', code: '9', name: '缺', distributor_id: 'D1', project_ids: ['gone'] }] }) }, { paths: [] })
     await signIn('u', 'pw', true)
     const { container } = mountAt('/home')
-    expect((await screen.findByText(/数据不完整：有 1 个集成项目关联的项目不在项目列表中/)).getAttribute('role')).toBe('status')
-    expect([...container.querySelectorAll('.stat')].map((x) => x.textContent)).toEqual(['集成项目4', '项目总数5', '在线项目1 / 5', '离线项目4 / 5'])
+    expect((await screen.findByText(/数据不完整：1 个项目在线状态未知/)).getAttribute('role')).toBe('status')
+    // 已知在线 p1、已知离线 p2–p4，gone 未知：在线 ≥1，离线 ≤4（3 个确认离线 + 1 个未知）
+    expect([...container.querySelectorAll('.stat')].map((x) => x.textContent)).toEqual(['集成项目4', '项目总数5', '在线项目≥1 / 5', '离线项目≤4 / 5'])
   })
 })
 
