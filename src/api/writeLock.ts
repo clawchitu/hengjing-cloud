@@ -474,6 +474,12 @@ function readValid(ticket: ReadTicket, signal?: AbortSignal): boolean {
   return sameAccount(currentAccount(), ticket.account)
 }
 
+/** 这次读取现在还有效吗（只检查、不提交）：页面在把读数交给自己的结果判定之前用它作废失效的读取 */
+export function readStillValid(ticket: ReadTicket, signal?: AbortSignal): boolean { return readValid(ticket, signal) }
+
+/** token 仍持有这把锁（没放、没被换成别的锁） */
+export function holds(token: LockToken): boolean { return !!entryOf(token) }
+
 /** 提交一次读取的候选结果：凭据仍有效才调 commit 并返回 true；任何一项对不上就丢弃（不调 commit），返回 false */
 export function commitRead(ticket: ReadTicket | null | undefined, commit: () => void, signal?: AbortSignal): boolean {
   if (!ticket || !readValid(ticket, signal)) return false

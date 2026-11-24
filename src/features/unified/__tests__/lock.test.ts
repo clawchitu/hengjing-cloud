@@ -419,8 +419,10 @@ describe('下发后第一次回读经写锁提交', () => {
     await g.waitRead()
     who = { user: 'B', gen: 2 }
     g.resolve(on) // A 的读数：一致
-    await g.run
+    const done = await g.run
     await flush()
+    // 这次读数作废：结果判定不采用它（按回读失败，结果未知），不显示成功
+    expect(done.rows[0].status).toBe('unknown')
     // 待核对字段没被清空：B 会话里的核对真的去读（第 3 次），读到关着 → 不一致，锁保持
     expect(g.read).toHaveBeenCalledTimes(3)
     expect(L.lockOf('screen:Sf1')?.phase).toBe('unknown')
@@ -438,8 +440,9 @@ describe('下发后第一次回读经写锁提交', () => {
       await g.waitRead()
       vi.setSystemTime(Date.now() + L.DEFAULT_TTL_MS + 1)
       g.resolve(on)
-      await g.run
+      const done = await g.run
       await flush()
+      expect(done.rows[0].status).toBe('unknown')
       expect(L.lockOf('screen:Sf2')).not.toBeNull()
       expect(reread).not.toHaveBeenCalled()
       vi.advanceTimersByTime(L.DEFAULT_TTL_MS + 10)
@@ -448,7 +451,7 @@ describe('下发后第一次回读经写锁提交', () => {
     } finally { vi.useRealTimers() }
   })
 
-  it('首次回读期间锁被取消（到期放开后同屏被新的下发占用）：迟到的读数不提交，也不去核对 / 放掉新锁', async () => {
+  it('首次回读期间锁到期放开、同屏被新的下发占用：迟到的读数不提交，也不去核对 / 放掉新锁', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true })
     try {
       L.configureWriteLock({ resolveProject: (id) => (id === 'f3' ? { id: 'f3', controlScreenId: 'Sf3' } : null) })
@@ -471,5 +474,38 @@ describe('下发后第一次回读经写锁提交', () => {
       expect(check.mock.calls.length).toBe(calls)
       expect(L.lockOf('screen:Sf3')?.phase).toBe('unknown')
     } finally { vi.useRealTimers() }
+  })
+
+  // 已发出的锁没有主动取消接口（release 只对 held 或已有 ok / fail 结论的生效；页面卸载挡在状态机里）。实际会发生的非到期移除：
+  // 应答结果未知 → 写锁自己的核对读到一致先放了锁。首次回读迟到的读数不能再提交，也不能按锁键去碰同屏的新锁
+  it('首次回读期间锁被写锁核对放开（非到期移除）、同屏被新的下发占用：迟到的读数作废，不提交，也不去核对新锁', async () => {
+    L.configureWriteLock({ resolveProject: (id) => (id === 'f4' ? { id: 'f4', controlScreenId: 'Sf4' } : null) })
+    const gates: Array<(v: unknown) => void> = []
+    let n = 0
+    const read = vi.fn(async () => { n += 1; if (n === 1) return off; return new Promise((r) => { gates.push(r) }) })
+    const send: BatchSender = async (_p, _q, o) => { if (!o.beforeSend()) throw new ApiError('write_blocked', 'x'); throw new ApiError('timeout', '超时') }
+    const b = createUnifiedBatch({ getProjects: () => [P('f4', 'Sf4')], readBack: read as never, send, log: () => {}, now: () => new Date() })
+    b.prepare(['f4'], { roomSwitch: 1 })
+    const run = b.start()
+    for (let i = 0; i < 50 && gates.length < 2; i++) await flush(1)
+    // 第 2 次读是 settle(unknown) 后写锁的自动核对，第 3 次是状态机的下发后第一次回读
+    expect(gates.length).toBe(2)
+    gates[0](on)
+    await flush()
+    expect(L.lockOf('screen:Sf4')).toBeNull()
+    const got = L.acquire({ id: 'f4', controlScreenId: 'Sf4' }, '新'); if (!got.ok) throw new Error('busy')
+    L.claim(got.token)
+    L.markSent(got.token, Promise.reject(new Error('x')), recordOf({ systemSwitch: -1, systemMode: -1, roomSwitch: 1, roomTemp: -1 } as never))
+    const check = vi.fn(async () => false)
+    L.requireVerify(got.token, check)
+    L.settle(got.token, 'unknown')
+    await flush()
+    const calls = check.mock.calls.length
+    gates[1](on)
+    const done = await run
+    await flush()
+    expect(done.rows[0].status).toBe('unknown')
+    expect(check.mock.calls.length).toBe(calls)
+    expect(L.lockOf('screen:Sf4')?.phase).toBe('unknown')
   })
 })

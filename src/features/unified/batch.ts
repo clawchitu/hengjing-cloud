@@ -21,7 +21,7 @@ import { TEXT } from './constants'
 import { consoleLogger, type UnifiedLogger } from './log'
 import { createUnifiedController, isDone, outcomeOf, type UnifiedController, type UnifiedState } from './machine'
 import { changedFields, describeQuery, fieldResults, type EchoField, type UnifiedContext, type UnifiedDraft, type UnifiedEcho } from './rules'
-import { acquire, beginRead, claim, commitRead, lockOf, markOverdue, markSent, OTHER_ACCOUNT_TEXT, requireVerify, settle, verify, type LockToken, type ReadTicket } from '@/api/writeLock'
+import { acquire, beginRead, claim, commitRead, holds, lockOf, markOverdue, markSent, OTHER_ACCOUNT_TEXT, readStillValid, requireVerify, settle, verify, type LockToken, type ReadTicket } from '@/api/writeLock'
 import { LOCK_BUSY_TEXT, lockTargetOf, recordOf } from './lock'
 
 /** 页面传进来的项目（S6a 的 Project 直接可用） */
@@ -153,6 +153,8 @@ export const DEADLINE_UNKNOWN = '已下发，结果未知：超过 35 秒截止�
 export const DEADLINE_REPLIED_OK = '已下发，结果未知：下发后回读在 35 秒截止前未完成，请稍后刷新确认；未自动重试'
 export const DEADLINE_REPLIED_FAIL = '控制屏明确拒绝（未自动重试）；下发后回读在 35 秒截止前未完成'
 /** 下发前读到房间全部关着，这次又要设温度（且没同时开房间）：不发（后端答复⑦） */
+/** 下发后回读途中登录账号变了、写锁已放开或过了有效期：这次读数作废 */
+export const READ_VOID_TEXT = '回读途中登录账号或写锁状态已变化，本次读数作废'
 export const ROOMS_OFF_TEXT = '下发前读到房间都关着，不能设定温度，未下发'
 
 export function rowStatus(s: UnifiedState<unknown>, started: boolean): RowStatus {
@@ -312,6 +314,8 @@ export function createUnifiedBatch(deps: BatchDeps) {
     const first = e.firstRead
     if (first && 'after' in st && st.after === first.snap) commitRead(first.ticket, () => closeFields(e, first.snap))
     if (e.open && e.open.size === 0) {
+      // 锁已不归这个 token（到期、被核对放开后同屏又被新的下发占用）：不按锁键去碰别人的锁
+      if (!holds(e.token)) return
       settle(e.token, 'ok')
       const key = e.token.key
       void verify(key)
@@ -355,6 +359,8 @@ export function createUnifiedBatch(deps: BatchDeps) {
           readBack: async (pid, sig) => {
             const ticket = entry.sent && entry.token ? beginRead(entry.token) : undefined
             const snap = await readBack(pid, sig)
+            // 读取途中账号变了 / 锁换了或放了 / 过了有效期：这次读取作废，按回读失败交给状态机（结果未知），读数不进结果判定
+            if (ticket && !readStillValid(ticket)) throw new Error(READ_VOID_TEXT)
             if (ticket !== undefined) entry.firstRead = { ticket, snap }
             else if (!entry.before) entry.before = snap
             return snap
