@@ -28,7 +28,7 @@
 1. `POST /api/login`：校验两个演示账号，返回 `{ ok, role, username }`，失败 401。
    - `cosyhome` → 角色 `dealer`（经销商），密码取 Worker 密钥 `BASIC_PASS`
    - `hjadmin` → 角色 `admin`（管理员），密码取 Worker 密钥 `ADMIN_PASS`
-   - 用定长比较防计时攻击；响应 `Cache-Control: no-store`。
+   - 逐字节比较且不提前退出（按两者中较长的长度循环），降低计时攻击风险；非 POST 返回 405；响应 `Cache-Control: no-store`。
 2. 其余请求交给 `env.ASSETS`（静态资源 + SPA 回退），并统一加响应头：
    - `X-Robots-Tag: noindex, nofollow`
    - `/assets/*`：`private, max-age=31536000, immutable`（文件名带哈希，长缓存）
