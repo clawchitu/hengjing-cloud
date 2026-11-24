@@ -5,7 +5,8 @@ import { QueryClient } from '@tanstack/react-query'
 import { ApiError } from '@/api/errors'
 import * as L from '@/api/writeLock'
 import { createUnifiedBatch, type BatchProject, type BatchSender } from '../batch'
-import { LOCK_BUSY_TEXT, match203, recordOf, rereadHits, resolveOrgProject, verifiable203 } from '../lock'
+import { LOCK_BUSY_TEXT, match203, recordOf, rereadHits, resolveOrgProject, setupUnifiedWriteLock, verifiable203 } from '../lock'
+import { orgKeys } from '@/data/org/hooks'
 
 const P = (id: string, screen?: string): BatchProject => ({ id, code: id, name: '项目' + id, programCode: 1, online: true, controlScreenId: screen })
 const snap = { rooms: 2, roomSwitch: 1, roomTemp: 26 }
@@ -52,8 +53,14 @@ describe('S12b 接入写锁', () => {
       // 让项目在发送前变离线：批次复核先失败，claim 不应被调用
       if (p.id === 'off') { list[1] = { ...list[1], online: false } }
       expect(L.lockOf({ id: p.id })?.phase).toBe('held')
+      const before = spy.mock.results.length
       const ok = o.beforeSend()
       phaseAtSend = L.lockOf({ id: p.id })?.phase
+      if (spy.mock.results.length > before) {
+        // claim 被调用了：它的返回值就是 beforeSend 的结果（之后没有别的检查），并且认领后进入 sent
+        expect(ok).toBe(spy.mock.results.at(-1)!.value)
+        expect(phaseAtSend).toBe('sent')
+      }
       if (!ok) throw new ApiError('write_blocked', 'x')
       return { success: true, msg: '' }
     }
@@ -137,7 +144,108 @@ describe('203 核对口径', () => {
     expect(match203(t({}), snap)).toBe(false)
     expect(match203(t({ roomSwitch: 1 }), { rooms: 0, roomSwitch: null, roomTemp: null })).toBe(false)
   })
+  it('温度容差 0.01（与状态机一致）：差 0.04 不一致', () => {
+    expect(match203(t({ roomTemp: 26 }), { ...snap, roomTemp: 25.96 })).toBe(false)
+    expect(match203(t({ roomTemp: 26 }), { ...snap, roomTemp: 26.005 })).toBe(true)
+  })
   it('resolveOrgProject：缓存里没有组织数据 → 不可见', () => {
     expect(resolveOrgProject(new QueryClient(), 'p1')).toBeNull()
+  })
+  it('resolveOrgProject：在集成项目里才可见；不在任何集成项目、userKey 不一致、未登录 → 不可见', () => {
+    const qc = new QueryClient()
+    qc.setQueryData(orgKeys.groups('u1', null), [{ id: 'g', projectIds: ['p1'] }])
+    qc.setQueryData(orgKeys.projects('u1', {}), [{ id: 'p1', controlScreenId: 'S1' }, { id: 'p2' }])
+    const me = () => ({ authed: true, userKey: 'u1' })
+    expect(resolveOrgProject(qc, 'p1', me)).toEqual({ id: 'p1', controlScreenId: 'S1', dtuId: undefined })
+    expect(resolveOrgProject(qc, 'p2', me)).toBeNull()
+    expect(resolveOrgProject(qc, 'p1', () => ({ authed: true, userKey: 'u2' }))).toBeNull()
+    expect(resolveOrgProject(qc, 'p1', () => ({ authed: false, userKey: 'u1' }))).toBeNull()
+  })
+})
+
+describe('注册了 203 核对器时', () => {
+  const me = () => ({ authed: true, userKey: 'u1' })
+  function visibleQc() {
+    const qc = new QueryClient()
+    qc.setQueryData(orgKeys.groups('u1', null), [{ id: 'g', projectIds: ['v'] }])
+    qc.setQueryData(orgKeys.projects('u1', {}), [{ id: 'v', controlScreenId: 'SV' }])
+    return qc
+  }
+  it('settle(unknown) 后自动核对：回读不一致保持，一致放锁；改了系统开关的不回读', async () => {
+    let cur = { rooms: 2, roomSwitch: 0, roomTemp: 26 }
+    const read = vi.fn(async () => cur)
+    setupUnifiedWriteLock(visibleQc(), read, me)
+    const send: BatchSender = async (_p, _q, o) => { if (!o.beforeSend()) throw new ApiError('write_blocked', 'x'); throw new ApiError('timeout', '超时') }
+    const b = createUnifiedBatch({ getProjects: () => [{ ...P('v', 'SV') }], readBack: async () => snap, send, log: () => {}, now: () => new Date() })
+    await runOnce(b, ['v'])
+    await flush()
+    expect(read).toHaveBeenCalled()
+    expect(L.lockOf('screen:SV')?.phase).toBe('unknown') // 不一致：保持
+    cur = { rooms: 2, roomSwitch: 1, roomTemp: 26 }
+    expect(await L.verify('screen:SV')).toBe('released')
+    // 改了系统开关：核对直接不一致，不回读
+    read.mockClear()
+    const got = L.acquire({ id: 'v', controlScreenId: 'SV' }, 'x'); if (!got.ok) throw new Error('busy')
+    L.claim(got.token)
+    L.markSent(got.token, Promise.reject(new Error('x')).catch(() => { throw new Error('x') }), recordOf({ systemSwitch: 1, systemMode: 0, roomSwitch: 1, roomTemp: -1 } as never))
+    await flush()
+    L.settle(got.token, 'unknown')
+    await flush()
+    expect(await L.verify('screen:SV')).toBe('mismatch')
+    expect(read).not.toHaveBeenCalled()
+  })
+
+  it('批次截止调 markOverdue：锁标记已过截止，但不放', async () => {
+    const send: BatchSender = (_p, _q, o) => { if (!o.beforeSend()) return Promise.reject(new ApiError('write_blocked', 'x')); return new Promise(() => {}) }
+    const b = createUnifiedBatch({ getProjects: () => [P('d', 'SD')], readBack: async () => snap, send, log: () => {}, deadlineMs: 20 })
+    b.prepare(['d'], { roomSwitch: 1 })
+    await b.start()
+    const l = L.lockOf('screen:SD')
+    expect(l?.overdue).toBe(true)
+    expect(l?.phase).toBe('sent')
+  })
+})
+
+describe('刷新后补核对（恢复的锁）', () => {
+  const rec = { v: 1, op: 'o1', keys: ['screen:SR'], projectId: 'r1', userId: 'u1', sentAt: Date.now() - 1000, msg: 203, deviceId: null, target: { systemSwitch: -1, systemMode: 0, roomSwitch: 1, roomTemp: -1 } }
+  async function fresh() {
+    localStorage.setItem('hjc-write-lock:screen:SR', JSON.stringify({ ...rec, sentAt: Date.now() - 1000 }))
+    vi.resetModules()
+    const R = await import('@/api/writeLock')
+    const M = await import('../lock')
+    const { QueryClient: QC } = await import('@tanstack/react-query')
+    const { orgKeys: K } = await import('@/data/org/hooks')
+    const read = vi.fn(async () => snap)
+    const qc = new QC()
+    M.setupUnifiedWriteLock(qc, read, () => ({ authed: true, userKey: 'u1' }))
+    expect(R.lockOf('screen:SR')?.origin).toBe('restored')
+    return { R, qc, read, K }
+  }
+  it('项目列表先到、集成项目列表后到：后到时才核对，一致放锁', async () => {
+    const { R, qc, read, K } = await fresh()
+    qc.setQueryData(K.projects('u1', {}), [{ id: 'r1', controlScreenId: 'SR' }])
+    await flush()
+    expect(read).not.toHaveBeenCalled() // 还解析不出项目：不读
+    expect(R.lockOf('screen:SR')).not.toBeNull()
+    qc.setQueryData(K.groups('u1', null), [{ id: 'g', projectIds: ['r1'] }])
+    await flush()
+    expect(read).toHaveBeenCalledTimes(1)
+    expect(R.lockOf('screen:SR')).toBeNull()
+  })
+  it('集成项目列表先到、项目列表后到：同样核对一次', async () => {
+    const { R, qc, read, K } = await fresh()
+    qc.setQueryData(K.groups('u1', null), [{ id: 'g', projectIds: ['r1'] }])
+    qc.setQueryData(K.projects('u1', {}), [{ id: 'r1', controlScreenId: 'SR' }])
+    await flush()
+    expect(read).toHaveBeenCalledTimes(1)
+    expect(R.lockOf('screen:SR')).toBeNull()
+  })
+  it('演示数据（initialData 写入缓存，只有 added 事件）：也会补核对', async () => {
+    const { R, qc, read, K } = await fresh()
+    qc.getQueryCache().build(qc, { queryKey: K.groups('u1', null), initialData: [{ id: 'g', projectIds: ['r1'] }] })
+    qc.getQueryCache().build(qc, { queryKey: K.projects('u1', {}), initialData: [{ id: 'r1', controlScreenId: 'SR' }] })
+    await flush()
+    expect(read).toHaveBeenCalledTimes(1)
+    expect(R.lockOf('screen:SR')).toBeNull()
   })
 })

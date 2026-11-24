@@ -21,7 +21,7 @@ import { __resetSessionViewForTests } from '../data/session'
 import { __resetMockUnifiedForTests, mockUnifiedRead, mockUnifiedSend } from '../api'
 import Control, { lastResultKey } from './Control'
 import { setCurrentUserId } from '../api/auth'
-import { __resetWriteLockForTests } from '../api/writeLock'
+import { __resetWriteLockForTests, OTHER_ACCOUNT_TEXT, STORAGE_PREFIX } from '../api/writeLock'
 
 beforeAll(() => {
   const proto = Element.prototype as unknown as Record<string, unknown>
@@ -441,6 +441,49 @@ describe('下发', () => {
     expect(screen.queryByRole('alertdialog')).toBeNull()
     expect(await screen.findByText('没有要下发的设置')).toBeTruthy()
     expect(be.callsTo('/ctrl/unified-ctrl-set')).toHaveLength(0)
+  })
+})
+
+describe('写锁（页面）', () => {
+  /** 别的标签页 / 上一次留下的 203 记录（p1 没有屏号，主锁键为 project:p1），用 storage 事件同步进本标签 */
+  const lockRec = (userId: string) => ({ v: 1, op: 'x1', keys: ['project:p1'], projectId: 'p1', userId, sentAt: Date.now() - 1000, msg: 203, deviceId: null, target: { systemSwitch: -1, systemMode: 0, roomSwitch: 1, roomTemp: -1 } })
+  const syncLock = (v: object | null) => act(async () => {
+    window.dispatchEvent(new StorageEvent('storage', { key: STORAGE_PREFIX + 'project:p1', newValue: v ? JSON.stringify(v) : null }))
+  })
+  const sendBtn = () => screen.getAllByRole('button', { name: '确认下发' }).find((b) => b.classList.contains('btn-send'))!
+
+  it('同屏被占（同一账号）：提示「上一条下发还在处理中」，下发按钮置灰，不发 203', async () => {
+    const be = backend({ '/ctrl/room-temperature-data-get': () => rooms(1, 26) })
+    await mount()
+    await click(screen.getByText('测试项目0829'))
+    await syncLock(lockRec('dealer-1'))
+    expect(await screen.findByText(/上一条下发还在处理中（测试项目0829）/)).toBeTruthy()
+    expect(sendBtn().hasAttribute('disabled')).toBe(true)
+    expect(be.callsTo('/ctrl/unified-ctrl-set')).toHaveLength(0)
+  })
+
+  it('被别的账号占着：只显示 OTHER_ACCOUNT_TEXT（不带项目名），按钮置灰', async () => {
+    backend({ '/ctrl/room-temperature-data-get': () => rooms(1, 26) })
+    await mount()
+    await click(screen.getByText('测试项目0829'))
+    await syncLock(lockRec('someone-else'))
+    const note = await screen.findByText(OTHER_ACCOUNT_TEXT)
+    expect(note.textContent).not.toContain('测试项目0829')
+    expect(sendBtn().hasAttribute('disabled')).toBe(true)
+  })
+
+  it('强制重读：锁放开（对方删除记录）时重读一次房间状态，按钮恢复', async () => {
+    const be = backend({ '/ctrl/room-temperature-data-get': () => rooms(1, 26) })
+    await mount()
+    await click(screen.getByText('测试项目0829'))
+    await syncLock(lockRec('dealer-1'))
+    await screen.findByText(/上一条下发还在处理中/)
+    await tick(50)
+    const n0 = be.callsTo('/ctrl/room-temperature-data-get').length
+    await syncLock(null)
+    await waitFor(() => expect(be.callsTo('/ctrl/room-temperature-data-get').length).toBe(n0 + 1))
+    expect(screen.queryByText(/上一条下发还在处理中/)).toBeNull()
+    expect(sendBtn().hasAttribute('disabled')).toBe(false)
   })
 })
 

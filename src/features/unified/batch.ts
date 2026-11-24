@@ -17,7 +17,7 @@ import { TEXT } from './constants'
 import { consoleLogger, type UnifiedLogger } from './log'
 import { createUnifiedController, outcomeOf, type UnifiedController, type UnifiedState } from './machine'
 import { describeQuery, type UnifiedContext, type UnifiedDraft, type UnifiedEcho } from './rules'
-import { acquire, claim, lockOf, markSent, OTHER_ACCOUNT_TEXT, settle } from '@/api/writeLock'
+import { acquire, claim, lockOf, markOverdue, markSent, OTHER_ACCOUNT_TEXT, settle, verify, type LockToken } from '@/api/writeLock'
 import { LOCK_BUSY_TEXT, lockTargetOf, recordOf } from './lock'
 
 /** 页面传进来的项目（S6a 的 Project 直接可用） */
@@ -168,6 +168,8 @@ export function createUnifiedBatch(deps: BatchDeps) {
     before?: UnifiedSnapshot
     /** 所属批次序号：旧批次里没结束的写请求不能借新批次的截止时间放行 */
     batch: number
+    /** 写锁令牌（acquire 成功后才有） */
+    token?: LockToken
     /** 截止时冻结的结果 */
     final?: { status: 'not-sent' | 'unknown' | 'success' | 'failure'; note: string; notExecuted?: boolean }
   }
@@ -226,6 +228,7 @@ export function createUnifiedBatch(deps: BatchDeps) {
     const got = acquire(lockTargetOf(p), p.name)
     if (!got.ok) return Promise.reject(new ApiError('write_blocked', got.busy.owner === 'other-account' ? OTHER_ACCOUNT_TEXT : LOCK_BUSY_TEXT))
     const token = got.token
+    e.token = token
     // beforeSend 链：批次复核在前，claim(token) 必须放在最后（认领成功即视为已发出）
     const beforeSend = () => {
       const ok = recheck(e, wp) && claim(token)
@@ -335,6 +338,8 @@ export function createUnifiedBatch(deps: BatchDeps) {
           e.started = true
           e.at ??= stamp(now())
           e.ctl.abort()
+          // 写锁只改标记（已过截止），不放锁
+          if (e.token) markOverdue(e.token)
         }
         onDeadline()
       }, Math.max(0, deadlineAt - now().getTime()))
@@ -367,6 +372,9 @@ export function createUnifiedBatch(deps: BatchDeps) {
           // 截止时不再等在途的项目
           if (await Promise.race([e.ctl.confirm().then(() => 'done' as const), deadline]) === 'deadline') break
           if (!e.at) e.at = stamp(now())
+          // 状态机下发后回读逐字段一致：让写锁再核对一次（结果未知的锁一致即放开；已放开的无影响）
+          const st = e.ctl.getState()
+          if (e.token && st.status === 'success' && st.verified) void verify(e.token.key)
           emit({})
         }
         clearTimeout(timer)

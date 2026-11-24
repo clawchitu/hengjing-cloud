@@ -26,7 +26,7 @@ import { WRITE_RECHECK_TEXT } from '../api/http'
 import { jwtSub, readTokens } from '../api/tokens'
 import { UnifiedCtrlSetQuery_OperatingMode as Mode } from '../api/gen/ctrl200_pb.js'
 import * as api from '../api'
-import { lockOf, lockVersion, onForceReread, subscribe as subscribeLock } from '../api/writeLock'
+import { lockOf, lockVersion, onForceReread, OTHER_ACCOUNT_TEXT, subscribe as subscribeLock } from '../api/writeLock'
 import {
   clampTemp, LOCK_BUSY_TEXT, lockTargetOf, rereadHits, MODE_OPTIONS, readUnifiedSnapshot, resolveTempRange, TEXT, tempAvailability, unifiedAppCode, useUnifiedBatch,
   type BatchRow, type RowStatus, type UnifiedDraft, type UnifiedSnapshot,
@@ -185,8 +185,11 @@ export default function Control() {
   const online = inGroup.filter((p) => p.online)
   const pickedP = picked.map((id) => projects.find((p) => p.id === id)!).filter(Boolean)
   const shownP = expand ? ps : ps.slice(0, 7)
-  const lockedP = busy ? [] : pickedP.filter((p) => lockOf(lockTargetOf(p)))
-  const lockNote = lockedP.length ? `${LOCK_BUSY_TEXT}（${lockedP.map((p) => p.name).join('、')}），请等结果确认后再下发` : null
+  const locks = busy ? [] : pickedP.map((p) => ({ p, l: lockOf(lockTargetOf(p)) })).filter((x) => x.l)
+  // 别的账号占着的锁：只用 OTHER_ACCOUNT_TEXT，不带锁里的任何信息
+  const lockNote = !locks.length ? null
+    : locks.some((x) => x.l!.owner === 'other-account') ? OTHER_ACCOUNT_TEXT
+    : `${LOCK_BUSY_TEXT}（${locks.map((x) => x.p.name).join('、')}），请等结果确认后再下发`
 
   // 温度设定：按 app_code（同组相同；已选项目优先，没选时看组内项目）。8、12 及未知类型不可用
   const range = resolveTempRange(null)
