@@ -183,11 +183,14 @@ export function useCurrentProject(): CurrentProject {
   const selectTick = useSyncExternalStore(subscribeCurrent, getSelectTick, getSelectTick)
   const project = resolveCurrentProject(scope.data.projects, stored)
   const user = ctx.user
+  const visible = scope.data.projects
   const setProjectId = useCallback((id: string) => {
+    // 只接受当前可见范围里的项目：不在范围内的 id（演示数据、过期链接等）一律不写进存储、不上报
+    if (!visible.some((p) => p.id === id)) { console.warn('[org] 忽略不在可见范围内的项目', id); return }
     setStoredProjectId(id)
     if (isMockMode()) void reportProjectSelect(user, id).then(bumpSelectTick)
     else bumpSelectTick()
-  }, [user])
+  }, [user, visible])
   return { project, setProjectId, selectTick, status: scope.status, error: scope.error }
 }
 

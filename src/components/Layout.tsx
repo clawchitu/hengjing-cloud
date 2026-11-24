@@ -63,7 +63,13 @@ function ProjectSwitch() {
   const lastPointer = useRef(false)
   const pending = useRef(false)
   const [pointerFocus, setPointerFocus] = useState(false)
-  const show = (keyboard: boolean) => { setValue(keyboard ? project.id : ''); scrolled.current = ''; if (keyboard) lastPointer.current = false; setOpen(true) }
+  // 一个项目可能出现在多个集成项目下：菜单项的 cmdk 值用「组 id:项目 id」保证唯一（后端 ObjectId 与演示 id 都不含冒号），
+  // 选中时仍传项目 id。当前项目的高亮落在菜单里它第一次出现的位置（按经销商 → 集成项目的渲染顺序）
+  const currentValue = (() => {
+    for (const d of scope.dealers) for (const g of scope.groups) if (g.dealerId === d.id && g.projectIds.includes(project.id)) return itemValue(g.id, project.id)
+    return ''
+  })()
+  const show = (keyboard: boolean) => { setValue(keyboard ? currentValue : ''); scrolled.current = ''; if (keyboard) lastPointer.current = false; setOpen(true) }
   const pick = (p: Project) => { setProjectId(p.id); setOpen(false); toast(`已切换到「${p.name}」`) }
   // 打开后焦点在列表（listbox）上。高亮项的 id 写到列表的 aria-activedescendant：cmdk 只在它自己移动高亮时更新这个属性，
   // 高亮由这里改变（键盘打开、先高亮当前项目、鼠标移动清除）时它会过时，所以每次渲染后按实际高亮盖掉。
@@ -133,7 +139,7 @@ function ProjectSwitch() {
           onValueChange={setValue}
           onKeyDown={(e) => {
             lastPointer.current = false
-            if (value === '' && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) { e.preventDefault(); setValue(project.id) }
+            if (value === '' && currentValue && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) { e.preventDefault(); setValue(currentValue) }
             // 菜单在 Portal 里，Tab / Shift+Tab 会跳到页面末尾：改为关闭菜单、焦点回到触发器
             if (e.key === 'Tab') { e.preventDefault(); setOpen(false) }
           }}
@@ -148,7 +154,7 @@ function ProjectSwitch() {
                     {projectsInGroup(g, scope.projects).map((p) => (
                       <CommandItem
                         key={p.id}
-                        value={p.id}
+                        value={itemValue(g.id, p.id)}
                         onSelect={() => pick(p)}
                         data-current={p.id === project.id || undefined}
                         className={cn('rounded-[7px] text-[13px]', p.id === project.id ? 'bg-primary-soft font-semibold text-primary' : 'hover:bg-background')}
@@ -292,6 +298,7 @@ function AfterRender({ run, onResize = false }: { run: () => void; onResize?: bo
   return null
 }
 /** cmdk 选项上带 data-value（项目编号） */
+const itemValue = (groupId: string, projectId: string) => groupId + ':' + projectId
 const itemById = (root: Element | null, v: string) => root?.querySelector<HTMLElement>(`[cmdk-item][data-value="${CSS.escape(v)}"]`) ?? null
 /** 组合框的 aria-activedescendant 指向当前高亮项（没有高亮时去掉） */
 const setActive = (owner: Element | null, item: HTMLElement | null) => {
@@ -359,9 +366,12 @@ export default function Layout() {
             {isProjectPage ? (
               <>
                 <Link to="/groups">集成项目</Link><Icon className="sep" icon={faChevronRight} />
-                <Link to="/groups">{project.name}</Link>
-                {!noProject && !project.online && <Badge variant="red" className="crumb-off">离线</Badge>}
-                <Icon className="sep" icon={faChevronRight} />
+                {/* 没有可见项目时不渲染空的项目名链接和离线标记 */}
+                {!noProject && <>
+                  <Link to="/groups">{project.name}</Link>
+                  {!project.online && <Badge variant="red" className="crumb-off">离线</Badge>}
+                  <Icon className="sep" icon={faChevronRight} />
+                </>}
               </>
             ) : (
               <><Link to="/home"><Icon icon={faHouse} /></Link><Icon className="sep" icon={faChevronRight} /></>

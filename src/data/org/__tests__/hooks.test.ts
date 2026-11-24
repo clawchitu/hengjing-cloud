@@ -83,14 +83,25 @@ describe('mock 数据源（e2e 截图走这里）', () => {
     const { wrapper: w } = wrapper()
     const { result } = renderHook(() => useCurrentProject(), { wrapper: w })
     expect(result.current.project?.id).toBe('PRJ-10252')
-    act(() => result.current.setProjectId('PRJ-99999'))
-    expect(localStorage.getItem(PROJECT_KEY)).toBe('PRJ-99999')
-    expect(result.current.project?.id).toBe('PRJ-10241') // 失效 → 第一个可见项目
-    expect(localStorage.getItem(PROJECT_KEY)).toBe('PRJ-99999') // 回退不改写
+    // 不在可见范围里的 id 不写进存储（演示 id、管理员才看得到的项目等）
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    act(() => result.current.setProjectId('PRJ-50101'))
+    expect(localStorage.getItem(PROJECT_KEY)).toBe('PRJ-10252')
+    expect(result.current.project?.id).toBe('PRJ-10252')
+    warn.mockRestore()
     const t0 = result.current.selectTick
     act(() => result.current.setProjectId('PRJ-30057'))
     expect(result.current.project?.id).toBe('PRJ-30057')
     await waitFor(() => expect(result.current.selectTick).toBeGreaterThan(t0))
+  })
+
+  it('存储里的 id 失效 → 回退到第一个可见项目，且回退不改写存储', () => {
+    mockSignIn({ username: 'cosyhome', role: 'dealer' }, true)
+    localStorage.setItem(PROJECT_KEY, 'PRJ-99999')
+    const { wrapper: w } = wrapper()
+    const { result } = renderHook(() => useCurrentProject(), { wrapper: w })
+    expect(result.current.project?.id).toBe('PRJ-10241')
+    expect(localStorage.getItem(PROJECT_KEY)).toBe('PRJ-99999')
   })
 
   it('换账号后存储的项目不在新范围里 → 回退到新账号的第一个项目', () => {
@@ -181,6 +192,11 @@ describe('真实数据源', () => {
     act(() => result.current.setProjectId('p3'))
     expect(result.current.project?.id).toBe('p3')
     expect(localStorage.getItem(PROJECT_KEY)).toBe('p3')
+    // 后端 id 不在可见范围（不在任何集成项目里）→ 忽略
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    act(() => result.current.setProjectId('not-visible'))
+    expect(localStorage.getItem(PROJECT_KEY)).toBe('p3')
+    warn.mockRestore()
   })
 
   it('经销商默认值随异步到达（Groups.tsx 的坑）：列表晚到时自动选中第一个，并按它取集成项目', async () => {

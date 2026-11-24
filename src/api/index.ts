@@ -4,6 +4,7 @@
 import * as M from '../mock/data'
 import * as O from '../mock/org'
 import * as G from '../mock/gen'
+import { isMockMode } from './config'
 
 const delay = <T,>(v: T, ms = 120): Promise<T> => new Promise((r) => setTimeout(() => r(structuredClone(v)), ms))
 
@@ -64,8 +65,13 @@ export async function reportProjectSelect(u: O.User, projectId: string) {
   writeCounts({ ...c, [u.username]: mine })
   return delay({ ok: true, count: mine[projectId] }, 40)
 }
-/** GET /api/projects/frequent → top 4 most-selected visible projects (may be fewer, or empty) */
-export function getFrequentProjects(u: O.User) {
+/**
+ * GET /api/projects/frequent → top 4 most-selected visible projects (may be fewer, or empty)。
+ * 只是演示数据：真实接口模式下返回空列表（首页显示「暂无常用项目」），不把演示项目混进真实账号；
+ * 真实的 POST /projects/frequent 由 S6b 接上，并按当前可见组织范围过滤。
+ */
+export function getFrequentProjects(u: O.User): Promise<{ project: O.Project; count: number }[]> {
+  if (!isMockMode()) return delay([])
   const visible = new Set(scopeOf(u).projects.map((p) => p.id))
   const list = Object.entries(userCounts(u))
     .filter(([id, n]) => n > 0 && visible.has(id))

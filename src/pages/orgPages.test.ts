@@ -18,6 +18,7 @@ import { __resetCurrentForTests } from '../data/org/current'
 import { __resetSessionViewForTests } from '../data/session'
 import Control from './Control'
 import Groups from './Groups'
+import Home from './Home'
 import Layout from '../components/Layout'
 import { MemoryRouter as Router, Route, Routes } from 'react-router-dom'
 
@@ -202,12 +203,12 @@ describe('OrgGate', () => {
 function mountLayout(path: string) {
   const client = createQueryClient()
   const page = (name: string) => createElement('div', null, name + '页内容')
-  return render(createElement(QueryClientProvider, { client }, createElement(AppProvider, null,
+  return Object.assign(render(createElement(QueryClientProvider, { client }, createElement(AppProvider, null,
     createElement(Router, { initialEntries: [path] }, createElement(Routes, null,
       createElement(Route, { element: createElement(Layout) },
         createElement(Route, { path: '/home', element: page('首页') }),
         createElement(Route, { path: '/sensors', element: page('传感器') }),
-      ))))))
+      )))))), { client })
 }
 
 describe('Layout（真实数据形状）', () => {
@@ -245,6 +246,8 @@ describe('Layout（真实数据形状）', () => {
     mountLayout('/sensors')
     await screen.findAllByText('暂无可用项目')
     expect(screen.queryByText('传感器页内容')).toBeNull()
+    // 面包屑不渲染空的项目名链接：只剩「集成项目」一个链接
+    expect([...document.querySelectorAll('.crumbs a')].map((a) => a.textContent)).toEqual(['集成项目'])
     expect(screen.queryByRole('alert')).toBeNull() // 离线横幅是 role=alert
     expect(screen.queryByText('离线')).toBeNull()
   })
@@ -284,5 +287,53 @@ describe('/distributors 失败但其他成功', () => {
     const alert = await screen.findByRole('alert')
     expect(alert.textContent).toContain('经销商列表加载失败')
     expect(within(alert).getByRole('button', { name: '重试' })).toBeTruthy()
+  })
+})
+
+describe('Home（真实平台账号、组织范围为空）', () => {
+  it('不显示演示数据的常用项目卡片，也不会把演示 id 写进当前项目存储', async () => {
+    backend({ '/integrated-projects': () => json({}), '/ctrl/projects': () => json({}) })
+    await signIn('u', 'pw', true)
+    const { container } = mount(createElement(Home))
+    await screen.findByText('暂无常用项目', {}, { timeout: 3000 })
+    // 演示数据里管理员的常用项目（西溪蝶园 3号、河西府 会所新风等）一个都不出现
+    expect(container.textContent).not.toMatch(/西溪蝶园|河西府|朝阳壹号院|PRJ-/)
+    expect(container.querySelectorAll('.proj-card').length).toBe(0)
+    expect(localStorage.getItem('hjc-project')).toBeNull()
+  })
+})
+
+describe('侧栏菜单键盘导航（多组重复项）', () => {
+  const highlighted = () => document.querySelector<HTMLElement>('[cmdk-item][aria-selected="true"]')
+  const groupOf = (el: Element | null) => el?.closest('[role="group"]')?.getAttribute('aria-label') ?? ''
+  const key = async (k: string) => { await act(async () => { fireEvent.keyDown(document.activeElement!, { key: k }) }) }
+
+  it('从第一组导航到第二组的重复项、继续导航、回车选中：高亮与 aria-activedescendant 指向正确的那一项', async () => {
+    localStorage.setItem('hjc-project', 'p3')
+    backend()
+    await signIn('u', 'pw', true)
+    const { client } = mountLayout('/home')
+    await screen.findByText('首页页内容')
+    // 侧栏按经销商分组，等经销商列表也到了再开菜单
+    await waitFor(() => expect(client.getQueryState(['org', 'user:admin-1', 'dealers'])?.status).toBe('success'))
+    const trigger = screen.getByText('当前项目').closest<HTMLElement>('[role="button"]')!
+    trigger.focus()
+    await act(async () => { fireEvent.keyDown(trigger, { key: 'Enter' }) })
+    // 菜单顺序：g1: p1, p3；g2: p1, p2。键盘打开先高亮当前项目 p3（在第一组）
+    await waitFor(() => expect(highlighted()?.textContent).toContain('科希家办公室'))
+    expect(groupOf(highlighted())).toContain('五恒集成项目')
+    await key('ArrowDown') // → 第二组里重复出现的 p1
+    expect(highlighted()?.textContent).toContain('测试项目0829')
+    expect(groupOf(highlighted())).toContain('单机版')
+    const list = document.querySelector('[cmdk-list]')!
+    expect(list.getAttribute('aria-activedescendant')).toBe(highlighted()!.id)
+    await key('ArrowDown') // → p2
+    expect(highlighted()?.textContent).toContain('独立空气系统测试')
+    await key('ArrowUp') // ← 回到第二组的 p1，不会跳到第一组的同名项
+    expect(groupOf(highlighted())).toContain('单机版')
+    expect(highlighted()?.textContent).toContain('测试项目0829')
+    expect(list.getAttribute('aria-activedescendant')).toBe(highlighted()!.id)
+    await key('Enter')
+    expect(localStorage.getItem('hjc-project')).toBe('p1') // 选中时传的仍是项目 id
   })
 })
