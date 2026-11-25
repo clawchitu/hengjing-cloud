@@ -283,11 +283,13 @@ export function WeatherActions({ w }: { w: HomeWeather }) {
     if (spin) return
     setSpin(true)
     const wait = new Promise<void>((r) => { timer.current = setTimeout(r, 800) })
+    // 没有权限的那一路不请求，也不算失败（例如只有 /weather24 权限、实时块用小时预报顶替）
+    const skipNow = w.now.status === 'forbidden', skipHours = w.hours.status === 'forbidden'
     void Promise.all([w.now.refetch(), w.hours.refetch(), wait]).then(([a, b]) => {
       if (!alive.current) return
       timer.current = null
       setSpin(false)
-      if (a && b) toast('天气已更新')
+      if ((skipNow || a) && (skipHours || b)) toast('天气已更新')
       else toast('更新失败，沿用上次数据', true)
     })
   }

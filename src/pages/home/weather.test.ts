@@ -207,6 +207,22 @@ describe('刷新天气按钮', () => {
     expect(tileTexts()).toContain('相对湿度51%')
   })
 
+  it('只有 /weather24 权限：刷新成功提示「天气已更新」（无权限的一路不算失败）', async () => {
+    const b = backend({}, { paths: ['/v1/weather24'] })
+    await signIn('u', 'pw', true)
+    mount()
+    await waitFor(() => expect(wx().textContent).toContain('小时预报'), { timeout: 3000 })
+    await waitFor(() => expect(b.callsTo('/me')).toHaveLength(2))
+    // 提示区是全局的，前面用例的提示可能还在：按出现次数比较这次新增的
+    const count = (t: string) => toastText().split(t).length - 1
+    const ok0 = count('天气已更新'), fail0 = count('更新失败')
+    await act(async () => { fireEvent.click(refreshBtn()) })
+    await waitFor(() => expect(count('天气已更新') + count('更新失败')).toBeGreaterThan(ok0 + fail0), { timeout: 5000 })
+    expect(count('更新失败')).toBe(fail0)
+    expect(count('天气已更新')).toBe(ok0 + 1)
+    expect(b.callsTo('/weather')).toHaveLength(0)
+  })
+
   it('点刷新后离开页面（卸载）：计时器被清掉，不再提示', async () => {
     const b = backend()
     await signIn('u', 'pw', true)
