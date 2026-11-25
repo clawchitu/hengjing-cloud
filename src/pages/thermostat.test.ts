@@ -210,9 +210,18 @@ describe('读取（ctrl 200）', () => {
     backend()
     const c = await openRooms()
     const row = c.querySelector('.modes-row') as HTMLElement
-    expect(row.querySelector('.ends-h')!.textContent).toBe('参与运行的末端')
+    expect(row.querySelector('.ends-h')!.textContent).toBe('末端（由控制屏控制）')
     expect(row.getAttribute('title')).toContain('开 / 关 由控制屏根据运行情况自动控制')
     expect(within(row).queryAllByRole('button')).toHaveLength(0)
+  })
+
+  it('S13：app_code 12 的页头和说明只写程序名称，不写程序编码', async () => {
+    backend()
+    await open(P12)
+    await screen.findByText('该项目无房间温控面板')
+    const sub = document.querySelector('.page-head .sub')!.textContent!
+    expect(sub).toContain('程序 ')
+    expect(document.querySelector('.page')!.textContent).not.toMatch(/编码/)
   })
 
   it('风速 100 显示「自动」', async () => {

@@ -120,7 +120,6 @@ export default function Groups() {
               </div>
             </div>
             <div className="info4">
-              <div><span>集成项目编码</span><b className="num">{g.code}</b></div>
               <div><span>应用类型</span><b>{typeOf(g) || <span className="faint" style={{ fontWeight: 400 }}>未设置</span>}</b></div>
               <div><span>创建时间</span><b className="num">{g.created || '—'}</b></div>
               <div><span>在线率</span><b className="green num">{pctOf(on, inG.length).toFixed(1)}% <small className="faint" style={{ fontWeight: 400, fontSize: 12 }}>({on}/{inG.length})</small></b></div>

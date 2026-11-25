@@ -103,6 +103,9 @@ describe('集成项目页（改动 3、4）', () => {
     expect(card('单机版').querySelector('[data-slot="badge"]')?.textContent).toBe('独立空气系统')
     expect(container.querySelector('.info4')?.textContent).toContain('2026-11-24 07:49:41')
     expect(container.querySelector('.info4')?.textContent).toContain('通用版')
+    // S13：详情头部不再有「集成项目编码」字段（项目表的「项目ID」列保留，供运维对照）
+    expect(container.querySelector('.info4')?.textContent).not.toContain('集成项目编码')
+    expect(screen.getAllByRole('columnheader').map((h) => h.textContent)).toContain('项目ID')
   })
 
   it('按经销商取集成项目：加载中、失败（可重试）、空三态', async () => {

@@ -283,7 +283,7 @@ function RoomCard({ room: r, ctx, range, selected, onSelect, draft, conflict, on
       </div>
       {/* 末端本期只读（docs/HANDOFF.md：写锁核对 record201 还不核对末端，接入修改入口前要先补），这里只说明颜色和开 / 关的含义 */}
       <div className="modes-row" title={END_TAGS_TIP}>
-        {r.endModes.length > 0 && <span className="ends-h">参与运行的末端</span>}
+        {r.endModes.length > 0 && <span className="ends-h">末端（由控制屏控制）</span>}
         {r.endModes.map((m, i) => <EndTag key={`${m.type}:${m.name}:${i}`} m={m} dim={off} />)}
       </div>
       {mine ? (
@@ -483,11 +483,11 @@ export default function Thermostat() {
   if (!project) return <div className="page"><div className="empty-fav" role="status"><b>暂无可用项目</b></div></div>
   if (!caps.thermostat) return (
     <div className="page">
-      <div className="page-head"><div><h1>房间温控面板</h1><div className="sub">{project.name}<span className="sep">·</span>程序 {PROGRAMS[project.programCode] ?? project.appName}（编码 <span className="num">{project.programCode}</span>）</div></div></div>
+      <div className="page-head"><div><h1>房间温控面板</h1><div className="sub">{project.name}<span className="sep">·</span>程序 {PROGRAMS[project.programCode] ?? project.appName}</div></div></div>
       <Card className="placeholder">
         <div className="ph-ico"><Icon icon={faFan} /></div>
         <h3>该项目无房间温控面板</h3>
-        <p>「{project.name}」为<b>新风单机版</b>项目（程序编码 {project.programCode}），仅接入新风除湿机，不包含房间温控面板。<br />新风机的运行数据与运行设置请前往「新风除湿机」查看。</p>
+        <p>「{project.name}」为<b>新风单机版</b>项目，仅接入新风除湿机，不包含房间温控面板。<br />新风机的运行数据与运行设置请前往「新风除湿机」查看。</p>
       </Card>
     </div>
   )
