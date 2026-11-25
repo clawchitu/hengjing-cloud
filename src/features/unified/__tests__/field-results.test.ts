@@ -7,7 +7,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from '@/api/errors'
 import * as L from '@/api/writeLock'
 import { createUnifiedBatch, type BatchProject, type BatchSender, type UnifiedSnapshot } from '../batch'
-import { fieldResults, overallOf, resultTitle, type FieldStatus } from '../rules'
+import { echoMismatches, echoVerdict, fieldResults, overallOf, resultTitle, type FieldStatus } from '../rules'
 
 const Q = (o: Partial<{ systemSwitch: number; systemMode: number; roomSwitch: number; roomTemp: number }>) => ({ systemSwitch: -1, systemMode: 0, roomSwitch: -1, roomTemp: -1, ...o })
 const st = (...xs: FieldStatus[]) => xs.map((status) => ({ status }))
@@ -38,6 +38,16 @@ describe('总结果排序 B 与标题', () => {
     expect(fieldResults(q, { roomSwitch: 1, roomTemp: 25 }, { replied: false }).map((r) => r.status)).toEqual(['applied', 'unknown'])
     // 同一字段既有不一致、又有没回报：按排序算未变化
     expect(fieldResults(Q({ roomSwitch: 1 }), { roomSwitch: null, perRoom: { roomSwitch: [0, null] } })[0].status).toBe('unchanged')
+  })
+  it('房间开关未上报 + 有房间离线：开关单独判无法核对，温度仍按离线判结果未知；只改开关时整体无法核对', () => {
+    const snap = { roomSwitch: null, roomTemp: 26, offline: 1, switchUnreported: true, perRoom: { roomSwitch: [null], roomTemp: [26] } }
+    expect(fieldResults(Q({ roomSwitch: 1, roomTemp: 26 }), snap).map((r) => r.status)).toEqual(['unverifiable', 'unknown'])
+    expect(fieldResults(Q({ roomSwitch: 1 }), snap).map((r) => r.status)).toEqual(['unverifiable'])
+    const ms = echoMismatches(Q({ roomSwitch: 1 }), snap)
+    expect(echoVerdict(ms, snap, ['roomSwitch'])).toBe('unverifiable')
+    expect(echoVerdict(echoMismatches(Q({ roomSwitch: 1, roomTemp: 26 }), snap), snap, ['roomSwitch', 'roomTemp'])).toBe('unknown')
+    // 开关可信时离线照旧结果未知
+    expect(echoVerdict(ms, { ...snap, switchUnreported: undefined }, ['roomSwitch'])).toBe('unknown')
   })
 })
 

@@ -15,6 +15,8 @@
 //   一致的字段也记为结束，全部结束即放；未变化 / 无法核对 / 结果未知都不提前放锁。应答结果未知 → unknown。
 //   批次截止时间只影响界面上的标注，不放锁。
 import { callCtrl, writeCtrl, type CtrlReply, type WriteQuery } from '@/api/ctrl'
+import { INVALID_HOURLY, NO_DATA } from '@/api/values'
+import { roomSwitchReported } from '@/api/config'
 import { ApiError } from '@/api/errors'
 import type { WriteProject } from '@/api/guard'
 import { TEXT } from './constants'
@@ -54,24 +56,30 @@ export function contextOf(p: BatchProject | undefined, mock = false): UnifiedCon
   return { projectId: p.id, projectCode: p.code, projectName: p.name, appCode: unifiedAppCode(p.programCode, mock), online: p.online }
 }
 
-const INVALID = 65536
-const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) && v !== INVALID && v !== -1 ? v : null)
+// 读数无效：65536（未初始化）、-100（无效数据，后端 11/25 答复第 9 条）、-1；0 是有效读数
+const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) && v !== NO_DATA && v !== INVALID_HOURLY && v !== -1 ? v : null)
 const same = (xs: Array<number | null>): number | null => (xs.length && xs.every((x) => x !== null && x === xs[0]) ? xs[0] : null)
 
 /**
- * 200 的房间列表 → 快照。汇总值：全部房间读到且一致才给值，否则为 null；perRoom 留逐房间读数，核对按房间逐个比。
+ * 200 的房间列表 → 快照。房间开关未上报（roomSwitchReported() 为 false，后端 11/25 答复第 1 条）时，逐房间开关读数一律记 null
+ * （设备没回报 → 核对时无法核对），汇总的 roomSwitch 也是 null，不拿读到的 0 当「关」。汇总值：全部房间读到且一致才给值，否则为 null；perRoom 留逐房间读数，核对按房间逐个比。
  * switch / set_temp 是普通 proto3 标量：0 值服务端不编码，解码出来就是 0（关），按真实读数核对。
  * 没有房间条目（含 200 回包为空 {}）→ 无法核对。is_connected=false 的房间读数不可信：不参与核对，记 offline（结果未知）。
  * 系统开关 / 运行模式没有读接口，不给这两个键（核对时记「未核对」）
  */
-export function summarizeRooms(rooms: ReadonlyArray<{ switch?: number; setTemp?: number; isConnected?: boolean }>): UnifiedSnapshot {
+export function summarizeRooms(
+  rooms: ReadonlyArray<{ switch?: number; setTemp?: number; isConnected?: boolean }>, opts: { switchReported?: boolean } = {},
+): UnifiedSnapshot {
+  const switchReported = opts.switchReported ?? roomSwitchReported()
   const online = rooms.filter((r) => r.isConnected !== false)
-  const sws = online.map((r) => num(r.switch))
+  // 开关只认 0 / 1，其他值按没回报（null → 无法核对）
+  const sws = online.map((r) => (switchReported && (r.switch === 0 || r.switch === 1) ? r.switch : null))
   // 逐房间温度用原始读数核对（按 0.01 容差）；汇总值四舍五入到两位，只用于显示和整体比较
   const ts = online.map((r) => num(r.setTemp))
   const shown = ts.map((v) => (v === null ? null : Math.round(v * 100) / 100))
   const snap: UnifiedSnapshot = { rooms: rooms.length, roomSwitch: same(sws), roomTemp: same(shown), perRoom: { roomSwitch: sws, roomTemp: ts } }
   if (online.length < rooms.length) snap.offline = rooms.length - online.length
+  if (!switchReported) snap.switchUnreported = true
   return snap
 }
 
@@ -154,8 +162,6 @@ export const DEADLINE_REPLIED_OK = '已下发，结果未知：下发后回读�
 export const DEADLINE_REPLIED_FAIL = '控制屏明确拒绝（未自动重试）；下发后回读在 35 秒截止前未完成'
 /** 下发后回读途中登录账号变了、写锁已放开或过了有效期：这次读数作废 */
 export const READ_VOID_TEXT = '回读期间登录账号已切换或本次下发已超时 / 已结束，读数未采用'
-/** 下发前读到房间全部关着，这次又要设温度（且没同时开房间）：不发（后端答复⑦） */
-export const ROOMS_OFF_TEXT = '下发前读到房间都关着，不能设定温度，未下发'
 
 export function rowStatus(s: UnifiedState<unknown>, started: boolean): RowStatus {
   switch (s.status) {
@@ -185,8 +191,6 @@ export function createUnifiedBatch(deps: BatchDeps) {
     sent: boolean
     /** 写请求的应答（截止时据此区分「等应答」和「等回读」） */
     reply?: 'ok' | 'rejected' | 'error'
-    /** 下发前读到的快照 */
-    before?: UnifiedSnapshot
     /** 所属批次序号：旧批次里没结束的写请求不能借新批次的截止时间放行 */
     batch: number
     /** 写锁令牌（acquire 成功后才有） */
@@ -246,10 +250,6 @@ export function createUnifiedBatch(deps: BatchDeps) {
   const sendWhole = (e: Entry) => (wp: WriteProject, q: WriteQuery<203>) => {
     const p = find(wp.id)
     if (!p || p.code !== wp.code) return Promise.reject(new ApiError('write_blocked', TEXT.projectChanged))
-    // 房间都关着又要设温度（没同时开房间）：不发
-    if (q.roomTemp !== -1 && q.roomSwitch !== 1 && e.before && e.before.rooms > 0 && e.before.roomSwitch === 0) {
-      return Promise.reject(new ApiError('write_blocked', ROOMS_OFF_TEXT))
-    }
     // 写锁：同一块屏（或 DTU、项目）上一条还没有结论 → 不发
     const got = acquire(lockTargetOf(p), p.name)
     if (!got.ok) return Promise.reject(new ApiError('write_blocked', got.busy.owner === 'other-account' ? OTHER_ACCOUNT_TEXT : LOCK_BUSY_TEXT))
@@ -353,13 +353,10 @@ export function createUnifiedBatch(deps: BatchDeps) {
         const entry = { p, started: false, sent: false, batch: batchSeq, unsub: () => {} } as Entry
         const ctl = createUnifiedController<UnifiedSnapshot>({
           getContext: () => contextOf(find(id), mock),
-          // 记下第一次（下发前）读到的快照，供发送前判断房间是否都关着
           // 已发出后的那次（下发后回读）：读之前向写锁取凭据（记下读取开始时的账号与锁 token），读数只作为候选
           readBack: async (pid, sig) => {
             if (!entry.sent || !entry.token) {
-              const snap = await readBack(pid, sig)
-              if (!entry.before) entry.before = snap
-              return snap
+              return await readBack(pid, sig)
             }
             // 明确被拒：锁已按 fail 放开，没有凭据；单独记下读取开始时的账号，读的过程中换了号这次读数作废（after 置空），
             // 被拒的结论由状态机保留

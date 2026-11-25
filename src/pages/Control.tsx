@@ -19,7 +19,7 @@ import { orgSource, projectsInGroup, useDealerPick, useDealers } from '../data/o
 import { useSession } from '../data/session'
 import { DealersError } from '../components/DealersError'
 import { useQueries, useQueryClient } from '@tanstack/react-query'
-import { isMockMode } from '../api/config'
+import { isMockMode, roomSwitchReported } from '../api/config'
 import { getCurrentUserId } from '../api/auth'
 import { ApiError } from '../api/errors'
 import { WRITE_RECHECK_TEXT } from '../api/http'
@@ -221,22 +221,23 @@ export default function Control() {
   const appBlock = (pickedP.length ? pickedP : inGroup).map((p) => tempAvailability(unifiedAppCode(p.programCode, mock))).find((a) => !a.enabled)
     ?? (inGroup.length ? undefined : tempAvailability(undefined))
   const roomOff = roomSw === '全部关闭'
-  // 房间都关着（后端答复⑦：房间关闭时界面不允许设温度）：读已选在线项目的 200，某个项目的房间全部关着就禁用温度，
-  // 除非这次同时选了「全部开启」。还在读的时候先禁用；读失败不在这里拦（下发前读取失败本来就不会下发）
+  // 房间关着（后端 11/25 答复第 16 条）：温度设定照样生效，不会把房间打开，开启后按此温度运行——不再禁用温度，只给提示。
+  // 房间开关未上报（roomSwitchReported() 为 false，11/25 第 1 条）时 200 的开关读数不可信，不读、不据此提示
+  const switchReported = roomSwitchReported()
   const snaps = useQueries({
-    queries: pickedP.filter((p) => p.online).map((p) => ({
+    queries: (switchReported ? pickedP.filter((p) => p.online) : []).map((p) => ({
       queryKey: ['unified-snap', mock, p.id],
       queryFn: ({ signal }: { signal: AbortSignal }) => readSnap(p.id, signal),
       staleTime: 15_000, retry: false,
     })),
   })
-  const onlinePicked = pickedP.filter((p) => p.online)
+  const onlinePicked = switchReported ? pickedP.filter((p) => p.online) : []
   const roomsOffP = onlinePicked.filter((_, i) => { const d = snaps[i]?.data; return !!d && d.rooms > 0 && d.roomSwitch === 0 })
-  const snapsLoading = snaps.some((q) => q.isPending)
-  const roomsLock = roomSw === '全部开启' ? null
-    : roomsOffP.length ? `房间都关着（${roomsOffP.map((p) => p.name).join('、')}），不能设定温度；需要时同时选「全部开启」`
-    : snapsLoading ? '正在读取房间状态…' : null
-  const tempLock: string | null = appBlock && !appBlock.enabled ? appBlock.reason : roomOff ? TEXT.tempWhileRoomOff : roomsLock
+  const tempLock: string | null = appBlock && !appBlock.enabled ? appBlock.reason : null
+  const roomsNote = keep || tempLock !== null || roomSw === '全部开启' ? null
+    : roomOff ? `房间将被关闭，设定的温度${TEXT.tempWhenRoomOn}`
+    : roomsOffP.length ? `房间都关着（${roomsOffP.map((p) => p.name).join('、')}），设定的温度${TEXT.tempWhenRoomOn}`
+    : null
   const tempOff = keep || tempLock !== null
   const tempDisabled = tempOff || busy
   const setT = (v: number) => setTemp(clampTemp(v, range))
@@ -259,6 +260,7 @@ export default function Control() {
       body: <>将向以下 <b>{s.rows.length}</b> 个项目逐个下发，并覆盖用户本地设置：
         <div className="kv">{s.items.map((i) => <div key={i.label}><span>{i.label}</span><b>{i.value}</b></div>)}</div>
         <div className="muted" style={{ marginTop: 8, fontSize: 12.5 }}>{s.rows.map((r) => `${r.name}（${r.code}）`).join('、')}</div>
+        {s.items.some((i) => i.label === TEXT.roomTemp) && <div className="muted" style={{ marginTop: 8, fontSize: 12.5 }}>{TEXT.tempOffNote}。</div>}
         <div className="muted" style={{ marginTop: 4, fontSize: 12.5 }}>下发前后各读一次当前状态用于核对；失败不会自动重试。</div></>,
       okText: TEXT.confirmOk, danger: true,
     })
@@ -360,6 +362,7 @@ export default function Control() {
             <div className="ticks num"><span>{range.min}°C</span><span>20°C</span><span>25°C</span><span>{range.max}°C</span></div>
           </fieldset>
           {tempLock && <div className="cap-note" role="note"><Icon icon={faCircleInfo} />{tempLock}{appBlock ? '，房间开关仍可下发。' : ''}</div>}
+          {roomsNote && <div className="cap-note" role="note" data-testid="temp-room-note"><Icon icon={faCircleInfo} />{roomsNote}</div>}
         </Card>
 
         <div className="preview">
@@ -372,6 +375,7 @@ export default function Control() {
           <div className="pv-row"><span>执行方式</span><b className="w">立即执行</b></div>
           <div className="pv-warn"><Icon icon={faTriangleExclamation} /> 将覆盖所选项目内用户的本地设置，请谨慎操作。</div>
           {lockNote && <div className="cap-note" role="note"><Icon icon={faCircleInfo} />{lockNote}</div>}
+          {!switchReported && roomSw !== '不变' && <div className="cap-note" role="note" data-testid="switch-unreported-note"><Icon icon={faCircleInfo} />{TEXT.switchUnreported}</div>}
           <button className="btn-send" onClick={send} disabled={busy || lockNote !== null}><Icon icon={run.phase === 'running' ? faSpinner : faPaperPlane} spin={run.phase === 'running'} />{run.phase === 'running' ? '下发中…' : TEXT.confirmOk}</button>
         </div>
       </div>

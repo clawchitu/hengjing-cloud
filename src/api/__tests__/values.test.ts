@@ -20,10 +20,10 @@ describe('-1 不变项', () => {
 })
 
 describe('65536 无数据', () => {
-  it.each([[NO_DATA, null], [65535, 65535], [0, 0], [-100, -100], [NaN, null], [undefined, null], [null, null], [22.5, 22.5]])('reading(%s) = %s', (v, out) => {
+  it.each([[NO_DATA, null], [65535, 65535], [0, 0], [-100, null], [-1, -1], [NaN, null], [undefined, null], [null, null], [22.5, 22.5]])('reading(%s) = %s', (v, out) => {
     expect(reading(v)).toBe(out)
   })
-  it('小时值额外排除 -100', () => {
+  it('-100 对所有读数都是无效数据（后端 11/25 答复第 9 条）；小时值同一口径', () => {
     expect(hourlyReading(-100)).toBeNull()
     expect(hourlyReading(NO_DATA)).toBeNull()
     expect(hourlyReading(-5)).toBe(-5)

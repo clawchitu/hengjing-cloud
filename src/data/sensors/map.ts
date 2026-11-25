@@ -32,12 +32,12 @@ export function toAirSensors(data: readonly AirSensorData[]): AirSensor[] {
     if (seen.has(key)) key = `${id}#${i}`
     seen.add(key)
     const online = d.isConnected === true
-    // 65536、-100（无效数据）都过滤，与 208 同一口径；其他负温度、负露点照常显示
+    // 65536、-100（无效数据）都过滤，与 208 同一口径；0 是有效读数（后端 11/25 答复第 9 条）；其他负温度、负露点照常显示
     const v = (x: number | undefined) => (online ? hourlyReading(x) : null)
     return {
       id, key, online,
       name: d.name?.trim() || `传感器 ${id || i + 1}`,
-      // 缺字段解码出的 0 等无效值同 208，见 stats.ts validReading
+      // 有效性同 208，见 stats.ts validReading
       temp: validReading('temp', v(d.temperature)), hum: validReading('hum', v(d.humidity)), dew: validReading('dew', v(d.dewPoint)),
       pm25: validReading('pm25', v(d.pm25)), co2: validReading('co2', v(d.co2)),
     }

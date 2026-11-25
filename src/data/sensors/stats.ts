@@ -28,7 +28,7 @@ export interface HourRecord {
   pm25: number
 }
 
-/** 一个小时的有效读数：null = 无数据（65536 / -100 / 缺失） */
+/** 一个小时的有效读数：null = 无数据（65536 / -100 / 缺失）；0 是有效读数 */
 export type Readings = Record<MetricKey, number | null>
 
 export interface HourPoint extends Readings { /** 该小时起点（毫秒） */ ts: number }
@@ -80,12 +80,12 @@ export const minuteLabel = (ms: number) => timeLabel(ms).slice(0, 5)
 export const timeLabel = (ms: number) => new Date(ms + CST_OFFSET_MS).toISOString().slice(11, 19)
 
 /**
- * 设备读数的有效性（达标率口径经 Fable 复核，11/24）：65536（无数据）、-100（无效）、缺字段解码出的 0 都算无效，
- * 不进统计的分子也不进分母。proto3 不输出值为 0 的字段，缺省字段解码出来就是 0（实测 floor_temperature 即如此），
- * 所以所有指标（含温度）的 0 都按无效处理；湿度、CO₂ 不可能为负，负数也无效。温度、露点的负数照常有效。
+ * 设备读数的有效性：65536（无数据，后端 11/24 答复⑪）、-100（无效数据，proto 注释）不进统计的分子也不进分母。
+ * 0 是有效数据（后端 11/25 答复第 9 条「0 是有效数据，-100 才是无效数据」），照常参与统计——推翻了 11/24「缺字段解码出的 0
+ * 一律无效」的做法。湿度、CO₂ 不可能为负，它们的负数也按无效处理（这一条不受答复影响）；温度、露点、PM2.5 的负数（-100 以外）照常按读数处理。
  */
 export function validReading(key: MetricKey, v: number | null): number | null {
-  if (v === null || v === 0) return null
+  if (v === null) return null
   if ((key === 'hum' || key === 'co2') && v < 0) return null
   return v
 }
@@ -104,7 +104,7 @@ export function readingsOf(r: Partial<HourRecord>): Readings {
 /**
  * 208 记录 → 窗口内按时间排序的小时点。
  * - 只要这台设备的（id 缺省为 0 时不按 id 过滤）；date 不是有限数、不在 [start, end] 里的丢掉；date 取整到整点；
- * - 同一小时出现多条（接口没有说明哪条为准，已列入待问后端）：按字段合并——无效值（65536 / -100 / 缺省）不覆盖
+ * - 同一小时出现多条（接口没有说明哪条为准，已列入待问后端）：按字段合并——无效值（65536 / -100）不覆盖
  *   有效值；同一字段有多个有效值时取平均。结果与记录顺序无关，同一小时只计一次。
  */
 export function toHourPoints(records: readonly Partial<HourRecord>[], deviceId: number, w: Pick<StatWindow, 'start' | 'end'>): HourPoint[] {

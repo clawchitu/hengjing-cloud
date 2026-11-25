@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { envOfUrl, FEATURE_DEFAULTS, resolveConfig, TEST_API_ORIGIN } from '../config'
+import { envOfUrl, FEATURE_DEFAULTS, resolveConfig, roomSwitchReported, setConfig, TEST_API_ORIGIN } from '../config'
 import { can, isDealer } from '../auth'
 
 describe('运行时配置', () => {
@@ -10,17 +10,28 @@ describe('运行时配置', () => {
     })
   })
   it('功能开关：不写全部取默认值', () => {
-    expect(resolveConfig([]).features).toEqual({ freshAirWrite: 'on', freshAir204Unchanged: 'echo', freshAirFilterSwapped: false, freshAirFilterWarn: false, weatherCityFilter: 'auto', weatherNowFallback: true })
+    expect(resolveConfig([]).features).toEqual({ freshAirWrite: 'on', freshAirFilterWarn: false, roomSwitchReported: false, weatherCityFilter: 'auto', weatherNowFallback: true })
   })
   it('功能开关：按键合并，后面的层覆盖前面的；非法值不报错、取默认值', () => {
     const f = resolveConfig([
       { features: { freshAirWrite: 'off', weatherCityFilter: 'none', freshAirFilterWarn: true } },
-      { features: { weatherCityFilter: 'intersect', freshAirFilterWarn: 'yes', freshAir204Unchanged: 'minus1', bogus: 1 } },
+      { features: { weatherCityFilter: 'intersect', freshAirFilterWarn: 'yes', roomSwitchReported: true, bogus: 1, freshAir204Unchanged: 'minus1' } },
     ]).features
-    expect(f).toEqual({ ...FEATURE_DEFAULTS, freshAirWrite: 'off', weatherCityFilter: 'intersect', freshAirFilterWarn: false, freshAir204Unchanged: 'minus1' })
+    expect(f).toEqual({ ...FEATURE_DEFAULTS, freshAirWrite: 'off', weatherCityFilter: 'intersect', freshAirFilterWarn: false, roomSwitchReported: true })
+    // 已撤掉的开关（204 不变的传法、滤网字段对调）写了也忽略
+    expect(f).not.toHaveProperty('freshAir204Unchanged')
     expect(Object.isFrozen(f)).toBe(true)
     for (const bad of [null, 'off', [1], 42]) expect(resolveConfig([{ features: bad }]).features).toEqual(FEATURE_DEFAULTS)
-    expect(resolveConfig([{ features: { weatherNowFallback: 0, freshAirFilterSwapped: 'true' } }]).features).toEqual(FEATURE_DEFAULTS)
+    expect(resolveConfig([{ features: { weatherNowFallback: 0, freshAirFilterSwapped: 'true', roomSwitchReported: 'true' } }]).features).toEqual(FEATURE_DEFAULTS)
+  })
+  it('roomSwitchReported()：真实接口默认 false；写 true 才认；演示数据恒为 true', () => {
+    try {
+      expect(setConfig({ dataSource: 'real' }) && roomSwitchReported()).toBe(false)
+      setConfig({ dataSource: 'real', features: { roomSwitchReported: true } } as never)
+      expect(roomSwitchReported()).toBe(true)
+      setConfig({ dataSource: 'mock' })
+      expect(roomSwitchReported()).toBe(true)
+    } finally { setConfig(null) }
   })
   it('交付包（mockAllowed=false）：dataSource 恒为 real，config.js 写 mock 也无效', () => {
     expect(resolveConfig([], '', false).dataSource).toBe('real')

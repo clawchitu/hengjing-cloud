@@ -4,6 +4,7 @@ import { __resetWriteLockForTests, lockOf } from '@/api/writeLock'
 import { ApiError } from '@/api/errors'
 import { UnifiedCtrlSetQuery_OperatingMode as Mode } from '@/api/gen/ctrl200_pb.js'
 import { createUnifiedBatch, summarizeRooms, unifiedAppCode, type BatchProject, type BatchSender, type UnifiedSnapshot } from '../batch'
+import { echoMismatches } from '../rules'
 
 const P = (id: string, code: string, extra: Partial<BatchProject> = {}): BatchProject => ({ id, code, name: '项目' + code, programCode: 1, online: true, ...extra })
 
@@ -36,6 +37,18 @@ describe('summarizeRooms（ctrl 200 → 回读快照）', () => {
     expect(summarizeRooms([{ switch: 1, setTemp: 25.5 }, { switch: 0, setTemp: 26 }])).toEqual({ rooms: 2, roomSwitch: null, roomTemp: null, perRoom: { roomSwitch: [1, 0], roomTemp: [25.5, 26] } })
     expect(summarizeRooms([{ switch: 65536, setTemp: 65536 }])).toEqual({ rooms: 1, roomSwitch: null, roomTemp: null, perRoom: { roomSwitch: [null], roomTemp: [null] } })
     expect(summarizeRooms([])).toEqual({ rooms: 0, roomSwitch: null, roomTemp: null, perRoom: { roomSwitch: [], roomTemp: [] } })
+  })
+
+  it('房间开关未上报（后端 11/25 答复第 1 条）：开关读数一律 null（核对时无法核对），温度照常；-100 无效、0 有效', () => {
+    const s = summarizeRooms([{ switch: 0, setTemp: 26 }, { switch: 1, setTemp: 26 }], { switchReported: false })
+    expect(s).toEqual({ rooms: 2, roomSwitch: null, roomTemp: 26, switchUnreported: true, perRoom: { roomSwitch: [null, null], roomTemp: [26, 26] } })
+    expect(echoMismatches({ systemSwitch: -1, systemMode: 0, roomSwitch: 1, roomTemp: -1 }, s).map((m) => m.kind)).toEqual(['missing'])
+    expect(summarizeRooms([{ switch: 0, setTemp: -100 }], { switchReported: true })).toMatchObject({ roomSwitch: 0, roomTemp: null })
+    // 开关可信时，开关读数不是 0 / 1 按没回报：203 核对记无法核对，不判未变化
+    const odd = summarizeRooms([{ switch: 2, setTemp: 26 }, { switch: 1, setTemp: 26 }], { switchReported: true })
+    expect(odd.perRoom?.roomSwitch).toEqual([null, 1])
+    expect(echoMismatches({ systemSwitch: -1, systemMode: 0, roomSwitch: 0, roomTemp: -1 }, { roomSwitch: null, perRoom: { roomSwitch: [null] } }).map((m) => m.kind)).toEqual(['missing'])
+    expect(echoMismatches({ systemSwitch: -1, systemMode: 0, roomSwitch: 1, roomTemp: -1 }, odd).map((m) => m.kind)).toEqual(['missing'])
   })
 
   it('逐房间温度保留原始读数核对（不先四舍五入）：24.494 与 24.5 差 0.006 算一致', async () => {
@@ -314,18 +327,16 @@ describe('start：逐个下发，三种结果，不重试', () => {
     slow.release()
   })
 
-  it('下发前读到房间都关着、这次又要设温度（没同时开房间）：不发写；同时开房间则照发', async () => {
+  it('下发前读到房间都关着、这次又要设温度：照发（后端 11/25 答复第 16 条，不再拦）；同时开房间也照发', async () => {
     const t = setup([P('a', '1')], { reads: { a: [{ rooms: 2, roomSwitch: 0, roomTemp: 26 }] } })
     t.batch.prepare(['a'], { roomTemp: 24 })
-    const done = await t.batch.start()
-    expect(t.wire).toEqual([])
-    const st = done.rows[0].state
-    expect(st.status === 'failure' && st.outcome).toBe('not-sent')
-    expect(st.status === 'failure' && st.error).toMatch(/房间都关着/)
-    const t2 = setup([P('a', '1')], { reads: { a: [{ rooms: 2, roomSwitch: 0, roomTemp: 26 }] } })
-    t2.batch.prepare(['a'], { roomSwitch: 1, roomTemp: 24 })
+    await t.batch.start()
+    expect(t.wire).toEqual(['a'])
+    // 换一个项目（第一条的写锁要到核对一致或到期才放）
+    const t2 = setup([P('b', '2')], { reads: { b: [{ rooms: 2, roomSwitch: 0, roomTemp: 26 }] } })
+    t2.batch.prepare(['b'], { roomSwitch: 1, roomTemp: 24 })
     await t2.batch.start()
-    expect(t2.wire).toEqual(['a'])
+    expect(t2.wire).toEqual(['b'])
   })
 
   it('确认后强制刷新一次项目列表：最新结果里离线 → 不下发；每批只拉一次', async () => {

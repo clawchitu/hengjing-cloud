@@ -2,14 +2,18 @@
 // 依据：docs/api/ctrl同步消息200-210.md 4.1、docs/plan-v1.md 1.2「房间温控面板」与文末后端答复、改动文档「房间温控面板」。
 // - 65536 = 未初始化 / 无数据（后端答复⑪）→ null，页面隐藏该项；
 // - wind_speed：1–99 为档位，100 为自动（后端答复⑧），其他值（含缺省 0）没有含义 → null；
-// - end_modes 按数量动态显示：is_selected 决定蓝 / 灰，「开 / 关」取该末端自己的 switch（改动文档）；
+// - end_modes 按数量动态显示：is_selected 决定蓝 / 灰，「开 / 关」取该末端自己的 switch（改动文档）；末端 switch 是状态显示，
+//   由控制屏自己控制，前端不能改（后端 11/25 答复第 3 条）；
+// - 房间开关（switch）：后端 11/25 答复第 1 条，控制屏没上报房间状态，200 读到的是默认值 0。features.roomSwitchReported
+//   为 false（默认）时 switchKnown = false：界面显示「未知」，不拿它禁用温度 / 节能，核对开关记无法核对；
 // - set_humi 按改动文档不再显示，这里也不映射；楼层文档无，去掉。
 import type { CtrlQuery, CtrlReply } from '@/api/ctrl'
+import { roomSwitchReported } from '@/api/config'
 import { reading, setting } from '@/api/values'
 
 type RawRoom = CtrlReply<200>['data'][number]
 type RawEndMode = RawRoom['endModes'][number]
-/** 201 里的末端（与 200 同一个 WorkModeData）：下发时把最新读到的原样传回 */
+/** 201 里的末端（与 200 同一个 WorkModeData）：没改末端传空列表；改了末端才把该房间全部末端完整传回 */
 export type WireEndMode = CtrlQuery<201>['endModes'][number]
 
 /** 风速：1–99 档位，100 自动 */
@@ -44,14 +48,16 @@ export interface RoomView {
   windSpeed: number | null
   /** 节能模式：1 节能，0 标准；无数据为 null（不可调） */
   eco: 0 | 1 | null
-  /** 房间开关：只有 switch === 1 才算开 */
+  /** 房间开关：只有 switch === 1 才算开。switchKnown 为 false 时这个值不可信，不要拿来判断 */
   on: boolean
+  /** 房间开关读数是否可信（features.roomSwitchReported；演示数据恒为 true） */
+  switchKnown: boolean
   /** 工作模式名称（制冷 / 制热 / 通风）；未知为空串 */
   mode: string
   endModes: EndMode[]
   /**
-   * 200 读到的末端原始数据（完整 WorkModeData），201 下发时原样传回（11/24 群里决定：不传空列表）。
-   * 为空表示没读到末端，不允许下发
+   * 200 读到的末端原始数据（完整 WorkModeData）。201 只有在改了末端时才用它组装完整的末端列表（后端 11/25 答复第 3 条）；
+   * 没改末端传空列表，所以读不到末端（为空）不影响下发
    */
   wireEndModes: WireEndMode[]
   /** 面板是否连接 */
@@ -69,10 +75,9 @@ export function windOf(v: unknown): number | null {
 /** 风速显示：「3 档」「自动」「--」 */
 export const windLabel = (v: number | null) => (v === null ? '--' : v === WIND_AUTO ? '自动' : `${v} 档`)
 
-/** 设定温度：65536、-1 视为没有设定值；0（proto3 缺省，即控制屏没给）也按没有处理 */
+/** 设定温度：65536（未初始化）、-100（无效数据）、-1 视为没有设定值；0 是有效读数（后端 11/25 答复第 9 条） */
 function setTempOf(v: unknown): number | null {
-  const s = setting(finite(v) ? v : null)
-  return s !== null && s > 0 ? s : null
+  return setting(finite(v) ? v : null)
 }
 
 const ecoOf =(v: unknown): 0 | 1 | null => (v === 1 ? 1 : v === 0 ? 0 : null)
@@ -81,8 +86,13 @@ function toEndMode(m: RawEndMode): EndMode {
   return { name: m.optionName || END_MODE_TYPES[m.type] || '末端', type: m.type, selected: m.isSelected === true, on: m.switch === 1 }
 }
 
+export interface RoomViewOpts {
+  /** 房间开关是否可信；默认取 roomSwitchReported() */
+  switchReported?: boolean
+}
+
 /** ctrl 200 的一条房间 → RoomView */
-export function toRoomView(r: RawRoom): RoomView {
+export function toRoomView(r: RawRoom, opts: RoomViewOpts = {}): RoomView {
   return {
     key: String(r.id),
     equipmentId: r.id,
@@ -94,6 +104,8 @@ export function toRoomView(r: RawRoom): RoomView {
     windSpeed: windOf(r.windSpeed),
     eco: ecoOf(r.eco),
     on: r.switch === 1,
+    // 开关读数只有 0 / 1 才可信（-100、65536 等无效读数不能当成「关」）
+    switchKnown: (opts.switchReported ?? roomSwitchReported()) && (r.switch === 0 || r.switch === 1),
     mode: ROOM_MODES[r.mode] ?? '',
     endModes: (r.endModes ?? []).map(toEndMode),
     wireEndModes: (r.endModes ?? []).map((m) => ({ optionName: m.optionName, type: m.type, isSelected: m.isSelected, isChange: m.isChange, switch: m.switch })),
@@ -102,9 +114,13 @@ export function toRoomView(r: RawRoom): RoomView {
 }
 
 /** 整个 200 回复 → 房间列表（设备 ID 无效的丢弃，避免拿 0 去下发） */
-export function toRoomViews(reply: CtrlReply<200>): RoomView[] {
-  return (reply.data ?? []).filter((r) => Number.isSafeInteger(r.id) && r.id > 0).map(toRoomView)
+export function toRoomViews(reply: CtrlReply<200>, opts: RoomViewOpts = {}): RoomView[] {
+  const o = { switchReported: opts.switchReported ?? roomSwitchReported() }
+  return (reply.data ?? []).filter((r) => Number.isSafeInteger(r.id) && r.id > 0).map((r) => toRoomView(r, o))
 }
+
+/** 房间是否确定关着：开关读数可信且为关。开关未知时一律 false（不拿它禁用任何操作） */
+export const knownOff = (r: Pick<RoomView, 'on' | 'switchKnown'>) => r.switchKnown && !r.on
 
 /** 设备 ID 能可靠标识一个房间：正的安全整数（0 是 proto3 缺省，不是真实 ID） */
 export const validRoomId = (id: unknown): id is number => typeof id === 'number' && Number.isSafeInteger(id) && id > 0
@@ -141,9 +157,10 @@ export function roomTargetIssue(reply: Pick<CtrlReply<200>, 'data'>, equipmentId
 export interface RoomSummary {
   total: number
   connected: number
-  on: number
+  /** 已开启的房间数；有房间开关未知时为 null（界面显示 --） */
+  on: number | null
   eco: number
-  /** 已开启房间的平均室温；没有有效读数为 null */
+  /** 已开启房间的平均室温（开关未知时按全部房间）；没有有效读数为 null */
   avgTemp: number | null
   avgHumidity: number | null
   avgDew: number | null
@@ -155,11 +172,12 @@ const avg = (xs: (number | null)[]) => {
 }
 
 export function summarize(rooms: readonly RoomView[]): RoomSummary {
-  const on = rooms.filter((r) => r.on)
+  const known = rooms.every((r) => r.switchKnown)
+  const on = known ? rooms.filter((r) => r.on) : rooms
   return {
     total: rooms.length,
     connected: rooms.filter((r) => r.connected).length,
-    on: on.length,
+    on: known ? on.length : null,
     eco: on.filter((r) => r.eco === 1).length,
     avgTemp: avg(on.map((r) => r.temp)),
     avgHumidity: avg(rooms.map((r) => r.humidity)),

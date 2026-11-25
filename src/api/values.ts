@@ -1,25 +1,24 @@
 // 后端特殊取值的处理工具。
 // - 设置接口（201、203、204、206）里不修改的字段一律传 -1（后端 11/24 答复）；
 //   203 的 system_mode 是枚举，「不变」是 0（OPERATION_MODE_NONE）。
-// - 设备读数 65536 表示无数据（设备字段 2 字节最大 65535，65536 = 未初始化）→ 隐藏该项。
-// - 小时统计（208/209）里 -100 是无效数据；210 的露点/设定湿度 -1 显示 --。
+// - 设备读数 65536 表示无数据（设备字段 2 字节最大 65535，65536 = 未初始化，后端 11/24 答复⑪）→ 隐藏该项。
+// - -100 是无效数据（proto 207/208 字段注释；后端 11/25 答复第 9 条：「0 是有效数据，-100 才是无效数据」），所有读数一样处理。
+//   0 是有效读数，不能当成「没有数据」。
+// - 210 的露点 / 设定湿度 / 控制类型读到 -1：这一项不能设置（后端 11/25 答复第 5 条），显示 --。
 
 export const UNCHANGED = -1
 export const NO_DATA = 65536
 export const INVALID_HOURLY = -100
 export const PLACEHOLDER = '--'
 
-/** 设备读数：65536、NaN、缺失 → null（页面据此隐藏该项） */
+/** 设备读数：65536（未初始化）、-100（无效数据）、NaN、缺失 → null（页面据此隐藏该项）；0 是有效读数 */
 export function reading(v: number | null | undefined): number | null {
-  if (v === null || v === undefined || !Number.isFinite(v) || v === NO_DATA) return null
+  if (v === null || v === undefined || !Number.isFinite(v) || v === NO_DATA || v === INVALID_HOURLY) return null
   return v
 }
 
-/** 小时统计值：额外把 -100 视为无效 */
-export function hourlyReading(v: number | null | undefined): number | null {
-  const r = reading(v)
-  return r === INVALID_HOURLY ? null : r
-}
+/** 小时统计值：与 reading 同一口径（-100 现在对所有读数都是无效），保留这个名字给统计代码用 */
+export const hourlyReading = reading
 
 /** 设定值：-1 表示不可用/未设置 → null */
 export function setting(v: number | null | undefined): number | null {

@@ -5,7 +5,7 @@ import { match201, match206, record201, record206, roomsAsReply } from '../lockV
 import type { RoomView } from '../model'
 
 const room = (o: Partial<RoomView> = {}): RoomView => ({
-  key: '7', equipmentId: 7, name: '客厅', temp: 25, humidity: 50, dew: 14, setTemp: 25.5, windSpeed: 3, eco: 0, on: true, mode: '制冷',
+  key: '7', equipmentId: 7, name: '客厅', temp: 25, humidity: 50, dew: 14, setTemp: 25.5, windSpeed: 3, eco: 0, on: true, switchKnown: true, mode: '制冷',
   endModes: [], wireEndModes: [], connected: true, ...o,
 })
 const raw = (...rs: RoomView[]) => roomsAsReply(rs)

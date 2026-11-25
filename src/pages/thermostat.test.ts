@@ -45,6 +45,8 @@ const P12 = { id: 'p12', code: '260911001', name: '独立空气系统测试', ap
 const POFF = { id: 'poff', code: '221031001', name: '科希家办公室', app_code: '1', app_name: '通用版' }
 const GROUPS = [{ id: 'g1', code: '2', name: '五恒集成项目', distributor_id: 'D1', project_ids: [P1.id, P2.id, P12.id, POFF.id] }]
 
+/** 现有用例按房间开关可信写（roomSwitchReported = true）；开关未上报的情况单独一组 */
+const SW = { roomSwitchReported: true }
 const ENDS = [
   { optionName: '风盘', type: 0, isSelected: true, isChange: true, switch: 1 },
   { optionName: '顶辐射', type: 1, isSelected: true, isChange: true, switch: 0 },
@@ -158,7 +160,7 @@ beforeEach(() => {
   toastLog = []
   rooms = [ROOM, OFF_ROOM]
   for (const k of ['success', 'error'] as const) vi.spyOn(sonner, k).mockImplementation((m) => { toastLog.push(String(m)); return 0 })
-  setConfig({ apiBase: '/api', apiEnv: 'test', dataSource: 'real' })
+  setConfig({ apiBase: '/api', apiEnv: 'test', dataSource: 'real', features: SW })
   localStorage.clear(); sessionStorage.clear()
   __resetHttpForTests(); __resetSessionForTests(); __resetSessionViewForTests(); __resetCurrentForTests(); __resetWritesForTests(); __resetWriteLockForTests(); clearTokens()
 })
@@ -210,7 +212,7 @@ describe('读取（ctrl 200）', () => {
 })
 
 describe('修改设定温度与节能（ctrl 201）', () => {
-  it('− / + 只改草稿；下发 → 确认（含项目编号）→ 只发一条 201：温度是真实值，其余 -1，end_modes 是最新读数原样；success 才提示成功并回读', async () => {
+  it('− / + 只改草稿；下发 → 确认（含项目编号）→ 只发一条 201：温度是真实值，其余 -1，end_modes 没改传空列表；success 才提示成功并回读', async () => {
     const be = backend({ '/ctrl/room-temperature-set': ok201 })
     const c = await openRooms()
     fireEvent.click(btn(c, '客厅 设定温度降低'))
@@ -222,7 +224,7 @@ describe('修改设定温度与节能（ctrl 201）', () => {
     const reads = be.callsTo('/ctrl/room-temperature-data-get').length
     fireEvent.click(btn(c, '下发'))
     const dlg = await dialog()
-    for (const t of ['测试项目0829', '240829001', '客厅', '设定温度 25.5 → 24.5°C']) expect(dlg.textContent).toContain(t)
+    for (const t of ['测试项目0829', '240829001', '客厅', '设定温度 25.5 → 24.5°C', '设置温度不会开启房间，房间开启后按此温度运行']) expect(dlg.textContent).toContain(t)
     expect(writes(be)).toHaveLength(0)
     fireEvent.click(within(dlg).getByRole('button', { name: '确认下发' }))
     await waitFor(() => expect(toasts()).toContain('客厅 已生效：设定温度 24.5°C'))
@@ -230,39 +232,31 @@ describe('修改设定温度与节能（ctrl 201）', () => {
     expect(w).toHaveLength(1)
     expect(w[0].url).toBe('/api/ctrl/room-temperature-set')
     expect((w[0].body as { project_id: string }).project_id).toBe(P1.id)
-    expect(body201(w[0])).toEqual({ equipmentId: 406658286, temperature: 24.5, humidity: -1, windSpeed: -1, eco: -1, switch: -1, endModes: ENDS })
+    expect(body201(w[0])).toEqual({ equipmentId: 406658286, temperature: 24.5, humidity: -1, windSpeed: -1, eco: -1, switch: -1, endModes: [] })
     await waitFor(() => expect(be.callsTo('/ctrl/room-temperature-data-get').length).toBeGreaterThan(reads))
     await waitFor(() => expect(card('客厅').textContent).not.toContain('待下发'))
   })
 
-  it('end_modes 取确认后重新核对时的最新读数：确认期间轮询读到同样的末端 → 照发且等于最新读数；末端变了 → 不下发', async () => {
+  it('end_modes 没改就传空列表（后端 11/25 答复第 3 条）：确认期间末端读数变了（含末端 switch）也照发，末端仍是空列表', async () => {
     const be = backend({ '/ctrl/room-temperature-set': ok201 })
-    await draftAndSend()
-    const latestEnds = ENDS.map((m) => ({ ...m }))
-    await poll([{ ...ROOM, endModes: latestEnds }, OFF_ROOM])
-    await confirmOk()
-    await waitFor(() => expect(writes(be)).toHaveLength(1))
-    expect(body201(writes(be)[0]).endModes).toEqual(latestEnds)
-
-    cleanup(); __resetWritesForTests(); toastLog = []; rooms = [ROOM, OFF_ROOM]
-    __resetCurrentForTests(); __resetSessionForTests(); __resetSessionViewForTests()
-    const be2 = backend({ '/ctrl/room-temperature-set': ok201 })
     await draftAndSend()
     await poll([{ ...ROOM, endModes: [{ ...ENDS[0], switch: 0 }, ENDS[1], ENDS[2]] }, OFF_ROOM])
     await confirmOk()
-    await flush(50)
-    expect(writes(be2)).toHaveLength(0)
-    expect(toasts()).toContain('本次未下发')
+    await waitFor(() => expect(writes(be)).toHaveLength(1))
+    expect(body201(writes(be)[0]).endModes).toEqual([])
   })
 
-  it('读不到末端（end_modes 为空）：温度、节能、开关都禁用，不能下发', async () => {
+  it('读不到末端（end_modes 为空）：照常能改温度、节能和开关，下发时末端传空列表', async () => {
     rooms = [{ ...ROOM, endModes: [] }]
-    const be = backend()
+    const be = backend({ '/ctrl/room-temperature-set': ok201 })
     const c = await openRooms()
-    for (const n of ['客厅 设定温度降低', '客厅 设定温度升高']) expect(btn(c, n).disabled).toBe(true)
-    expect(btn(c, '客厅 设定温度升高').title).toContain('末端')
-    for (const n of ['客厅 节能模式', '客厅 开关']) expect((within(c).getByRole('switch', { name: n }) as HTMLButtonElement).disabled).toBe(true)
-    expect(writes(be)).toHaveLength(0)
+    for (const n of ['客厅 设定温度降低', '客厅 设定温度升高']) expect(btn(c, n).disabled).toBe(false)
+    for (const n of ['客厅 节能模式', '客厅 开关']) expect((within(c).getByRole('switch', { name: n }) as HTMLButtonElement).disabled).toBe(false)
+    fireEvent.click(btn(c, '客厅 设定温度升高'))
+    fireEvent.click(btn(c, '下发'))
+    await confirmOk()
+    await waitFor(() => expect(writes(be)).toHaveLength(1))
+    expect(body201(writes(be)[0])).toMatchObject({ temperature: 26, endModes: [] })
   })
 
   it('最近一次读取失败（有旧数据）：不能下发', async () => {
@@ -294,7 +288,7 @@ describe('修改设定温度与节能（ctrl 201）', () => {
     fireEvent.click(btn(c, '下发'))
     await confirmOk()
     await waitFor(() => expect(writes(be)).toHaveLength(1))
-    expect(body201(writes(be)[0])).toEqual({ equipmentId: 406658286, temperature: -1, humidity: -1, windSpeed: -1, eco: 1, switch: -1, endModes: ENDS })
+    expect(body201(writes(be)[0])).toEqual({ equipmentId: 406658286, temperature: -1, humidity: -1, windSpeed: -1, eco: 1, switch: -1, endModes: [] })
     await waitFor(() => expect(toasts()).toContain('节能模式 开'))
   })
 
@@ -413,12 +407,12 @@ describe('确认：取消 / 离开 / 切项目 / 确认期间状态变化', () =
     expect(toasts()).toContain('本次未下发')
   })
 
-  it('房间开关：确认期间末端变了 → 不下发（用的是最新读数，不是弹窗前的）', async () => {
+  it('房间开关：确认期间读到的房间开关变了 → 不下发（用的是最新读数，不是弹窗前的）', async () => {
     const be = backend({ '/ctrl/room-temperature-set': ok201 })
     const c = await openRooms()
     fireEvent.click(within(c).getByRole('switch', { name: '客厅 开关' }))
     await dialog()
-    await poll([{ ...ROOM, endModes: [ENDS[0]] }, OFF_ROOM])
+    await poll([{ ...ROOM, switch: 0 }, OFF_ROOM])
     fireEvent.click(rawButton('确认下发'))
     await flush(50)
     expect(writes(be)).toHaveLength(0)
@@ -601,7 +595,7 @@ describe('结果：失败、结果未知与回读', () => {
 
   it('写防护拦截（code 不在名单 / writeMode=off / 生产环境）：写请求 0，提示未下发', async () => {
     for (const cfg of [{ writeProjectCodes: ['260911001'] }, { writeMode: 'off' as const }, { apiEnv: 'prod' as const }]) {
-      setConfig({ apiBase: '/api', apiEnv: 'test', dataSource: 'real', ...cfg })
+      setConfig({ apiBase: '/api', apiEnv: 'test', dataSource: 'real', features: SW, ...cfg })
       const be = backend({ '/ctrl/room-temperature-set': ok201 })
       await draftAndSend()
       await confirmOk()
@@ -628,7 +622,7 @@ describe('房间开关（201 switch）与全部开关（206）', () => {
     expect(dlg.textContent).toContain('240829001')
     fireEvent.click(within(dlg).getByRole('button', { name: '确认下发' }))
     await waitFor(() => expect(writes(be)).toHaveLength(1))
-    expect(body201(writes(be)[0])).toEqual({ equipmentId: 406658286, temperature: -1, humidity: -1, windSpeed: -1, eco: -1, switch: 0, endModes: ENDS })
+    expect(body201(writes(be)[0])).toEqual({ equipmentId: 406658286, temperature: -1, humidity: -1, windSpeed: -1, eco: -1, switch: 0, endModes: [] })
     await waitFor(() => expect(toasts()).toContain('客厅 已关闭'))
   })
 
@@ -673,7 +667,7 @@ const is200 = (c: Call) => c.url.endsWith('/ctrl/room-temperature-data-get')
 const is201 = (c: Call) => c.url.endsWith('/ctrl/room-temperature-set')
 
 describe('下发状态机：确认后新读、写后新读、会话、期限', () => {
-  it('确认后不等轮询：先新发一次 200，再用这份读数组装 201（末端等于这次新读数）', async () => {
+  it('确认后不等轮询：先新发一次 200，再用这份读数组装 201（末端没改，传空列表）', async () => {
     const be = backend({ '/ctrl/room-temperature-set': ok201 })
     await draftAndSend()
     const before = be.callsTo('/ctrl/room-temperature-data-get').length
@@ -685,11 +679,11 @@ describe('下发状态机：确认后新读、写后新读、会话、期限', (
     const w = order(be, is201)[0]
     expect(be.callsTo('/ctrl/room-temperature-data-get').length).toBeGreaterThan(before)
     expect(reads.some((i) => i > reads[before - 1] && i < w)).toBe(true) // 确认之后、201 之前有一次新的 200
-    expect(body201(writes(be)[0]).endModes).toEqual(ENDS)
+    expect(body201(writes(be)[0]).endModes).toEqual([])
   })
 
-  it('确认后不等轮询：设备的末端 / 开关已变 → 新读到后取消，不写', async () => {
-    for (const next of [{ ...ROOM, endModes: [ENDS[0]] }, { ...ROOM, switch: 0 }, { ...ROOM, isConnected: false }]) {
+  it('确认后不等轮询：设备的设定值 / 开关 / 连接已变 → 新读到后取消，不写', async () => {
+    for (const next of [{ ...ROOM, setTemp: 24 }, { ...ROOM, switch: 0 }, { ...ROOM, isConnected: false }]) {
       const be = backend({ '/ctrl/room-temperature-set': ok201 })
       await draftAndSend()
       rooms = [next, OFF_ROOM]
@@ -748,7 +742,7 @@ describe('下发状态机：确认后新读、写后新读、会话、期限', (
     await waitFor(() => expect(writes(be)).toHaveLength(2))
   })
   it('http 层超时会中止底层请求（AbortController），原写因此结算：超时后核对一致即可解锁', async () => {
-    setConfig({ apiBase: '/api', apiEnv: 'test', dataSource: 'real', ctrlTimeoutMs: 100 })
+    setConfig({ apiBase: '/api', apiEnv: 'test', dataSource: 'real', features: SW, ctrlTimeoutMs: 100 })
     let aborted = false
     const be = backend()
     const orig = be.fetchMock.getMockImplementation()!
@@ -1021,13 +1015,13 @@ describe('#35 评审修正', () => {
   it('未发出（确认后预检不一致）：草稿解冻，照常整理（之后同屏别的项目在下发，也不按冻结对待）', async () => {
     const be = backend({ '/ctrl/room-temperature-set': ok201 })
     await draftAndSend()
-    rooms = [{ ...ROOM, endModes: [ENDS[0]] }, OFF_ROOM] // 末端变了：预检不一致，不写
+    rooms = [{ ...ROOM, setTemp: 24 }, OFF_ROOM] // 设定值在外部变了：预检不一致，不写
     await confirmOk()
     await waitFor(() => expect(toasts()).toContain('本次未下发'))
     expect(writes(be)).toHaveLength(0)
     const other = acquireLock({ id: P2.id, controlScreenId: P2.control_screen_id }, '另一个项目')
     expect(other.ok).toBe(true)
-    await poll([{ ...ROOM, endModes: [ENDS[0]], switch: 0 }, OFF_ROOM])
+    await poll([{ ...ROOM, setTemp: 24, switch: 0 }, OFF_ROOM])
     expect(toasts()).toContain('未下发的修改已清除')
     act(() => { if (other.ok) releaseLock(other.token) })
   })
@@ -1216,7 +1210,7 @@ describe('#35 第四轮：重新下发没发出（写防护 / 503 code 14 / 认�
     expect(writes(be)).toHaveLength(2)
   })
   it('写防护拦截（项目不在写入名单）', async () => {
-    const be = await expiredThenRetry(() => ok201(), () => setConfig({ apiBase: '/api', apiEnv: 'test', dataSource: 'real', writeProjectCodes: ['999999999'] }))
+    const be = await expiredThenRetry(() => ok201(), () => setConfig({ apiBase: '/api', apiEnv: 'test', dataSource: 'real', features: SW, writeProjectCodes: ['999999999'] }))
     expect(writes(be)).toHaveLength(1)
   })
   it('认领前断网（写入口在 beforeSend 之前就出错，如发送前续期断网）', async () => {
@@ -1459,3 +1453,52 @@ describe('#35 第七轮（Fable 裁定）：latest() 通过后、commit 前发�
   })
 })
 
+
+describe('房间开关未上报（features.roomSwitchReported = false，后端 11/25 答复第 1 条）', () => {
+  beforeEach(() => { setConfig({ apiBase: '/api', apiEnv: 'test', dataSource: 'real', features: { roomSwitchReported: false } }) })
+
+  it('开关显示「开关未知」，开 / 关各一个按钮；读到 0 的房间不置灰，温度、节能照常能改；KPI 已开启房间为 --', async () => {
+    backend()
+    await open()
+    await screen.findByText('主卧')
+    const c = card('主卧') // 读到 switch = 0
+    expect(c.textContent).toContain('开关未知')
+    expect(c.textContent).not.toContain('已关闭')
+    expect(c.className).not.toContain(' off')
+    expect(within(c).queryByRole('switch', { name: '主卧 开关' })).toBeNull()
+    expect(btn(c, '主卧 开启').disabled).toBe(false)
+    expect(btn(c, '主卧 关闭').disabled).toBe(false)
+    expect(btn(c, '主卧 设定温度升高').disabled).toBe(false)
+    expect((within(c).getByRole('switch', { name: '主卧 节能模式' }) as HTMLButtonElement).disabled).toBe(false)
+    expect(document.body.textContent).toContain('房间开关未上报')
+  })
+
+  it('读到 0 的房间改温度：照常下发 201（switch -1，末端空列表），确认框写明「设置温度不会开启房间」', async () => {
+    const be = backend({ '/ctrl/room-temperature-set': ok201 })
+    await open()
+    await screen.findByText('主卧')
+    fireEvent.click(btn(card('主卧'), '主卧 设定温度降低'))
+    fireEvent.click(btn(card('主卧'), '下发'))
+    const dlg = await dialog()
+    expect(dlg.textContent).toContain('设置温度不会开启房间，房间开启后按此温度运行')
+    fireEvent.click(within(dlg).getByRole('button', { name: '确认下发' }))
+    await waitFor(() => expect(writes(be)).toHaveLength(1))
+    expect(body201(writes(be)[0])).toEqual({ equipmentId: 406658291, temperature: 25.5, humidity: -1, windSpeed: -1, eco: -1, switch: -1, endModes: [] })
+  })
+
+  it('点「开」：确认后发 201 switch = 1；回读读到 0 也不判「未变化」，记无法核对、锁保持', async () => {
+    const be = backend({ '/ctrl/room-temperature-set': ok201NoApply })
+    await open()
+    await screen.findByText('主卧')
+    fireEvent.click(btn(card('主卧'), '主卧 开启'))
+    const dlg = await dialog()
+    expect(dlg.textContent).toContain('「主卧」下发「开启」')
+    fireEvent.click(within(dlg).getByRole('button', { name: '确认下发' }))
+    await waitFor(() => expect(writes(be)).toHaveLength(1))
+    expect(body201(writes(be)[0])).toMatchObject({ switch: 1, temperature: -1, eco: -1, endModes: [] })
+    await waitFor(() => expect(card('主卧').textContent).toContain('该项暂无回读，无法确认'))
+    expect(card('主卧').textContent).toContain('设备暂不回报开关状态，2 分钟后可再次操作')
+    expect(card('主卧').textContent).not.toContain('设备状态暂未变化')
+    expect(toasts()).not.toContain('已生效')
+  })
+})

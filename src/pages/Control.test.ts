@@ -115,7 +115,7 @@ async function expectTempLocked() {
 
 beforeEach(() => {
   __resetWriteLockForTests()
-  setConfig({ apiBase: '/api', dataSource: 'real', apiEnv: 'test' })
+  setConfig({ apiBase: '/api', dataSource: 'real', apiEnv: 'test', features: { roomSwitchReported: true } })
   localStorage.clear(); sessionStorage.clear()
   __resetHttpForTests(); __resetSessionForTests(); __resetSessionViewForTests(); __resetCurrentForTests(); clearTokens()
   vi.spyOn(console, 'info').mockImplementation(() => {})
@@ -149,14 +149,14 @@ describe('温度区', () => {
     await press('ArrowRight'); expect(shown()).toBe('16.5°C')
   })
 
-  it('选「全部关闭」房间时温度设定不可用', async () => {
+  it('选「全部关闭」房间时温度照常可设，提示「房间开启后生效」（后端 11/25 答复第 16 条）', async () => {
     backend()
     await mount()
     await click(keep())
     await click(screen.getByRole('button', { name: '全部关闭' }))
-    expect(screen.getByText('关闭房间时不能同时设定温度')).toBeTruthy()
-    expect(keep().hasAttribute('disabled')).toBe(true)
-    expect(screen.getByTestId('temp-box').hasAttribute('disabled')).toBe(true)
+    expect(screen.getByText('房间将被关闭，设定的温度房间开启后生效')).toBeTruthy()
+    expect(keep().hasAttribute('disabled')).toBe(false)
+    expect(screen.getByTestId('temp-box').hasAttribute('disabled')).toBe(false)
   })
 
   it.each([['独立空气系统', '12'], ['空气单机', '8']])('app_code（%s，%s）：温度设定禁用，键盘也改不了；房间开关仍可用', async (group) => {
@@ -210,6 +210,7 @@ describe('下发', () => {
     expect(dlg.textContent).toContain('测试项目0829（240829001）')
     expect(dlg.textContent).toContain('房间开关开启')
     expect(dlg.textContent).toContain('房间温度26.5°C')
+    expect(dlg.textContent).toContain('设置温度不会开启房间，房间开启后按此温度运行')
     expect(be.callsTo('/ctrl/unified-ctrl-set')).toHaveLength(0) // 确认前不发
     const r0 = reads(be)
     await click(okIn(dlg))
@@ -561,7 +562,7 @@ describe('写锁（页面）', () => {
     const CF = await import('../api/config')
     const RR = await import('react-router-dom')
     const RQ = await import('@tanstack/react-query')
-    CF.setConfig({ apiBase: '/api', dataSource: 'real', apiEnv: 'test' })
+    CF.setConfig({ apiBase: '/api', dataSource: 'real', apiEnv: 'test', features: { roomSwitchReported: true } })
     await SS.signIn('d', 'pw', true)
     render(createElement(RQ.QueryClientProvider, { client: Q.createQueryClient() }, createElement(S.AppProvider, null,
       createElement(RR.MemoryRouter, { initialEntries: ['/control'] }, createElement(RR.Routes, null, createElement(RR.Route, { path: '/control', element: createElement(C) }))))))
@@ -587,18 +588,43 @@ describe('写锁（页面）', () => {
   })
 })
 
-describe('房间都关着', () => {
-  it('已选项目的房间全部关着：温度设定禁用并提示；同时选「全部开启」才可设温度', async () => {
+describe('房间都关着（后端 11/25 答复第 16 条：温度照样生效，房间开启后按此温度运行）', () => {
+  it('开关可信时：已选项目的房间全部关着 → 温度照常可设，提示「房间开启后生效」；选「全部开启」后提示消失；选「全部关闭」也能设温度', async () => {
+    setConfig({ apiBase: '/api', dataSource: 'real', apiEnv: 'test', features: { roomSwitchReported: true } })
     backend({ '/ctrl/room-temperature-data-get': () => rooms(0, 26) })
     await mount()
     await click(keep())
     await click(screen.getByText('测试项目0829'))
-    expect(await screen.findByText(/房间都关着（测试项目0829）/)).toBeTruthy()
-    expect(keep().hasAttribute('disabled')).toBe(true)
-    await expectTempLocked()
+    expect(await screen.findByText(/房间都关着（测试项目0829），设定的温度房间开启后生效/)).toBeTruthy()
+    expect(keep().hasAttribute('disabled')).toBe(false)
+    expect(screen.getByTestId('temp-box').hasAttribute('disabled')).toBe(false)
     await click(screen.getByRole('button', { name: '全部开启' }))
+    expect(screen.queryByTestId('temp-room-note')).toBeNull()
+    await click(screen.getByRole('button', { name: '全部关闭' }))
+    expect(screen.getByTestId('temp-room-note').textContent).toContain('房间将被关闭，设定的温度房间开启后生效')
+    expect(screen.getByTestId('temp-box').hasAttribute('disabled')).toBe(false)
+  })
+
+  it('开关未上报（默认）：不读 200 判断房间状态，不禁用也不提示房间状态', async () => {
+    setConfig({ apiBase: '/api', dataSource: 'real', apiEnv: 'test' })
+    const be = backend({ '/ctrl/room-temperature-data-get': () => rooms(0, 26) })
+    await mount()
+    await click(keep())
+    await click(screen.getByText('测试项目0829'))
+    await act(async () => { await new Promise((r) => setTimeout(r, 30)) })
     expect(screen.queryByText(/房间都关着/)).toBeNull()
     expect(screen.getByTestId('temp-box').hasAttribute('disabled')).toBe(false)
+    expect(be.callsTo('/ctrl/room-temperature-data-get')).toHaveLength(0)
+    expect(screen.queryByTestId('switch-unreported-note')).toBeNull()
+    await click(screen.getByRole('button', { name: '全部开启' }))
+    expect(screen.getByTestId('switch-unreported-note').textContent).toContain('设备暂不回报开关状态，2 分钟后可再次操作')
+  })
+
+  it('温度「保持不变」时不给「房间开启后生效」的提示（只关房间不设温度）', async () => {
+    backend()
+    await mount()
+    await click(screen.getByRole('button', { name: '全部关闭' }))
+    expect(screen.queryByTestId('temp-room-note')).toBeNull()
   })
 
   it('房间开着：温度可设', async () => {

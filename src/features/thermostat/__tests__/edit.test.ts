@@ -1,11 +1,11 @@
 // 温度边界与步长、不能设置的情况、节能锁温度、草稿生命周期、201 Query 组装
-// （只发改了的标量、不改的 -1、end_modes 用最新读数原样传回、读不到末端不下发）、下发结果分类。
+// （只发改了的标量、不改的 -1、end_modes 没改传空列表 / 改了完整回传、读不到末端照常下发）、房间开关未上报、下发结果分类。
 import { describe, expect, it } from 'vitest'
 import { decodeReply, encodeMessage } from '@/api/ctrl'
 import { ApiError } from '@/api/errors'
 import * as pb from '@/api/gen/ctrl200_pb.js'
 import {
-  buildRoomSet, buildRoomSwitch, canStep, describeChanges, describeResult, draftChanges, editBlock, editDraft, newDraft, reconcileDraft,
+  buildRoomSet, buildRoomSwitch, canStep, describeChanges, describeResult, draftChanges, editBlock, editDraft, endModesFor, newDraft, reconcileDraft,
   resolveTempRange, stepTemp, switchBlock, tempBlock, type RoomDraft,
 } from '../edit'
 import { classify } from '../writes'
@@ -19,9 +19,9 @@ const ENDS = [
 ]
 const room = (o: Partial<RoomView> = {}): RoomView => ({
   key: '406658286', equipmentId: 406658286, name: '客厅', temp: 25.8, humidity: 51, dew: 14.9, setTemp: 25.5, windSpeed: 3, eco: 0,
-  on: true, mode: '制冷', endModes: [], wireEndModes: ENDS, connected: true, ...o,
+  on: true, switchKnown: true, mode: '制冷', endModes: [], wireEndModes: ENDS, connected: true, ...o,
 })
-const draft = (o: Partial<RoomDraft> = {}): RoomDraft => ({ key: '406658286', base: { setTemp: 25.5, eco: 0 }, ...o })
+const draft = (o: Partial<RoomDraft> = {}): RoomDraft => ({ key: '406658286', base: { setTemp: 25.5, eco: 0, ends: [true, true] }, ...o })
 /** 201 Query 编码后再按 proto 解码（下发到线上的就是这些值） */
 const wire = (q: object) => decodeReply(pb.RoomTemperatureSetQuerySchema, encodeMessage(pb.RoomTemperatureSetQuerySchema, q))
 const q = (b: ReturnType<typeof buildRoomSet>) => { if (!b.ok) throw new Error(b.reason); return b.query }
@@ -73,12 +73,20 @@ describe('不能设置的情况', () => {
     expect(switchBlock(room({ connected: false }), OK)).toMatch(/面板离线/)
     expect(buildRoomSwitch(room(), true, { online: true, fresh: false }).ok).toBe(false)
   })
-  it('读不到末端（end_modes 为空 / 缺失）：设置和开关都不能下发，永远不传空列表', () => {
+  it('读不到末端（end_modes 为空 / 缺失）：照常能设置、能开关，末端传空列表（后端 11/25 答复第 3 条）', () => {
     const r = room({ wireEndModes: [] })
-    expect(editBlock(r, OK)).toMatch(/末端/)
-    expect(switchBlock(r, OK)).toMatch(/末端/)
-    expect(buildRoomSet(r, draft({ temp: 24 }), OK, R)).toMatchObject({ ok: false, reason: expect.stringMatching(/末端/) })
-    expect(buildRoomSwitch(r, false, OK)).toMatchObject({ ok: false, reason: expect.stringMatching(/末端/) })
+    expect(editBlock(r, OK)).toBeNull()
+    expect(switchBlock(r, OK)).toBeNull()
+    expect(q(buildRoomSet(r, draft({ temp: 24 }), OK, R)).endModes).toEqual([])
+    expect(q(buildRoomSwitch(r, false, OK)).endModes).toEqual([])
+  })
+  it('房间开关未上报（switchKnown = false）：读到 0 也不当作关着，温度、节能照常能改', () => {
+    const r = room({ on: false, switchKnown: false })
+    expect(editBlock(r, OK)).toBeNull()
+    expect(q(buildRoomSet(r, draft({ temp: 24 }), OK, R))).toMatchObject({ temperature: 24, switch: -1, endModes: [] })
+    expect(reconcileDraft(draft({ temp: 24 }), r, OK).draft).not.toBeNull()
+    // 其他前提照旧
+    expect(editBlock({ ...r, connected: false }, OK)).toMatch(/面板离线/)
   })
   it('没有改动、草稿是别的房间的、温度不合法：不给 Query', () => {
     expect(buildRoomSet(room(), draft({ temp: 25.5, eco: 0 }), OK, R)).toMatchObject({ ok: false, reason: '没有需要下发的修改' })
@@ -139,37 +147,70 @@ describe('草稿生命周期（回读后整理）', () => {
     expect(reconcileDraft(d, room(), OK).draft).toBe(d)
   })
   it('新草稿记下开始编辑时的面板值作为基准', () => {
-    expect(newDraft(room({ setTemp: 22, eco: 1 })).base).toEqual({ setTemp: 22, eco: 1 })
+    expect(newDraft(room({ setTemp: 22, eco: 1 })).base).toEqual({ setTemp: 22, eco: 1, ends: [true, true] })
   })
 })
 
-describe('201 Query：只发改了的标量，其余 -1，end_modes 用这份读数原样传回', () => {
-  it('只改温度', () => {
+describe('201 Query：只发改了的标量，其余 -1；end_modes 没改传空列表，改了完整回传', () => {
+  it('只改温度：末端没改，传空列表（不再原样回传读到的末端）', () => {
     const x = q(buildRoomSet(room(), draft({ temp: 24.5 }), OK, R))
-    const want = { equipmentId: 406658286, temperature: 24.5, humidity: -1, windSpeed: -1, eco: -1, switch: -1, endModes: ENDS }
+    const want = { equipmentId: 406658286, temperature: 24.5, humidity: -1, windSpeed: -1, eco: -1, switch: -1, endModes: [] }
     expect(x).toEqual(want)
     expect(wire(x)).toEqual(want)
   })
   it('只改节能（标准 → 节能、节能 → 标准；0 要真的发成 0，不是 -1）', () => {
-    expect(q(buildRoomSet(room({ eco: 0 }), draft({ eco: 1 }), OK, R))).toEqual({ equipmentId: 406658286, temperature: -1, humidity: -1, windSpeed: -1, eco: 1, switch: -1, endModes: ENDS })
+    expect(q(buildRoomSet(room({ eco: 0 }), draft({ eco: 1 }), OK, R))).toEqual({ equipmentId: 406658286, temperature: -1, humidity: -1, windSpeed: -1, eco: 1, switch: -1, endModes: [] })
     const off = q(buildRoomSet(room({ eco: 1 }), draft({ base: { setTemp: 25.5, eco: 1 }, eco: 0 }), OK, R))
     expect(wire(off)).toMatchObject({ temperature: -1, eco: 0, switch: -1, windSpeed: -1, humidity: -1 })
   })
-  it('end_modes 用传入这份房间读数的（换一份读数就换），是拷贝不是同一个对象', () => {
-    const fresh = [{ optionName: '地冷', type: 3, isSelected: true, isChange: true, switch: 1 }]
-    const r = room({ wireEndModes: fresh })
-    const x = q(buildRoomSet(r, draft({ temp: 24 }), OK, R))
-    expect(x.endModes).toEqual(fresh)
-    expect(x.endModes[0]).not.toBe(fresh[0])
+  it('改了末端：该房间全部末端完整回传（有 3 个传 3 个），只换 is_selected；switch 只读，原样带回读到的值', () => {
+    const three = [...ENDS, { optionName: '地冷', type: 3, isSelected: false, isChange: true, switch: 0 }]
+    const r = room({ wireEndModes: three })
+    const d = editDraft(r, null, { temp: 24, ends: [true, false, true] })
+    const x = q(buildRoomSet(r, d, OK, R))
+    expect(x.endModes).toEqual([
+      { optionName: '风盘', type: 0, isSelected: true, isChange: true, switch: 1 },
+      { optionName: '顶辐射', type: 1, isSelected: false, isChange: true, switch: 0 },
+      { optionName: '地冷', type: 3, isSelected: true, isChange: true, switch: 0 },
+    ])
+    expect(x).toMatchObject({ temperature: 24, eco: -1, switch: -1 })
+    expect(x.endModes[0]).not.toBe(three[0])
+    expect((wire(x) as { endModes: unknown[] }).endModes).toHaveLength(3)
+    expect(describeChanges(draftChanges(r, d))).toContain('末端选中 2 项 → 2 项')
+    // 只改末端：核对数据里没有末端，无法核对，本期不下发
+    expect(buildRoomSet(r, editDraft(r, null, { ends: [true, false, true] }), OK, R)).toMatchObject({ ok: false, reason: expect.stringMatching(/只改末端/) })
+  })
+  it('末端选择与读数相同算没改：空列表；末端和温度一起改：两样都带', () => {
+    expect(endModesFor(room(), [true, true])).toEqual({ ok: true, endModes: [] })
+    expect(endModesFor(room(), undefined)).toEqual({ ok: true, endModes: [] })
+    const x = q(buildRoomSet(room(), draft({ temp: 24, ends: [true, false] }), OK, R))
+    expect(x).toMatchObject({ temperature: 24, endModes: [{ isSelected: true, switch: 1 }, { isSelected: false, switch: 0 }] })
+  })
+  it('末端不合法：一个都没选、取消了不允许关闭的末端（is_change = false）、数量和读数对不上 → 不下发', () => {
+    expect(endModesFor(room(), [false, false])).toMatchObject({ ok: false, reason: expect.stringMatching(/至少/) })
+    const fixed = room({ wireEndModes: [{ optionName: '全空气', type: 4, isSelected: true, isChange: false, switch: 1 }, ENDS[0]] })
+    expect(endModesFor(fixed, [false, true])).toMatchObject({ ok: false, reason: expect.stringMatching(/全空气.*不允许修改/) })
+    const fixedOff = room({ wireEndModes: [{ optionName: '全空气', type: 4, isSelected: false, isChange: false, switch: 0 }, ENDS[0]] })
+    expect(endModesFor(fixedOff, [true, true])).toMatchObject({ ok: false, reason: expect.stringMatching(/不允许修改/) })
+    expect(endModesFor(room(), [true])).toMatchObject({ ok: false })
+    expect(buildRoomSet(room(), draft({ temp: 24, ends: [false, false] }), OK, R)).toMatchObject({ ok: false, reason: expect.stringMatching(/至少/) })
+  })
+  it('改了末端后读数里的末端选择被外部改了：冲突，不下发', () => {
+    const d = editDraft(room(), null, { temp: 24, ends: [true, false] })
+    const r = room({ wireEndModes: [{ ...ENDS[0], isSelected: false }, ENDS[1]] })
+    expect(reconcileDraft(d, r, OK).conflict).toEqual(['ends'])
+    expect(buildRoomSet(r, d, OK, R).ok).toBe(false)
   })
   it('风速、湿度永远不改：-1', () => {
     const x = q(buildRoomSet(room({ windSpeed: 100 }), draft({ temp: 20 }), OK, R))
     expect(x.windSpeed).toBe(-1)
     expect(x.humidity).toBe(-1)
   })
-  it('房间开关：只有 switch 是真实值（关 = 0，不是缺省），末端原样传回', () => {
-    expect(q(buildRoomSwitch(room(), false, OK))).toEqual({ equipmentId: 406658286, temperature: -1, humidity: -1, windSpeed: -1, eco: -1, switch: 0, endModes: ENDS })
-    expect(wire(q(buildRoomSwitch(room(), true, OK)))).toMatchObject({ switch: 1, temperature: -1, eco: -1, endModes: ENDS })
+  it('房间开关：只有 switch 是真实值（关 = 0，不是缺省），末端不改（空列表）', () => {
+    expect(q(buildRoomSwitch(room(), false, OK))).toEqual({ equipmentId: 406658286, temperature: -1, humidity: -1, windSpeed: -1, eco: -1, switch: 0, endModes: [] })
+    expect(wire(q(buildRoomSwitch(room(), true, OK)))).toMatchObject({ switch: 1, temperature: -1, eco: -1, endModes: [] })
+    // 开关未上报时也能开 / 关
+    expect(q(buildRoomSwitch(room({ switchKnown: false }), true, OK)).switch).toBe(1)
   })
 })
 

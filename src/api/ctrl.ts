@@ -179,7 +179,11 @@ export function buildRoomTemperatureSet(equipmentId: number, changes: Changes<20
   }
 }
 
-/** 203 统一控制：开关/温度不改为 -1；运行模式是枚举，不改为 0（OPERATION_MODE_NONE） */
+/**
+ * 203 统一控制：开关/温度不改为 -1；运行模式是枚举，不改为 0（OPERATION_MODE_NONE）。
+ * 后端 11/25 答复「所有字段不变一律传 -1」，但 proto 里 system_mode 是枚举，明确写了 OPERATION_MODE_NONE = 0 是「不变」，-1 不在枚举里，
+ * 所以这一项仍按 proto 传 0，已列入待后端确认
+ */
 export function buildUnifiedCtrlSet(changes: Changes<203, never> = {}): WriteQuery<203> {
   return {
     systemSwitch: changes.systemSwitch ?? U,

@@ -33,7 +33,7 @@ async function reloadWith(userId: string, target: Record<string, number>, read20
     import('../api/config'), import('../api/query'), import('../api/session'), import('../app/store'), import('../app/OrgGate'),
     import('../components/Layout'), import('./Thermostat'), import('@tanstack/react-query'), import('react-router-dom'),
   ])
-  setConfig({ apiBase: '/api', apiEnv: 'test', dataSource: 'real' })
+  setConfig({ apiBase: '/api', apiEnv: 'test', dataSource: 'real', features: { roomSwitchReported: true } })
   const be = fakeBackend({
     '/auth/login': () => json({ access_token: jwt('admin-1'), refresh_token: 'R1', expires_in: 7200 }),
     '/me': () => json({ user_entity: { id: 'admin-1', name: '测试' }, permission_paths: [] }),

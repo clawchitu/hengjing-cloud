@@ -95,8 +95,8 @@ describe('其他校验', () => {
     expect(validateUnified({ systemMode: 0 as Mode }, ctx())).toMatchObject({ ok: false, errors: [TEXT.noChanges] })
     expect(validateUnified({ systemMode: 0 as Mode, roomSwitch: 1 }, ctx())).toMatchObject({ ok: true, query: { systemMode: 0, roomSwitch: 1 } })
   })
-  it('关闭房间同时设温度被拒', () => {
-    expect(validateUnified({ roomSwitch: 0, roomTemp: 24 }, ctx())).toMatchObject({ ok: false, errors: [TEXT.tempWhileRoomOff] })
+  it('关闭房间同时设温度：可以（后端 11/25 答复第 16 条：房间关着温度也会生效，开启后按此温度运行）', () => {
+    expect(validateUnified({ roomSwitch: 0, roomTemp: 24 }, ctx())).toMatchObject({ ok: true, query: { roomSwitch: 0, roomTemp: 24, systemSwitch: -1 } })
   })
   it('describeQuery 只列有改动的项', () => {
     expect(describeQuery({ systemSwitch: -1, systemMode: 100, roomSwitch: 0, roomTemp: -1 })).toEqual([
@@ -167,6 +167,6 @@ describe('echoMismatches（逐字段核对）', () => {
 describe('校验问题带固定代码', () => {
   it('issues 与 errors 一一对应', () => {
     const v = validateUnified({ roomTemp: 24, roomSwitch: 0 }, ctx({ online: false, appCode: 12 }))
-    expect(v).toMatchObject({ ok: false, issues: [{ code: 'OFFLINE' }, { code: 'TEMP_DISABLED' }, { code: 'TEMP_WHILE_ROOM_OFF' }] })
+    expect(v).toMatchObject({ ok: false, issues: [{ code: 'OFFLINE' }, { code: 'TEMP_DISABLED' }] })
   })
 })

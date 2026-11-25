@@ -65,6 +65,7 @@ export function fromMockRoom(r: api.Room): RoomView {
     windSpeed: FAN[r.fan] ?? null,
     eco: r.mode === '节能' ? 1 : 0,
     on: r.on,
+    switchKnown: true,
     mode: '制冷',
     endModes: ends.map(([name, type, sel]) => ({ name, type, selected: sel, on: r.on && sel })),
     wireEndModes: ends.map(([optionName, type, sel]) => ({ optionName, type, isSelected: sel, isChange: true, switch: r.on && sel ? 1 : 0 })),
