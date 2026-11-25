@@ -119,9 +119,14 @@ describe('预检', () => {
     expect(await W.runOp(a.s)).toBe('aborted')
     expect(a.toasts[0]).toMatch(/确认后重新读取面板失败（控制屏未连接）/)
     W.__resetWritesForTests()
-    const b = spec({ preflight, noun: '新风设置' } as never)
+    const b = spec({ preflight, noun: '新风设置' })
     expect(await W.runOp(b.s)).toBe('aborted')
     expect(b.toasts[0]).toMatch(/确认后重新读取新风设置失败（控制屏未连接）/)
+    // 超时路径：Deadline 的文案也用 noun（回读路径的文案只用于内部超时，不展示给用户）
+    W.__resetWritesForTests(); W.LIMITS.preflightMs = 20
+    const c = spec({ preflight: () => new Promise<never>(() => {}), noun: '新风设置' })
+    expect(await W.runOp(c.s)).toBe('aborted')
+    expect(c.toasts[0]).toMatch(/确认后重新读取新风设置超时/)
   })
   it('预检期间离开页面 / 切项目 / 会话变化：中止，不写，不提示，释放写锁', async () => {
     for (const change of [() => { storedProject = 'P2' }, () => { userKey = 'user:B' }]) {

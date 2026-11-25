@@ -296,13 +296,11 @@ const validRecord = (r: SentRecord) => Number.isInteger(r.msg) && r.msg > 0 && r
 const copyRecord = (r: SentRecord): SentRecord => ({ msg: r.msg, deviceId: r.deviceId, target: { ...r.target }, ...(r.roomIds ? { roomIds: [...r.roomIds] } : {}) })
 
 /**
- * 发送前检查核对数据（在 requestWrite 之前调用）：返回 null = 可以登记；否则返回给用户看的原因，调用方应 release(token)、
- * 提示该原因、不发送。206 必须带非空的目标房间集合，且不超过 ROOM_IDS_MAX 个；其余按落盘的结构校验
- */
-/**
- * 204 的核对目标（只放用户改了的字段，其余 -1）：至少改一项；枚举字段只能是合法取值，设定值是有限数。
+ * 204 的核对目标（只放用户改了的字段，其余 -1）：只认 5 个字段名，每个值都是有限数；至少改一项；枚举字段只能是合法取值。
  * 核对数据里的 -1 表示「没改」；读数 control_type = -1 时写入口整体禁用（见 writeLockVerify.ts 的 blocked204）
  */
+/** 正整数设备 id（204 的下发、核对、读数检查共用这一个判断） */
+export const isDeviceId = (v: unknown): v is number => typeof v === 'number' && Number.isSafeInteger(v) && v > 0
 const FIELDS_204 = new Set(['controlType', 'dewPoint', 'humiditySet', 'windSpeed', 'switch'])
 function check204Target(t: SentRecord['target']): string | null {
   const ENUM: Record<string, readonly number[]> = { controlType: [0, 1], windSpeed: [0, 1, 2], switch: [0, 1] }
@@ -311,17 +309,22 @@ function check204Target(t: SentRecord['target']): string | null {
   if (entries.some(([k]) => !FIELDS_204.has(k))) return '核对数据不合规，未下发'
   const changed = entries.filter(([, v]) => v !== -1)
   if (!changed.length) return '没有要下发的改动，未下发'
+  // 每个值都必须是数字：-1（没改）或合法取值
+  if (entries.some(([, v]) => typeof v !== 'number' || !Number.isFinite(v))) return '核对数据不合规，未下发'
   for (const [k, v] of changed) {
     if (ENUM[k] && !ENUM[k].includes(v as number)) return '核对数据不合规，未下发'
-    if ((k === 'dewPoint' || k === 'humiditySet') && !(typeof v === 'number' && Number.isFinite(v))) return '核对数据不合规，未下发'
   }
   return null
 }
 
+/**
+ * 发送前检查核对数据（在 requestWrite 之前调用）：返回 null = 可以登记；否则返回给用户看的原因，调用方应 release(token)、
+ * 提示该原因、不发送。204 设备 id 必须是正整数、核对目标见 check204Target；206 必须带非空的目标房间集合，且不超过 ROOM_IDS_MAX 个；其余按落盘的结构校验
+ */
 export function checkSentRecord(r: SentRecord): string | null {
   if (r.msg === 204) {
     // 204 按设备下发、按设备回读 210：没有可信的设备 id 就无法核对，也不该发
-    if (typeof r.deviceId !== 'number' || !Number.isSafeInteger(r.deviceId) || r.deviceId <= 0) return '没有读到新风设备 id，无法核对下发结果，未下发'
+    if (!isDeviceId(r.deviceId)) return '没有读到新风设备 id，无法核对下发结果，未下发'
     const bad = check204Target(r.target)
     if (bad) return bad
   }

@@ -21,7 +21,7 @@
 //   registerVerifier(206, async (rec, signal) => matchAllRoomsSwitch(rec, await callCtrl(200, rec.projectId, {}, { signal })))
 import type { CtrlReply } from './ctrl'
 import { NO_DATA } from './values'
-import type { FieldResult, MatchDetail, SentRecord } from './writeLock'
+import { isDeviceId, type FieldResult, type MatchDetail, type SentRecord } from './writeLock'
 
 type Rooms = Pick<CtrlReply<200>, 'data'>
 type Room = Rooms['data'][number]
@@ -129,15 +129,18 @@ const SETPOINT = new Set(['dewPoint', 'humiditySet'])
  * 204（新风运行设置）→ 210 回读，逐字段四态，整体按 verdictOf。
  * - 只判 target 里不是 -1 的字段；没有改动、消息号不对、设备 id 为空 → false。
  * - 回包 id 不等于目标设备 id（含空回包、只回了 #2 错误文案的回包）→ 全部无法核对。
- * - control_type / switch / wind_speed 是 proto3 标量，0 在线上省略，解码出的 0 是真实读数，直接比对。
+ * - control_type / switch / wind_speed 是 proto3 标量，0 在线上省略，解码出的 0 是真实读数，直接比对；读到 -1、65536 或非有限数
+ *   按设备没回报，记无法核对（同文件头口径，也和 blocked204 把 -1 当未初始化一致）。
  * - dew_point / humidity_set 读数为 -1（界面显示 --）、65536 或非有限数 → 无法核对；读数 control_type = -1（露点与湿度均不可控）时
  *   这两项也无法核对。浮点按 0.05 比较。
- * - 210 没有 is_connected：设备离线由调用方另读 202 判断，传 connected=false 时可核对字段记结果未知。
+ * - 210 没有 is_connected：设备在线与否由调用方另读 202 判断并传入。connected 必须明确为 true 才比对，否则（false 或漏传）
+ *   可核对字段记结果未知，同 201 的 isConnected !== true。
+ * - 设备 id 不是正整数 → false。
  */
 export function matchRunningCtrl(
-  rec: Pick<SentRecord, 'msg' | 'deviceId' | 'target'>, reply: Running | null | undefined, opts: { connected?: boolean } = {},
+  rec: Pick<SentRecord, 'msg' | 'deviceId' | 'target'>, reply: Running | null | undefined, opts: { connected: boolean },
 ): MatchDetail | false {
-  if (rec.msg !== 204 || rec.deviceId === null) return false
+  if (rec.msg !== 204 || !isDeviceId(rec.deviceId)) return false
   const changed = Object.entries(rec.target).filter(([k, v]) => !isNoChange(204, k, v))
   if (!changed.length) return false
   const r = reply ?? {}
@@ -145,11 +148,11 @@ export function matchRunningCtrl(
   const fields: Record<string, FieldResult> = {}
   for (const [field, v] of changed) {
     if (!isVerifiableField(204, field) || typeof v !== 'number' || !idOk) { fields[field] = 'unverifiable'; continue }
-    if (opts.connected === false) { fields[field] = 'unknown'; continue }
+    if (opts.connected !== true) { fields[field] = 'unknown'; continue }
     const got = RUNNING_READ[field](r)
-    if (typeof got !== 'number' || !Number.isFinite(got)) { fields[field] = 'unverifiable'; continue }
+    if (!validReading(got)) { fields[field] = 'unverifiable'; continue }
     if (SETPOINT.has(field)) {
-      if (!validReading(got) || (r.controlType ?? 0) === -1) { fields[field] = 'unverifiable'; continue }
+      if ((r.controlType ?? 0) === -1) { fields[field] = 'unverifiable'; continue }
       fields[field] = sameTemp(got, v) ? 'applied' : 'unchanged'
     } else fields[field] = got === v ? 'applied' : 'unchanged'
   }
@@ -161,18 +164,23 @@ export const ECHO_FIELDS_204 = Object.freeze(['controlType', 'dewPoint', 'humidi
 export const BLOCK_204_CONTROL_TYPE = '该设备当前露点与湿度均不可控，不能下发运行设置'
 export const BLOCK_204_UNINITIALIZED = '有未初始化的设定项，未下发'
 export const BLOCK_204_INVALID = '有设定项的读数不在合法范围内，未下发'
+export const BLOCK_204_NO_READING = '没有读到这台新风设备的运行设置，未下发'
 /** 没改、要带回的枚举读数的合法取值（control_type = -1 已在前一条整体禁用） */
 const ECHO_ENUM_204: Record<string, readonly number[]> = { controlType: [0, 1], windSpeed: [0, 1, 2] }
 
 /**
  * 204 发送前的读数检查（Fable 11/25 裁定，A1 后端答复前）：
+ * - 读数为空、或 reading.id 不等于 deviceId（空回包、错误文案回包解码后全是 0）：一律拦下。
  * - 读数 control_type = -1：写入口整体禁用（不管改了什么）。
  * - policy = 'echo' 时，用户没改的设定项在 210 里读到 -1（或 65536、非有限数、缺失以外的无效值）：整条不发，提示「有未初始化的设定项」。
  *   不能只跳过那一个字段：跳过后 proto3 编码出来是 0，等于把它设成湿度控制、低档或 0°C。
  * - echo 时没改的枚举读数（control_type、wind_speed）不在合法取值内：整条不发（带回去就是一个非法值）。
  * changed 是用户改了的字段名。返回 null 表示可以发。'minus1' 下没改的字段本来就传 -1，只做第一条检查。
  */
-export function blocked204(reading: Running, changed: readonly string[], policy: 'echo' | 'minus1' = 'echo'): string | null {
+export function blocked204(
+  reading: Running | null | undefined, deviceId: number | null, changed: readonly string[], policy: 'echo' | 'minus1' = 'echo',
+): string | null {
+  if (!reading || !isDeviceId(deviceId) || reading.id !== deviceId) return BLOCK_204_NO_READING
   if ((reading.controlType ?? 0) === -1) return BLOCK_204_CONTROL_TYPE
   if (policy !== 'echo') return null
   for (const f of ECHO_FIELDS_204) {
