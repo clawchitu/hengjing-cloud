@@ -174,7 +174,7 @@ test.describe('天气城市选择', () => {
     expect(await list.evaluate((el) => el.scrollTop)).toBe(early)
     const seen = await page.evaluate(() => new Set((window as unknown as { __scrolls: number[] }).__scrolls.filter((v) => v > 0)).size)
     expect(seen).toBeGreaterThan(0)
-    expect(seen).toBeLessThanOrEqual(2)
+    expect(seen).toBeLessThanOrEqual(5) // 弹层定位 / 定高时列表尺寸会变，重算几次；平滑滚动会留下几十个中间值
   })
 
   test('需要滚动的城市（凉山）：顶部固定的返回行不遮挡高亮；向上走到第一个市也不被挡', async ({ page }) => {
