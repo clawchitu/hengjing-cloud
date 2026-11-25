@@ -11,7 +11,7 @@ import { createQueryClient } from '@/api/query'
 import { clearTokens, writeTokens } from '@/api/tokens'
 import { fakeBackend, json } from '@/api/__tests__/helpers'
 import { __resetWriteLockForTests } from '@/api/writeLock'
-import { __resetFreshAirForTests, SETTINGS_POLL_MS, putNewer, useFreshRead, useSettings, useUnits } from '../hooks'
+import { __resetFreshAirForTests, SETTINGS_POLL_MS, UNITS_POLL_MS, putNewer, useFreshRead, useSettings, useUnits } from '../hooks'
 import { TEXT_UNSUPPORTED } from '../model'
 import { ID_240829001, ID_260911001, R202_260911001, R210_240829001, R210_260911001 } from './fixtures'
 
@@ -165,7 +165,8 @@ describe('useSettings（210）', () => {
     await act(async () => { if (result.current.u.kind === 'ready') result.current.u.retry() })
     await waitFor(() => expect(result.current.u.kind).toBe('unavailable'))
     await waitFor(() => expect(result.current.s.kind).not.toBe('ready'), { timeout: 3000 })
-    await waitFor(() => expect(['loading', 'error']).toContain(result.current.s.kind), { timeout: 3000 })
+    // 作废后不主动重读（S10b），在下次轮询前显示控制屏未连接占位
+    expect(result.current.s.kind).toBe('unavailable')
   })
   it('同项目的 210 遇到 503：202 之前的读数也作废', async () => {
     let r210 = 'ok'
@@ -179,7 +180,89 @@ describe('useSettings（210）', () => {
     r210 = '503'
     await act(async () => { if (result.current.s.kind === 'ready') result.current.s.retry() })
     await waitFor(() => expect(result.current.s.kind).toBe('unavailable'))
-    await waitFor(() => expect(['loading', 'error']).toContain(result.current.u.kind), { timeout: 3000 })
+    await waitFor(() => expect(result.current.u.kind).toBe('unavailable'), { timeout: 3000 })
+  })
+  /** 同页面的接法：210 用 202 里选中的设备（202 不是 ready 时没有设备，210 不发） */
+  function usePagePair() {
+    const u = useUnits(P12)
+    return { u, s: useSettings(P12, u.kind === 'ready' ? u.units[0] : undefined) }
+  }
+  const P503 = () => json({ code: 14, message: '控制屏消息发送失败' }, 503)
+  it('S10b 202 正常、210 持续 503：停在「控制屏未连接」占位，不再互相作废反复重读', async () => {
+    const be = fakeBackend({ [R202]: () => json({ body: R202_260911001 }), [R210]: P503 })
+    const { result } = renderHook(usePagePair, { wrapper })
+    await waitFor(() => expect([result.current.u.kind, result.current.s.kind]).toContain('unavailable'), { timeout: 3000 })
+    await flush(); await flush(); await flush()
+    const n202 = be.callsTo(R202).length
+    const n210 = be.callsTo(R210).length
+    await act(async () => { await new Promise((r) => setTimeout(r, 1500)) })
+    expect([result.current.u.kind, result.current.s.kind]).toContain('unavailable')
+    expect([result.current.u.kind, result.current.s.kind]).not.toContain('loading')
+    expect(be.callsTo(R202).length).toBe(n202)
+    expect(be.callsTo(R210).length).toBe(n210)
+    expect(n202 + n210).toBeLessThanOrEqual(6)
+  })
+  it('S10b 已有读数后 202、210 都持续 503：进入占位，请求次数有上限；之后按轮询节奏重试', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      let down = false
+      const be = fakeBackend({
+        [R202]: () => (down ? P503() : json({ body: R202_260911001 })),
+        [R210]: () => (down ? P503() : json({ body: R210_260911001 })),
+      })
+      const { result } = renderHook(usePagePair, { wrapper })
+      await waitFor(() => expect(result.current.s.kind).toBe('ready'))
+      down = true
+      await act(async () => { if (result.current.s.kind === 'ready') result.current.s.retry() })
+      await waitFor(() => expect(result.current.u.kind).toBe('unavailable'), { timeout: 3000 })
+      await flush(); await flush()
+      const before = be.calls.length
+      await act(async () => { await vi.advanceTimersByTimeAsync(SETTINGS_POLL_MS * 2 + 1000) })
+      expect(result.current.u.kind).toBe('unavailable')
+      // 只剩正常轮询：65 秒里 202 每 15 秒一次（不到 6 次），210 没有设备不发
+      expect(be.calls.length - before).toBeGreaterThan(0)
+      expect(be.calls.length - before).toBeLessThanOrEqual(6)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+  it('unsupported 的缓存被 202 的 503 作废后，控制屏恢复时照常重读，不停在「正在读取」', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      let r202 = 'ok'
+      fakeBackend({
+        [R202]: () => (r202 === 'ok' ? json({ body: R202_260911001 }) : P503()),
+        [R210]: () => json({ body: R210_240829001 }),
+      })
+      const { result } = renderHook(() => ({ u: useUnits(P12), s: useSettings(P12, { deviceId: ID_240829001, connected: true }) }), { wrapper })
+      await waitFor(() => expect(result.current.s.kind).toBe('unsupported'))
+      r202 = '503'
+      await act(async () => { if (result.current.u.kind === 'ready') result.current.u.retry() })
+      await waitFor(() => expect(result.current.u.kind).toBe('unavailable'))
+      expect(result.current.s.kind).toBe('unavailable')
+      r202 = 'ok'
+      await act(async () => { await vi.advanceTimersByTimeAsync(UNITS_POLL_MS + 1000) })
+      await waitFor(() => expect(result.current.u.kind).toBe('ready'))
+      await act(async () => { await vi.advanceTimersByTimeAsync(SETTINGS_POLL_MS + 1000) })
+      await waitFor(() => expect(result.current.s.kind).toBe('unsupported'))
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+  it('503 之后只读不写的新读（defer 没 apply）不解除 down：作废的读数仍显示占位，不显示「正在读取」', async () => {
+    let r210 = '503'
+    fakeBackend({
+      [R202]: () => json({ body: R202_260911001 }),
+      [R210]: () => (r210 === 'ok' ? json({ body: R210_260911001 }) : P503()),
+    })
+    const { result, rerender } = renderHook(() => ({ u: useUnits(P12), s: useSettings(P12, unit), read: useFreshRead(P12) }), { wrapper })
+    await waitFor(() => expect(result.current.s.kind).toBe('unavailable'))
+    await waitFor(() => expect(result.current.u.kind).toBe('unavailable'))
+    r210 = 'ok'
+    await act(async () => { await result.current.read(ID_260911001, undefined, { defer: true }) })
+    await flush()
+    rerender()
+    expect(result.current.u.kind).toBe('unavailable')
   })
     it('503 → unavailable；回包设备不符 → error', async () => {
     fakeBackend({ [R210]: () => json({ code: 14, message: '控制屏消息发送失败' }, 503) })

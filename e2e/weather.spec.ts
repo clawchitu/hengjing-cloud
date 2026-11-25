@@ -77,10 +77,32 @@ test.describe('天气城市选择', () => {
     await expect(trigger(page)).toHaveAccessibleName('天气城市：无锡市，点击更换')
   })
 
+  test('打开后列表变高 / 变矮：当前城市仍整行可见（位置与定高先后无关）；方向键离开再回来不再按打开时的位置滚', async ({ page }) => {
+    await trigger(page).click()
+    await tick(page, 300)
+    const cur = page.locator('[cmdk-item][data-current]')
+    await expect(cur).toBeInViewport({ ratio: 1 })
+    const list = page.locator('[cmdk-list]')
+    for (const h of ['160px', '420px']) {
+      await list.evaluate((el, v) => { (el as HTMLElement).style.maxHeight = v }, h)
+      await tick(page, 100)
+      await expect(cur).toBeInViewport({ ratio: 1 })
+    }
+    await page.keyboard.press('ArrowDown')
+    await tick(page, 100)
+    const top = await list.evaluate((el) => el.scrollTop)
+    await page.keyboard.press('ArrowUp')
+    await tick(page, 100)
+    await expect(cur).toBeInViewport({ ratio: 1 })
+    expect(await list.evaluate((el) => el.scrollTop)).toBe(top)
+  })
+
   test('打开态截图', async ({ page }) => {
     await trigger(page).click()
     await tick(page, 300)
     await expect(search(page)).toBeFocused()
+    // 当前城市贴列表底边（从顶端出发的 nearest 位置），与弹层定位、列表定高的先后无关；位置稳定后再截图
+    await expect(page.locator('[cmdk-item][data-current]')).toBeInViewport({ ratio: 1 })
     await shot(page, 'weather-city-picker')
   })
 })
