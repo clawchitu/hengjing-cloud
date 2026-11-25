@@ -52,10 +52,18 @@ export function CityPicker({ city, onPick }: { city: City; onPick: (code: string
   /** 当前视图：搜索结果 / 某省的城市 / 省份列表。视图一变，新视图里的高亮按「从列表顶端出发」直接滚到位 */
   const view = searching ? 'search' : prov ? prov.code : 'provinces'
 
+  /** 省份列表里的默认高亮：当前城市所在的省（没有就不高亮） */
+  const provinceHl = (() => { const p = provinceOf(city.code); return p ? PROV + p.code : '' })()
+
+  /** 不搜索时当前视图的默认高亮：省的城市列表里是当前城市（不在这个省就是第一个市），省份列表里是当前城市所在的省 */
+  const defaultHl = prov ? (prov.cities.some((c) => c.code === city.code) ? city.code : prov.cities[0].code) : provinceHl
+
   const show = () => {
     const p = provinceOf(city.code)
     lastView.current = ''; scrolled.current = ''; anchor.current = ''
-    setQ(''); setProv(p); setHl(p ? city.code : ''); setOpen(true)
+    // 当前城市是直辖市（省里只有它一个市）：直接显示省份列表并高亮这个直辖市，不进只有一项的城市列表
+    const into = p && !isSingleCity(p) ? p : null
+    setQ(''); setProv(into); setHl(into ? city.code : provinceHl); setOpen(true)
   }
   const pick = (c: City) => { setOpen(false); if (c.code !== city.code) onPick(c.code) }
   const enter = (p: Province) => {
@@ -70,6 +78,13 @@ export function CityPicker({ city, onPick }: { city: City; onPick: (code: string
     setHl(from ? PROV + from.code : '')
     inputRef.current?.focus()
   }
+
+  // 搜索清空回到列表：搜索结果里被高亮的那项卸载时，cmdk 会把高亮改成第一项（在本次提交的 layout 阶段，晚于 onChange 里的 setHl）。
+  // 清空后的两帧内（restore 为真），高亮不是默认高亮就设回去；用户按键动了高亮就不再恢复
+  const restore = useRef(false)
+  useEffect(() => {
+    if (restore.current && hl !== defaultHl) setHl(defaultHl)
+  }, [hl, defaultHl])
 
   const hlNow = useRef(hl)
   const viewNow = useRef(view)
@@ -172,9 +187,14 @@ export function CityPicker({ city, onPick }: { city: City; onPick: (code: string
                 const v = e.target.value
                 setQ(v)
                 if (v.trim()) setHl(searchCities(v)[0]?.city.code ?? '')
-                else setHl(prov ? (prov.cities.some((c) => c.code === city.code) ? city.code : prov.cities[0].code) : '')
+                else {
+                  restore.current = true
+                  setHl(defaultHl)
+                  requestAnimationFrame(() => requestAnimationFrame(() => { restore.current = false }))
+                }
               }}
               onKeyDown={(e) => {
+                if (e.key !== 'Backspace') restore.current = false // 用户自己动了高亮，不再恢复
                 if (e.key === 'Home' || e.key === 'End') e.stopPropagation()
                 if (e.key === 'Backspace' && !q && prov) { e.preventDefault(); back() }
               }}
@@ -203,6 +223,7 @@ export function CityPicker({ city, onPick }: { city: City; onPick: (code: string
               const here = p.cities.some((c) => c.code === city.code)
               return (
                 <CommandItem key={p.code} value={PROV + p.code} onSelect={() => enter(p)} data-current-province={here || undefined}
+                  aria-description={isSingleCity(p) ? '直接选中' : '进入城市列表'}
                   className={cn('rounded-[7px]', here ? cur : idle)}>
                   <span className="min-w-0 truncate">{p.name}</span>
                   {!isSingleCity(p) && <Icon icon={faChevronRight} size="xs" className="faint" />}

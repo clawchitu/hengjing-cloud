@@ -140,6 +140,75 @@ test.describe('天气城市选择', () => {
     await expect(trigger(page)).toBeFocused()
   })
 
+  /** 把当前城市换成凉山彝族自治州（四川省列表靠后，打开时必须滚动才可见） */
+  const useLiangshan = async (page: Page) => {
+    await page.evaluate(() => localStorage.setItem('hjc-weather-city:mock:cosyhome', '{"code":"513400"}'))
+    await page.reload()
+    await settle(page)
+    await expect(trigger(page)).toHaveAccessibleName('天气城市：凉山彝族自治州，点击更换')
+  }
+
+  test('需要滚动的城市（凉山）：打开后高亮直接到位，没有平滑滚动的中间帧', async ({ page }) => {
+    await useLiangshan(page)
+    await trigger(page).click()
+    await tick(page, 50)
+    const list = page.locator('[cmdk-list]')
+    const cur = page.locator('[cmdk-item][data-current]')
+    expect(await list.evaluate((el) => getComputedStyle(el).scrollBehavior)).toBe('auto')
+    expect(await list.evaluate((el) => el.scrollHeight > el.clientHeight)).toBe(true)
+    await expect(cur).toHaveText('凉山彝族自治州')
+    await expect(cur).toBeInViewport({ ratio: 1 })
+    const early = await list.evaluate((el) => el.scrollTop)
+    expect(early).toBeGreaterThan(0)
+    await tick(page, 500)
+    await expect(cur).toBeInViewport({ ratio: 1 })
+    expect(await list.evaluate((el) => el.scrollTop)).toBe(early)
+  })
+
+  test('需要滚动的城市（凉山）：顶部固定的返回行不遮挡高亮；向上走到第一个市也不被挡', async ({ page }) => {
+    await useLiangshan(page)
+    await trigger(page).click()
+    await tick(page, 300)
+    const sel = page.locator('[cmdk-item][aria-selected="true"]')
+    const clear = async () => {
+      const head = (await back(page).boundingBox())!
+      const box = (await sel.boundingBox())!
+      expect(box.y).toBeGreaterThanOrEqual(head.y + head.height - 1)
+    }
+    await expect(sel).toHaveText('凉山彝族自治州')
+    await clear()
+    const n = await page.locator('[cmdk-item]').count()
+    for (let i = 0; i < n - 2; i++) {
+      await page.keyboard.press('ArrowUp')
+      await tick(page, 50)
+      await clear()
+    }
+    await expect(sel).toHaveText('成都市')
+    await expect(sel).toBeInViewport({ ratio: 1 })
+  })
+
+  test('当前城市是直辖市：打开直接显示省份列表并高亮它；省份项标明直接选中 / 进入下一级；搜索后清空高亮恢复', async ({ page }) => {
+    await page.evaluate(() => localStorage.setItem('hjc-weather-city:mock:cosyhome', '{"code":"310000"}'))
+    await page.reload()
+    await settle(page)
+    await trigger(page).click()
+    await tick(page, 300)
+    await expect(page.locator('[cmdk-list]')).toHaveAccessibleName('省份')
+    const sel = page.locator('[cmdk-item][aria-selected="true"]')
+    await expect(sel).toHaveText('上海市')
+    await expect(sel).toBeInViewport({ ratio: 1 })
+    await expect(option(page, '上海市')).toHaveAccessibleDescription('直接选中')
+    await expect(option(page, '江苏省')).toHaveAccessibleDescription('进入城市列表')
+    await search(page).fill('苏州')
+    await tick(page, 50)
+    await expect(sel).toHaveText('苏州市 · 江苏省')
+    await search(page).fill('')
+    await tick(page, 100)
+    await expect(page.locator('[cmdk-list]')).toHaveAccessibleName('省份')
+    await expect(sel).toHaveText('上海市')
+    await expect(sel).toBeInViewport({ ratio: 1 })
+  })
+
   test('搜索「苏州」平铺显示「苏州市 · 江苏省」', async ({ page }) => {
     await trigger(page).click()
     await tick(page)
