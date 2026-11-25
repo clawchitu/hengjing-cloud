@@ -351,3 +351,35 @@ describe('没认领就结束的结果未知', () => {
   })
 })
 
+
+describe('205 预检与写锁 held 30 秒定时器（#30）叠加', () => {
+  it('205 接近 5 秒才通过、确认后读接近 15 秒：仍在 held 30 秒内，锁不被提前放掉，照常认领下发', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
+    expect(L.HELD_TTL_MS).toBe(30_000)
+    const { s, calls } = spec({
+      screen: () => new Promise((r) => setTimeout(() => r('online'), 4_900)),
+      preflight: () => new Promise((r) => setTimeout(() => { calls.push('preflight'); r({ ok: true, payload: 26 }) }, 14_900)),
+      send: (_p, bs) => { if (bs()) calls.push('send'); return new Promise<void>(() => {}) }, // 原写一直没应答：锁按发出后的规则保持
+    })
+    const run = W.runOp(s)
+    await vi.advanceTimersByTimeAsync(4_900 + 14_000)
+    expect(L.lockOf(P1)?.phase).toBe('held') // 预检中：锁还在
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(calls).toContain('send')
+    expect(L.lockOf(P1)?.phase).not.toBe('held') // 已认领，之后按发出后的规则
+    await vi.advanceTimersByTimeAsync(L.HELD_TTL_MS)
+    expect(L.lockOf(P1)).not.toBeNull() // held 定时器已停，不会把已发出的锁放掉
+    void run
+  })
+  it('205 超时（5 秒）：立即放锁、0 次发送，不等 held 30 秒', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
+    const { s, calls } = spec({ screen: () => new Promise((r) => setTimeout(() => r('timeout'), 5_000)) })
+    const run = W.runOp(s)
+    await vi.advanceTimersByTimeAsync(4_999)
+    expect(L.lockOf(P1)?.phase).toBe('held')
+    await vi.advanceTimersByTimeAsync(1)
+    expect(await run).toBe('not-sent')
+    expect(L.lockOf(P1)).toBeNull()
+    expect(calls).toEqual([])
+  })
+})
