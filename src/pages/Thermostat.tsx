@@ -73,9 +73,9 @@ function fieldsText(fields: Readonly<Record<string, FieldResult>> | undefined): 
   return es.map(([k, v]) => `${FIELD_LABEL[k] ?? k}：${FIELD_STATE[v]}`).join('；')
 }
 
-/** 结果条用正常样式（已生效，或已下发正在核对）还是警示样式（失败、未变化、无法核对、结果未知） */
 /** 房间开关未上报期间，开关类下发判无法核对时补一句（写锁 2 分钟到期才放，避免现场以为点了没反应） */
 const switchNote = (r: WriteResult) => (!roomSwitchReported() && r.fields?.switch === 'unverifiable' && !r.ended ? `${SWITCH_UNREPORTED_NOTE}。` : '')
+/** 结果条用正常样式（已生效，或已下发正在核对）还是警示样式（失败、未变化、无法核对、结果未知） */
 const isGood = (r: WriteResult) => r.outcome === 'ok' && (r.verdict === undefined ? r.readback === 'pending' : r.verdict === 'applied')
 
 /** 结果条文案：确定失败给原因；已下发 / 结果未知按回读核对的四态（整体作标题，混合时附摘要与逐字段） */

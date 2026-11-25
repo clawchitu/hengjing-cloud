@@ -41,7 +41,7 @@ describe('summarizeRooms（ctrl 200 → 回读快照）', () => {
 
   it('房间开关未上报（后端 11/25 答复第 1 条）：开关读数一律 null（核对时无法核对），温度照常；-100 无效、0 有效', () => {
     const s = summarizeRooms([{ switch: 0, setTemp: 26 }, { switch: 1, setTemp: 26 }], { switchReported: false })
-    expect(s).toEqual({ rooms: 2, roomSwitch: null, roomTemp: 26, perRoom: { roomSwitch: [null, null], roomTemp: [26, 26] } })
+    expect(s).toEqual({ rooms: 2, roomSwitch: null, roomTemp: 26, switchUnreported: true, perRoom: { roomSwitch: [null, null], roomTemp: [26, 26] } })
     expect(echoMismatches({ systemSwitch: -1, systemMode: 0, roomSwitch: 1, roomTemp: -1 }, s).map((m) => m.kind)).toEqual(['missing'])
     expect(summarizeRooms([{ switch: 0, setTemp: -100 }], { switchReported: true })).toMatchObject({ roomSwitch: 0, roomTemp: null })
   })

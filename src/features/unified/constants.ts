@@ -89,6 +89,7 @@ export const TEXT = {
   tempWhenRoomOn: '房间开启后生效',
   tempOffNote: '设置温度不会开启房间，房间开启后按此温度运行',
   /** 房间开关未上报（features.roomSwitchReported = false）期间，开关类下发固定判无法核对，写锁要到 2 分钟有效期才放 */
+  // 「2 分钟」对应写锁默认有效期 DEFAULT_TTL_MS；改了 configureWriteLock 的 ttlMs 要同步这句
   switchUnreported: '设备暂不回报开关状态，2 分钟后可再次操作',
   badSwitch: (label: string) => `${label}取值无效`,
   badMode: '运行模式无效',

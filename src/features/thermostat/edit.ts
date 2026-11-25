@@ -179,7 +179,8 @@ export function buildRoomSet(room: RoomView, draft: RoomDraft | null | undefined
     const bad = checkTemp(c.temp[1], range)
     if (bad) return { ok: false, reason: bad }
   }
-  // 只改末端：写锁核对数据（record201）没有末端字段，无法核对，本期不下发（接入改末端入口时一并补核对）
+  // 只改末端：写锁核对数据（record201）没有末端字段，无法核对，本期不下发。末端和温度 / 节能一起改时末端同样不核对——
+  // 接入改末端的界面入口之前，必须先在 record201 / matchRoomSet 补上末端核对（见 docs/HANDOFF.md 1.1）
   if (c.ends && !c.temp && !c.eco) return { ok: false, reason: '只改末端暂不能下发（无法核对）' }
   const ends = endModesFor(room, c.ends?.[1])
   if (!ends.ok) return { ok: false, reason: ends.reason }

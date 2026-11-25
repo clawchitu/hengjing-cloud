@@ -272,7 +272,7 @@ export function createUnifiedController<S>(deps: UnifiedDeps<S>): UnifiedControl
     }
     const echo = echoOf(after)
     const mismatches = echoMismatches(query, echo)
-    const verdict = after === null ? null : echoVerdict(mismatches, echo)
+    const verdict = after === null ? null : echoVerdict(mismatches, echo, fields)
     const byKind = (...kinds: EchoMismatch['kind'][]) => [...new Set(mismatches.filter((m) => kinds.includes(m.kind)).map((m) => m.field))]
 
     if (outcome === null) {

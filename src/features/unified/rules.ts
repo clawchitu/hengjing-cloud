@@ -138,10 +138,12 @@ export interface UnifiedEcho {
   roomTemp?: number | null
   /** 离线（is_connected=false）的房间数：这些房间不参与核对；有离线房间且没有不一致的 → 结果未知 */
   offline?: number
+  /** 房间开关未上报（features.roomSwitchReported = false）：房间开关一律无法核对，离线也不改成结果未知 */
+  switchUnreported?: boolean
   /** 逐房间读数（只含在线房间；null = 取值无效）。给了就按房间逐个核对，不看上面的汇总值 */
   perRoom?: { roomSwitch?: ReadonlyArray<number | null>; roomTemp?: ReadonlyArray<number | null> }
 }
-export type EchoField = Exclude<keyof UnifiedEcho, 'perRoom' | 'offline'>
+export type EchoField = Exclude<keyof UnifiedEcho, 'perRoom' | 'offline' | 'switchUnreported'>
 export const ECHO_FIELDS: readonly EchoField[] = ['systemSwitch', 'systemMode', 'roomSwitch', 'roomTemp']
 /**
  * 逐字段核对结论（只列没核对一致的字段）：
@@ -207,8 +209,10 @@ export type EchoVerdict = 'applied' | 'unchanged' | 'unverifiable' | 'unknown'
  * （mismatches 里照常列出 differ），整体结果按排序取最靠前的：结果未知（有房间离线）> 未变化 > 无法核对 > 已生效。
  * 与 fieldResults 逐字段结论取最靠前的那个一致。回读请求本身失败不走这里（状态机直接判「结果未知」，不并进无法核对）
  */
-export function echoVerdict(ms: readonly EchoMismatch[], after?: UnifiedEcho | null): EchoVerdict {
-  if (after?.offline) return 'unknown'
+export function echoVerdict(ms: readonly EchoMismatch[], after?: UnifiedEcho | null, fields?: readonly EchoField[]): EchoVerdict {
+  // 有房间离线 → 结果未知；只有一种例外：这次只改了房间开关且开关未上报（离线与否都拿不到可信读数）→ 无法核对
+  const onlyUnreportedSwitch = !!after?.switchUnreported && !!fields?.length && fields.every((f) => f === 'roomSwitch')
+  if (after?.offline && !onlyUnreportedSwitch) return 'unknown'
   if (ms.some((m) => m.kind === 'differ')) return 'unchanged'
   if (ms.some((m) => m.kind === 'missing' || m.kind === 'unreadable')) return 'unverifiable'
   return 'applied'
@@ -230,7 +234,9 @@ export function fieldResults(q: WriteQuery<203>, after: UnifiedEcho | null | und
   const ms = echoMismatches(q, after)
   return changedFields(q).map((field) => {
     const mine = ms.filter((m) => m.field === field)
-    let status: FieldStatus = !after || after.offline ? 'unknown'
+    let status: FieldStatus = !after ? 'unknown'
+      : field === 'roomSwitch' && after.switchUnreported ? 'unverifiable'
+      : after.offline ? 'unknown'
       : mine.some((m) => m.kind === 'differ') ? 'unchanged'
       : mine.length ? 'unverifiable' : 'applied'
     if (opts.replied === false && status !== 'applied') status = 'unknown'

@@ -78,6 +78,7 @@ export function summarizeRooms(
   const shown = ts.map((v) => (v === null ? null : Math.round(v * 100) / 100))
   const snap: UnifiedSnapshot = { rooms: rooms.length, roomSwitch: same(sws), roomTemp: same(shown), perRoom: { roomSwitch: sws, roomTemp: ts } }
   if (online.length < rooms.length) snap.offline = rooms.length - online.length
+  if (!switchReported) snap.switchUnreported = true
   return snap
 }
 

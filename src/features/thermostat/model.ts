@@ -104,7 +104,8 @@ export function toRoomView(r: RawRoom, opts: RoomViewOpts = {}): RoomView {
     windSpeed: windOf(r.windSpeed),
     eco: ecoOf(r.eco),
     on: r.switch === 1,
-    switchKnown: opts.switchReported ?? roomSwitchReported(),
+    // 开关读数只有 0 / 1 才可信（-100、65536 等无效读数不能当成「关」）
+    switchKnown: (opts.switchReported ?? roomSwitchReported()) && (r.switch === 0 || r.switch === 1),
     mode: ROOM_MODES[r.mode] ?? '',
     endModes: (r.endModes ?? []).map(toEndMode),
     wireEndModes: (r.endModes ?? []).map((m) => ({ optionName: m.optionName, type: m.type, isSelected: m.isSelected, isChange: m.isChange, switch: m.switch })),
