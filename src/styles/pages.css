@@ -46,16 +46,26 @@
 .room.busy .room-sets > div, .room.busy .modes-row { opacity: .6; }
 .modes-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .modes-row .ends-h { font-size: 11.5px; color: var(--muted); cursor: help; }
-/* 末端标签可点：hover 加边框、手型；草稿里改过的虚线框；不可点（离线、下发中）不加 hover */
-.end-tag { appearance: none; background: none; border: 1px solid #cbd5e1; border-radius: 999px; padding: 1px; cursor: pointer; font: inherit; line-height: 0; transition: border-color .15s, box-shadow .15s; }
-.end-tag > [data-slot=badge] { line-height: normal; }
-.end-tag:not(:disabled):hover { border-color: var(--blue, #3b82f6); box-shadow: 0 0 0 2px rgba(59, 130, 246, .12); }
-.end-tag:focus-visible { outline: 2px solid var(--blue, #3b82f6); outline-offset: 1px; }
-.end-tag.dirty { border: 1px dashed var(--amber, #d97706); }
+/* 末端标签：整个标签只有按钮这一层有背景 / 边框（rounded-full），内层文字 span 无背景、无边框、无圆角，避免方角戳出胶囊。
+   选中 = 主色实心 + 白字、无描边（开 / 关小圆点加白边：开绿、关灰）；未选中 = 白底灰描边灰字；草稿里改过 = 虚线外框（outline 跟随圆角，与实心填充区分）；
+   hover / 焦点用 box-shadow 环（跟随圆角，间隔也是圆的）；不可点（离线、下发中）不加 hover */
+.end-tag { appearance: none; display: inline-flex; align-items: center; gap: 4px; height: 24px; padding: 0 10px; border: 1px solid #cbd5e1; border-radius: 9999px; background: #fff; color: #64748b; font: inherit; font-size: 11.5px; font-weight: 500; white-space: nowrap; cursor: pointer; transition: background-color .15s, box-shadow .15s; }
+.end-tag[data-selected=true] { background: var(--primary); border-color: var(--primary); color: #fff; }
+.end-tag:not(:disabled):not([data-selected=true]):hover { background: #f8fafc; box-shadow: 0 0 0 2px rgba(8, 145, 178, .18); }
+.end-tag:not(:disabled)[data-selected=true]:hover { background: #0e7490; border-color: #0e7490; box-shadow: 0 0 0 2px rgba(8, 145, 178, .18); }
+.end-tag:focus-visible { outline: none; box-shadow: 0 0 0 2px #fff, 0 0 0 4px var(--primary); }
+.end-tag.dirty { outline: 1.5px dashed var(--amber, #d97706); outline-offset: 2px; }
+.end-tag.dim { opacity: .8; }
 .end-tag.locked { cursor: not-allowed; }
 .end-tag:disabled { cursor: not-allowed; opacity: .6; }
+.end-tag > span:not(.end-dot) { background: none; border: 0; border-radius: 0; box-shadow: none; outline: 0; padding: 0; }
+.end-tag > .end-dot { flex: none; width: 7px; height: 7px; padding: 0; border-radius: 9999px; background: #cbd5e1; }
+.end-tag > .end-dot[data-on=true] { background: var(--green-2, #22c55e); }
+.end-tag[data-selected=true] > .end-dot { box-shadow: 0 0 0 1.5px #fff; }
+.end-tag[data-selected=true] > .end-dot:not([data-on=true]) { background: #94a3b8; }
 .end-tag .end-sw { cursor: help; }
-.end-tag .end-lock { margin-left: 4px; font-size: 10.5px; opacity: .8; }
+.end-tag[data-selected=true] .end-sw { color: rgba(255, 255, 255, .8); }
+.end-tag .end-lock { font-size: 13px; line-height: 1; }
 .modes-row .end-warn { font-size: 11.5px; color: var(--red, #dc2626); }
 
 /* ------------------------------------------------------------ fresh air */

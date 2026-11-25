@@ -6,7 +6,7 @@
 // 交互依据 docs/design/thermostat-edit.md：温度 −/+ 与节能开关只改草稿，同一房间合并成一条 201；风速只读；设定湿度去除；
 // 节能模式下温度由系统设定，不能改。
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { faPowerOff, faLeaf, faFan, faPlugCircleXmark } from '@fortawesome/free-solid-svg-icons'
+import { faPowerOff, faLeaf, faFan, faPlugCircleXmark, faLock } from '@fortawesome/free-solid-svg-icons'
 import { Chart, Icon, Seg, axis, tooltip } from '../components/legacy'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -48,7 +48,7 @@ function usePresent() {
   return ref
 }
 
-export const END_TAGS_TIP = '蓝色为参与运行的末端，灰色为不参与，点击切换；开 / 关 由控制屏根据运行情况自动控制，不能修改'
+export const END_TAGS_TIP = '实心填充为参与运行的末端，白底为不参与，点击切换；开 / 关 由控制屏根据运行情况自动控制，不能修改'
 export const END_TAGS_TITLE = '末端（点击选择参与运行的末端）'
 
 interface EndTagProps {
@@ -71,14 +71,15 @@ function EndTag({ m, selected, dirty, locked, disabled, dim, roomName, onToggle 
   // 名称部分可点：切换「选中」进草稿；is_change = false 的末端点击只给提示（onToggle 里由 toggleEnd 给出原因）
   const inert = !!disabled
   return (
-    <button type="button" className={'end-tag' + (dirty ? ' dirty' : '') + (locked ? ' locked' : '')} data-selected={selected} aria-pressed={selected}
+    <button type="button" className={'end-tag' + (dirty ? ' dirty' : '') + (locked ? ' locked' : '') + (dim ? ' dim' : '')} data-selected={selected} aria-pressed={selected}
       aria-disabled={inert || locked} disabled={inert} aria-label={`${roomName} 末端 ${m.name}`}
       title={disabled ?? (locked ? (selected ? `「${m.name}」不可取消` : `「${m.name}」不允许修改`) : selected ? '点击取消选中' : '点击选中')}
       onClick={(e) => { e.stopPropagation(); onToggle() }}>
-      <Badge variant={selected ? 'blue' : 'gray'} style={dim ? { opacity: 0.8 } : undefined} data-selected={selected}>
-        {!dim && <span className="dot" style={{ width: 5, height: 5, color: m.on ? 'var(--green-2)' : '#cbd5e1' }} />}{m.name} <span className="end-sw" title={END_SWITCH_TIP} data-end-switch="">{m.on ? '开' : '关'}</span>
-        {locked && selected && <span className="end-lock">不可取消</span>}
-      </Badge>
+      {!dim && <span className="end-dot" data-on={m.on} aria-hidden="true" />}
+      <span>{m.name}</span>
+      <span aria-hidden="true">·</span>
+      <span className="end-sw" title={END_SWITCH_TIP} data-end-switch="">{m.on ? '开' : '关'}</span>
+      {locked && selected && <span className="end-lock" title="不可取消"><Icon icon={faLock} /><span className="sr-only">不可取消</span></span>}
     </button>
   )
 }

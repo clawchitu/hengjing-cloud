@@ -180,8 +180,8 @@ describe('读取（ctrl 200）', () => {
   it('房间卡：末端按 end_modes 动态显示（选中蓝 / 未选中灰，开 / 关取 switch），风速档位与自动，65536 隐藏，设定湿度去除', async () => {
     const be = backend()
     const c = await openRooms()
-    const ends = [...c.querySelectorAll('.modes-row [data-slot=badge]')].map((b) => [b.textContent, b.getAttribute('data-variant')])
-    expect(ends).toEqual([['风盘 开', 'blue'], ['顶辐射 关', 'blue'], ['地冷 关', 'gray']])
+    const ends = [...c.querySelectorAll('.modes-row .end-tag')].map((b) => [b.textContent, b.getAttribute('data-selected')])
+    expect(ends).toEqual([['风盘·开', 'true'], ['顶辐射·关', 'true'], ['地冷·关', 'false']])
     expect(c.textContent).toContain('3 档')
     expect(c.textContent).toContain('湿度 51%')
     expect(c.textContent).not.toContain('设定湿度')
@@ -218,6 +218,18 @@ describe('读取（ctrl 200）', () => {
     expect(sw.map((x) => [x.textContent, x.getAttribute('title')])).toEqual([['开', '开/关由控制屏自动控制'], ['关', '开/关由控制屏自动控制'], ['关', '开/关由控制屏自动控制']])
     // 开 / 关本身不是按钮（只读）
     expect(sw.every((x) => x.tagName === 'SPAN')).toBe(true)
+  })
+
+  it('末端标签为实心填充单层：按钮是唯一带底色 / 边框的元素（内层无 badge），文字「名称 · 开 / 关」，保留开（绿）/ 关（灰）小圆点', async () => {
+    backend()
+    const c = await openRooms()
+    const tags = within(c.querySelector('.modes-row') as HTMLElement).getAllByRole('button')
+    for (const t of tags) {
+      expect(t.querySelector('[data-slot=badge]')).toBeNull()
+      expect(t.querySelector('.end-dot')).not.toBeNull()
+    }
+    expect(tags.map((t) => t.textContent)).toEqual(['风盘·开', '顶辐射·关', '地冷·关'])
+    expect(tags.map((t) => t.getAttribute('data-selected'))).toEqual(['true', 'true', 'false'])
   })
 
   it('S13：app_code 12 的页头和说明只写程序名称，不写程序编码', async () => {
