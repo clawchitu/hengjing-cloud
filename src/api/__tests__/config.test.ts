@@ -1,13 +1,26 @@
 import { describe, expect, it } from 'vitest'
-import { envOfUrl, resolveConfig, TEST_API_ORIGIN } from '../config'
+import { envOfUrl, FEATURE_DEFAULTS, resolveConfig, TEST_API_ORIGIN } from '../config'
 import { can, isDealer } from '../auth'
 
 describe('运行时配置', () => {
   it('默认：/api、演示数据、按生产处理、超时 10/12 秒', () => {
     expect(resolveConfig([])).toEqual({
       apiBase: '/api', apiEnv: 'prod', dataSource: 'mock', writeMode: 'test-only', writeProjectCodes: ['260911001', '240829001'],
-      requestTimeoutMs: 10_000, ctrlTimeoutMs: 12_000,
+      requestTimeoutMs: 10_000, ctrlTimeoutMs: 12_000, features: FEATURE_DEFAULTS,
     })
+  })
+  it('功能开关：不写全部取默认值', () => {
+    expect(resolveConfig([]).features).toEqual({ freshAirWrite: 'on', freshAir204Unchanged: 'echo', freshAirFilterSwapped: false, freshAirFilterWarn: false, weatherCityFilter: 'auto', weatherNowFallback: true })
+  })
+  it('功能开关：按键合并，后面的层覆盖前面的；非法值不报错、取默认值', () => {
+    const f = resolveConfig([
+      { features: { freshAirWrite: 'off', weatherCityFilter: 'none', freshAirFilterWarn: true } },
+      { features: { weatherCityFilter: 'intersect', freshAirFilterWarn: 'yes', freshAir204Unchanged: 'minus1', bogus: 1 } },
+    ]).features
+    expect(f).toEqual({ ...FEATURE_DEFAULTS, freshAirWrite: 'off', weatherCityFilter: 'intersect', freshAirFilterWarn: false, freshAir204Unchanged: 'minus1' })
+    expect(Object.isFrozen(f)).toBe(true)
+    for (const bad of [null, 'off', [1], 42]) expect(resolveConfig([{ features: bad }]).features).toEqual(FEATURE_DEFAULTS)
+    expect(resolveConfig([{ features: { weatherNowFallback: 0, freshAirFilterSwapped: 'true' } }]).features).toEqual(FEATURE_DEFAULTS)
   })
   it('交付包（mockAllowed=false）：dataSource 恒为 real，config.js 写 mock 也无效', () => {
     expect(resolveConfig([], '', false).dataSource).toBe('real')

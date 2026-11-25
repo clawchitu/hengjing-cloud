@@ -10,4 +10,12 @@
 // writeProjectCodes 下发白名单，填项目 code（如 '240829001'，不是后端实体 id）。
 //                 不写默认 ['260911001', '240829001']；写 [] 即拒绝所有下发。
 //                 构建时也可用 VITE_WRITE_PROJECT_CODES（逗号分隔）。
+// features        功能开关（对象，按键合并；不写或写了非法值都取默认值）。交付包的 config.js 不写这一项。
+//   freshAirWrite          'on'（默认，可下发）| 'off'：写 'off' 时新风运行设置面板只读；写防护照常生效。
+//   freshAir204Unchanged   'echo'（默认，带回确认后新读的 210）| 'minus1'：204 里没改的字段怎么传。
+//   freshAirFilterSwapped  false（默认）| true：202 的 filter_life 与 filter_life_p 对调着读。
+//   freshAirFilterWarn     false（默认）| true：滤网寿命的告警颜色和更换提示。
+//   weatherCityFilter      'auto'（默认）| 'intersect' | 'none'：候选城市是否用 /wx/city-list 过滤。
+//   weatherNowFallback     true（默认）| false：/weather 失败时用小时预报顶替实时数据。
+//   例：features: { freshAirWrite: 'off' }
 window.__HJC_CONFIG__ = {}

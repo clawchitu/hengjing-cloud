@@ -20,6 +20,62 @@ export interface RuntimeConfig {
   requestTimeoutMs: number
   /** ctrl 同步消息超时（毫秒）：服务端等控制屏 10 秒，前端多留 2 秒 */
   ctrlTimeoutMs: number
+  /** 功能开关（S10 新风、S7 天气里等后端答复的点），见 FEATURE_DEFAULTS 与 docs/plan-s10-s7.md 2.1 */
+  features: Readonly<Features>
+}
+
+/** 功能开关。后端答复后只改默认值，不改代码路径 */
+export interface Features {
+  /** 'off'：新风运行设置面板只读（写防护照常生效，这个开关只管界面） */
+  freshAirWrite: 'on' | 'off'
+  /** 204 里用户没改的字段怎么传：'echo' 带回确认后新读的 210；'minus1' 传 -1 */
+  freshAir204Unchanged: 'echo' | 'minus1'
+  /** 202 的 filter_life 与 filter_life_p 是否对调着读 */
+  freshAirFilterSwapped: boolean
+  /** 滤网寿命的红、橙色和「请尽快更换」提示 */
+  freshAirFilterWarn: boolean
+  /** 候选城市是否用 /wx/city-list 过滤：'auto' 调用成功且非空才取交集；'intersect' 严格取交集；'none' 不调 */
+  weatherCityFilter: 'auto' | 'intersect' | 'none'
+  /** /weather 失败时用 /weather24 最近一小时顶替实时数据 */
+  weatherNowFallback: boolean
+}
+
+export const FEATURE_DEFAULTS: Readonly<Features> = Object.freeze({
+  freshAirWrite: 'on',
+  freshAir204Unchanged: 'echo',
+  freshAirFilterSwapped: false,
+  freshAirFilterWarn: false,
+  weatherCityFilter: 'auto',
+  weatherNowFallback: true,
+})
+
+const isBool = (v: unknown): v is boolean => typeof v === 'boolean'
+const oneOf = <T extends string>(...xs: T[]) => (v: unknown): v is T => typeof v === 'string' && (xs as string[]).includes(v)
+const FEATURE_VALID: { [K in keyof Features]: (v: unknown) => v is Features[K] } = {
+  freshAirWrite: oneOf('on', 'off'),
+  freshAir204Unchanged: oneOf('echo', 'minus1'),
+  freshAirFilterSwapped: isBool,
+  freshAirFilterWarn: isBool,
+  weatherCityFilter: oneOf('auto', 'intersect', 'none'),
+  weatherNowFallback: isBool,
+}
+
+/**
+ * 功能开关按键合并：每个键取最后一个写了它的层；那一层的值不合法就用默认值（不报错、不回退到更早的层）。
+ * 不是对象的 features、不认识的键都忽略。结果冻结。
+ */
+function parseFeatures(layers: Input[]): Readonly<Features> {
+  const out: Record<string, unknown> = { ...FEATURE_DEFAULTS }
+  for (const l of layers) {
+    const f = l?.features
+    if (!f || typeof f !== 'object' || Array.isArray(f)) continue
+    for (const k of Object.keys(FEATURE_VALID) as (keyof Features)[]) {
+      if (!Object.prototype.hasOwnProperty.call(f, k)) continue
+      const v = (f as Record<string, unknown>)[k]
+      out[k] = FEATURE_VALID[k](v) ? v : FEATURE_DEFAULTS[k]
+    }
+  }
+  return Object.freeze(out as unknown as Features)
 }
 
 /** 测试环境（开发、联调默认连这里） */
@@ -27,7 +83,7 @@ export const TEST_API_ORIGIN = 'https://test.cosyhome.com.cn:9443/v1'
 const TEST_HOSTS = new Set(['test.cosyhome.com.cn'])
 
 declare global {
-  interface Window { __HJC_CONFIG__?: Partial<RuntimeConfig> }
+  interface Window { __HJC_CONFIG__?: Partial<Omit<RuntimeConfig, 'features'>> & { features?: Partial<Features> } }
 }
 // vite.config.ts 注入：开发服务器 /api 代理的目标地址（构建产物里为空串）
 declare const __HJC_DEV_PROXY_TARGET__: string | undefined
@@ -54,7 +110,7 @@ export function envOfUrl(url: string): ApiEnv {
   try { return TEST_HOSTS.has(new URL(url.startsWith('//') ? 'https:' + url : url).hostname) ? 'test' : 'prod' } catch { return 'prod' }
 }
 
-type Input = Partial<Omit<RuntimeConfig, 'apiEnv' | 'writeProjectCodes'>> & { apiEnv?: string; writeProjectCodes?: unknown }
+type Input = Partial<Omit<RuntimeConfig, 'apiEnv' | 'writeProjectCodes' | 'features'>> & { apiEnv?: string; writeProjectCodes?: unknown; features?: unknown }
 
 /**
  * 合并各层配置并推导 apiEnv。导出供测试使用。
@@ -78,6 +134,7 @@ export function resolveConfig(layers: Input[], devProxyTarget = '', mockAllowed 
     writeProjectCodes: parseCodes(layers),
     requestTimeoutMs: Number(m.requestTimeoutMs) > 0 ? Number(m.requestTimeoutMs) : 10_000,
     ctrlTimeoutMs: Number(m.ctrlTimeoutMs) > 0 ? Number(m.ctrlTimeoutMs) : 12_000,
+    features: parseFeatures(layers),
   }
 }
 

@@ -31,8 +31,10 @@
 
 范围：
 - `src/api/config.ts`：`RuntimeConfig` 加 `features`（见 2.1 的开关表），`public/config.js` 补注释。各层按键合并，非法值回退默认值。
-- `src/api/writeLockVerify.ts`：`VERIFIABLE_FIELDS[204] = ['controlType', 'dewPoint', 'humiditySet', 'windSpeed', 'switch']`；新增 `matchRunningCtrl(rec, reply210)`，逐字段四态。文件头里「204 → 210，本文件暂不提供」那句同步改掉。
-- `src/api/writeLock.ts` 的 `checkSentRecord`：204 的 `deviceId` 为空或不是正整数就拒绝发送。
+- `src/api/writeLockVerify.ts`：`VERIFIABLE_FIELDS[204] = ['controlType', 'dewPoint', 'humiditySet', 'windSpeed', 'switch']`；新增 `matchRunningCtrl(rec, reply210, { connected })`，逐字段四态；`connected` 必填，由核对器另读 202 得到，只有明确为 `true` 才比对。文件头里「204 → 210，本文件暂不提供」那句同步改掉。
+- `src/api/writeLock.ts` 的 `checkSentRecord`：204 的 `deviceId` 为空或不是正整数就拒绝发送；核对目标至少改一项，枚举字段取值合法。
+- `src/api/writeLockVerify.ts` 新增 `blocked204(reading210, deviceId, changed, policy)`：读数为空或 `reading210.id` 不等于 `deviceId` 一律拦下；其余发送前的读数检查，规则见 2.3 末尾的 Fable 裁定。
+- 204 核对器不在 P0 注册，S10c 在 `src/app/writeLockSetup.ts` 注册（别处不注册）。
 - `src/features/thermostat/writes.ts` 的 `OpSpec`：加可选的 `noun`（默认「面板」），预检和回读的提示文案用它。S9 不传，行为不变。S10 传「新风设置」。
 
 `matchRunningCtrl` 的口径：
@@ -40,7 +42,8 @@
 - 回包的 `id` 不等于目标设备 id（含空回包、只回了错误文案的回包）：全部字段无法核对。
 - `controlType`、`switch`、`windSpeed` 是 proto3 标量，0 在线上省略，解码出的 0 是真实读数，直接比对。
 - `dewPoint`、`humiditySet` 读数为 -1（界面显示 `--`）或 65536：无法核对。浮点按 0.05 比较。
-- 210 没有 `is_connected`。设备离线由 S10c 的核对器另读 202 判断，离线时可核对字段记结果未知。
+- 210 没有 `is_connected`。设备在线由 S10c 的核对器另读 202 判断并传入 `connected`；不是明确的 `true`（离线或漏传）时，可核对字段记结果未知。
+- `control_type`、`switch`、`wind_speed` 读到 -1、65536 记无法核对。设定值先取整到 0.01 再比，正好差 0.05 判不一致。
 
 验收：
 - `features` 不写时全部取默认值；写了非法值不报错、取默认值。
@@ -145,7 +148,7 @@
 
 范围：
 - `src/features/freshAir/edit.ts`：草稿和读数分开；`build204(draft, fresh210, policy)` 是唯一的组装点；可改项的判断在 `editBlock`。
-- `src/features/freshAir/writes.ts`：只组 `OpSpec`，流程直接用 `thermostat/writes.ts` 的 `runOp`（它本来就是泛型的），不另写一套。`target` 用 `fa:<设备 id>`。
+- `src/features/freshAir/writes.ts`：只组 `OpSpec`，流程直接用 `thermostat/writes.ts` 的 `runOp`（它本来就是泛型的），不另写一套。`target` 用 `fa:<设备 id>`，只作结果条上的标签；写锁仍按屏加（见下表「加锁」）。
 - `src/features/freshAir/lockVerify.ts`：`record204`、`match204`、`verifier204`（读 210 和 202）。
 - `src/app/writeLockSetup.ts`：加 `registerFreshAirVerifiersOnce`，由 `useWriteLockSetup` 在组织数据就绪后调，和 201、206 同一个位置。别处不注册。
 - `source.ts` 加 `setRunning(project, query, beforeSend)`，只走 `writeCtrl(204, …)`。
@@ -156,7 +159,7 @@
 | 环节 | S10 的做法 |
 | --- | --- |
 | 确认 | 在 `FreshAir.tsx` 里取 `useConfirm()`，不从父组件传。确认文案写明项目名、项目 code、设备名和逐项「原值 → 新值」 |
-| 加锁 | 用户点了确认之后再 `acquire(project)`，返回 busy 时提示同屏有下发在进行 |
+| 加锁 | 用户点了确认之后再 `acquire(project)`，返回 busy 时提示同屏有下发在进行。`target` 的 `fa:<设备 id>` 只是结果条上的标签，锁仍然是 `acquire(project)` 按控制屏加，和 201、203、206 互斥 |
 | 预检 | 确认后新读 210 和 202。202 原始回包里目标设备 id 恰好出现一次；设备在线；210 的 `id` 相符；用户没改的字段与确认时的读数相同，否则不发并提示「读数已变化」 |
 | 组装 | 用预检读到的 210 调 `build204`，不用弹窗前的读数。`name` 取预检读到的值 |
 | 发送前 | `checkSentRecord(record)` 不过就 `release` 并提示原因 |
@@ -172,9 +175,8 @@
 
 可改项规则（在 `editBlock`）：
 - `can_change = false`：控制类型不可切换。
-- `control_type = -1`：露点、湿度设定都禁用。
 - 露点设定和湿度设定二选一，只有当前控制类型对应的那个能改。
-- 设备离线、210 `unsupported`、没有 204 权限、`features.freshAirWrite = 'off'`：面板只读。
+- 设备离线、210 `unsupported`、读数 `control_type = -1`、没有 204 权限、`features.freshAirWrite = 'off'`：面板只读（`control_type = -1` 时开关、风速也不能改，见 2.3 的裁定）。
 - 设备开关为关时，只能改开关（回复前的默认，见 2.2）。
 - 风速选项是 低（0）、高（1）、自动（2），不复用温控的 1–99 和 100。
 
@@ -227,7 +229,7 @@
 | A8 | success 表示平台受理还是设备已执行；系统总开关是不是关着 | 不依赖答案：口径本来就是只认回读 | 不用改代码。影响真机验证，见第 4 节 |
 | A9 | 260911001 的控制屏支不支持 210、204 | `unsupported` 状态，面板位置显示说明 | 不用改代码。后端要给一块真正跑 app 12 的屏 |
 | A10 | 经销商角色补 202、210、204 权限 | 按 `can()` 显示无权限或只读 | 不用改代码 |
-| A11 | 210 的 `wind_speed`，以及 `control_type = -1` 时风速和开关还能不能设 | 能设（只禁用露点、湿度） | `editBlock` 的一条规则 |
+| A11 | 210 的 `wind_speed`，以及 `control_type = -1` 时风速和开关还能不能设 | 按 Fable 11/25 裁定：读数 `control_type = -1` 时写入口整体禁用，风速和开关也不能设（`blocked204`） | 后端答复能设后，改 `blocked204` 与 `editBlock` 的这一条 |
 
 ### 2.3 为什么默认用 echo
 
@@ -236,6 +238,12 @@
 - 所以答案未知时，带回当前值在两种情况下都不出错，传 -1 只在一种情况下不出错。
 - 代价：从读到发之间如果有人在屏上改了别的字段，会被带回的旧值盖掉。预检在发送前刚读过，窗口是一次请求的时间。
 - 201 当时的结论是「不变传 -1」，后端也说过「所有设置接口不变项都传 -1」。这句话如果确认覆盖 204 的全部字段，就把默认值改成 `minus1`，和 201 一致。
+
+Fable 11/25 裁定（A1 后端答复之前）：
+- 用户没改的设定项（`control_type`、`dew_point`、`humidity_set`、`wind_speed`）如果在确认后新读的 210 里是 -1（或 65536 等无效值），这次**整条不下发**，提示「有未初始化的设定项」。不能只跳过那一个字段：跳过后 proto3 编码出来是 0，等于把它设成湿度控制、低档或 0°C。
+- 读数 `control_type = -1` 时，写入口直接禁用。
+- 实现在 P0 的 `blocked204`；`build204` 和预检都先调它。`switch` 没改时仍按 proto 传 -1，不在此列。
+- 影响：11/25 实测 260911001 的 `humidity_set = -1`（见 `docs/api/实测记录-1125-新风天气.md`），这台设备在后端答复 A1 或把湿度设定初始化之前，只改风速的 204 也会被拦下。
 
 ## 3. S7 待后端确认的点
 
@@ -294,6 +302,7 @@
 
 R2 决定后面怎么走：
 - 返回设置：进入 4.2。
+- 11/25 实测：260911001 的 210 返回设置，不是「不支持」（见 `docs/api/实测记录-1125-新风天气.md`），但 `humidity_set = -1`，按 2.3 的裁定要先等 A1。
 - 返回不支持：真机下发做不了。把结果发给后端，要一块真正跑 app 12 的屏。S10c 按 4.4 合并。
 
 ### 4.2 下发前要做的
@@ -307,11 +316,12 @@ R2 决定后面怎么走：
 
 ### 4.3 下发顺序
 
-从影响最小的开始，每一步都是「改 → 核对 → 改回」，上一步核对一致才做下一步。
+从影响最小的开始，每一步都是「改 → 核对 → 改回」，上一步核对一致才做下一步。W1 拆成两次独立的下发，每次都回读 210 核对。
 
 | 步骤 | 改什么 | 说明 |
 | --- | --- | --- |
-| W1 | 风速在低、高之间换一档 | 影响最小 |
+| W1a | 风速「低 → 高」（0 → 1） | 影响最小。下发后回读 210 核对 |
+| W1b | 单独再做一次风速「高 → 低」（1 → 0） | 验证 0 值（proto3 省略）能不能生效。下发后回读 210 核对；0 值没生效的，记为后端问题 |
 | W2 | 当前控制类型对应的设定值加一个步长 | 验证浮点比对 |
 | W3 | 控制类型切换 | 只在 `can_change = true` 时做 |
 | W4 | 开关 | 影响最大，放最后，做之前再在群里说一声 |
