@@ -194,6 +194,63 @@ describe('接入时序（按 #24 writeOnce：先等令牌、再 beforeSend、再
   })
 })
 
+describe('held 有效期（#29）', () => {
+  it('acquire 后既没认领也没登记发出：30 秒到期自动释放并通知订阅者；不发强制重读', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
+    const events: unknown[] = []
+    onForceReread((e) => events.push(e))
+    let notes = 0
+    subscribe(() => { notes += 1 })
+    expect(L.HELD_TTL_MS).toBe(30_000)
+    take()
+    await vi.advanceTimersByTimeAsync(L.HELD_TTL_MS - 1)
+    expect(lockOf(PA)?.phase).toBe('held')
+    const before = notes
+    await vi.advanceTimersByTimeAsync(1)
+    expect(lockOf(PA)).toBeNull()
+    expect(notes).toBeGreaterThan(before)
+    expect(events).toEqual([])
+    expect(acquire(PB).ok).toBe(true)
+  })
+  it('claim 或 markSent 之后不再按 held 有效期释放（改按发出后的规则）', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
+    const t = take()
+    claim(t)
+    const t2 = take(PC)
+    markSent(t2, new Promise(() => {}), REC)
+    await vi.advanceTimersByTimeAsync(L.HELD_TTL_MS + 1000)
+    expect(lockOf(PA)?.phase).toBe('sent')
+    expect(lockOf(PC)).not.toBeNull()
+  })
+  it('接入方异常路径：held 时 release(token) 立即释放；释放后的 held 定时器不会误放之后的新锁', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
+    const t = take()
+    expect(release(t)).toBe(true)
+    expect(lockOf(PA)).toBeNull()
+    await vi.advanceTimersByTimeAsync(L.HELD_TTL_MS - 5000)
+    const t2 = take()
+    claim(t2)
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(lockOf(PA)?.phase).toBe('sent')
+  })
+  it('与 settling / 退避 / 证据互不干扰：已下发后跨过 30 秒，退避照常、settling 仍为 true、证据保留，锁按发出后的有效期', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
+    let n = 0
+    const fn = vi.fn(async (sig: AbortSignal): Promise<L.MatchResult> => { L.attachEvidence(sig, `E${++n}`); return false })
+    const t = take()
+    claim(t)
+    markSent(t, Promise.resolve(), REC)
+    requireVerify(t, fn)
+    settle(t, 'ok')
+    await vi.advanceTimersByTimeAsync(L.HELD_TTL_MS + 1000) // 跨过 held 有效期：已排 5 秒、20 秒两次退避
+    expect(fn).toHaveBeenCalledTimes(3)
+    expect(lockOf(PA)?.phase).toBe('unknown')
+    expect(lockOf(PA)?.settling).toBe(true)
+    expect(lockOf(PA)?.lastEvidence).toBe('E3')
+    expect(L.endOf(KEY)).toBeNull()
+  })
+})
+
 describe('原写未结算不放锁；unknown 不被覆盖', () => {
   it('settle fail 早于原写结算：保持，结算后释放；期间 release 被拒', async () => {
     const g = gate()

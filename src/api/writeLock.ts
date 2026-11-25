@@ -55,7 +55,7 @@
 //
 //   acquire(project) ── 任一键被占 → busy
 //      ▼
-//    held（还没发出）
+//    held（还没发出）── 接入方异常路径 release(token)；漏调时 HELD_TTL_MS（30 秒）到期自动释放（#29）
 //      │ beforeSend 里同步 claim(token)：持锁、held、账号与代次未变 → 进入 sent，返回 true
 //      │ 没认领就结束（beforeSend 没调 / 返回 false / 抛错 / 发送前失败）：settle 或登记的 Promise 结算 → 释放、删记录
 //      ▼
@@ -85,6 +85,8 @@ export const VERIFY_TIMEOUT_MS = 15_000
 /** 有效期：默认 2 分钟，最短 30 秒 */
 export const DEFAULT_TTL_MS = 2 * 60_000
 export const MIN_TTL_MS = 30_000
+/** 取锁后还没认领、也没登记发出（held）时的有效期：接入方在 acquire 之后出错又没 release，最多卡这么久（#29） */
+export const HELD_TTL_MS = 30_000
 /** 自动核对未变化 / 无法核对时的退避再核对间隔 */
 export const RETRY_DELAYS_MS = [5_000, 20_000, 60_000] as const
 export const STORAGE_PREFIX = 'hjc-write-lock:'
@@ -188,6 +190,8 @@ interface Entry {
   record?: SentRecord
   sentAt?: number
   expiryTimer?: ReturnType<typeof setTimeout>
+  /** held 阶段的有效期定时器（claim 或 markSent 时清掉） */
+  heldTimer?: ReturnType<typeof setTimeout>
   /** 自动再核对的定时器与已排次数 */
   retryTimer?: ReturnType<typeof setTimeout>
   retries: number
@@ -464,6 +468,7 @@ function drop(e: Entry, how: LockEnd = 'other') {
   }
   for (const k of e.keys) if (byKey.get(k) === e) byKey.delete(k)
   if (e.expiryTimer) clearTimeout(e.expiryTimer)
+  if (e.heldTimer) clearTimeout(e.heldTimer)
   if (e.retryTimer) clearTimeout(e.retryTimer)
   removeStored(e)
   emit()
@@ -556,9 +561,12 @@ export function acquire(target: LockTarget, label = ''): { ok: true; token: Lock
   const token: LockToken = Object.freeze({ id: ++seq, key: keys[0] })
   const e: Entry = { token, op: newOp(), keys, projectId: target.id, label, account: currentAccount(), origin: 'local', phase: 'held', sendSettled: false, overdue: false, verifying: false, retries: 0 }
   for (const k of keys) byKey.set(k, e)
+  // held 有效期：到期仍未认领、未登记发出 → 自动释放并通知订阅者（必未发出，不发强制重读）
+  e.heldTimer = setTimeout(() => { if (e.phase === 'held' && !e.sent) drop(e) }, HELD_TTL_MS)
   emit()
   return { ok: true, token }
 }
+const stopHeldTimer = (e: Entry) => { if (e.heldTimer) { clearTimeout(e.heldTimer); e.heldTimer = undefined } }
 
 /** 只读复核：持锁、还没认领、账号与代次未变 */
 export function isHolder(token: LockToken): boolean {
@@ -570,6 +578,7 @@ export function isHolder(token: LockToken): boolean {
 export function claim(token: LockToken): boolean {
   const e = entryOf(token)
   if (!e || !isHolder(token)) return false
+  stopHeldTimer(e)
   e.phase = 'sent'
   emit()
   return true
@@ -616,6 +625,7 @@ function afterSettled(e: Entry) {
 export function markSent(token: LockToken, sent: Promise<unknown>, record?: SentRecord): void {
   const e = entryOf(token)
   if (!e || e.sent) return
+  stopHeldTimer(e)
   e.sent = sent
   e.sentAt = Date.now()
   // 指令已发出：空的目标房间集合规范成"缺失"，照常落盘（核对按无法核对），不能因此只剩内存锁
@@ -811,7 +821,11 @@ async function runVerify(e: Entry, fn: VerifyFn, signal?: AbortSignal): Promise<
   return result
 }
 
-/** 主动放弃：只在还没认领（held）时，或结论是 fail（确定没生效）且原写已结算时生效；已下发 / 结果未知都要核对一致或到期 */
+/**
+ * 主动放弃：只在还没认领（held）时，或结论是 fail（确定没生效）且原写已结算时生效；已下发 / 结果未知都要核对一致或到期。
+ * 接入方的异常路径必须 release：acquire 之后、claim / markSent 之前出错（组装失败、确认被取消、预检不通过等）要调
+ * release(token)；漏调时 held 锁最多占 HELD_TTL_MS（30 秒）后自动释放（#29）
+ */
 export function release(token: LockToken): boolean {
   const e = entryOf(token)
   if (!e) return false
@@ -842,7 +856,7 @@ export const lockVersion = () => version
 
 /** 仅供测试：清空锁、核对器与配置；换账号来源（不传恢复默认的 api/session） */
 export function __resetWriteLockForTests(account?: () => Account) {
-  for (const e of new Set(byKey.values())) { if (e.expiryTimer) clearTimeout(e.expiryTimer); if (e.retryTimer) clearTimeout(e.retryTimer) }
+  for (const e of new Set(byKey.values())) { if (e.expiryTimer) clearTimeout(e.expiryTimer); if (e.heldTimer) clearTimeout(e.heldTimer); if (e.retryTimer) clearTimeout(e.retryTimer) }
   byKey = new Map()
   ends = new Map()
   sweptFor = null
