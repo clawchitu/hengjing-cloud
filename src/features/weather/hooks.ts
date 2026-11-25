@@ -1,0 +1,75 @@
+// 首页天气的数据 hooks（TanStack Query，沿用全局默认值：服务器错误、网络、超时重试 1 次）。
+// - 城市：useWeatherCity() 读当前账号选过的城市（cityStore.ts），没选过就是无锡；
+// - 实时 + 7 天（/weather）和 24 小时（/weather24）是两个独立查询，状态各自独立，一个失败不影响另一个；
+// - 服务端按 city 缓存 30 分钟，这里 staleTime 也是 30 分钟；查询键带账号，换账号不串；
+// - 失败（接口报错、没有数据）不抛到组件，返回 status='error' 和「暂无天气数据」，页面据此降级，不白屏；
+// - 没有该接口权限时不发请求，status='forbidden'。
+import { useQuery } from '@tanstack/react-query'
+import { useCallback, useMemo, useState } from 'react'
+import { can, useSession } from '@/data/session'
+import { readCity, writeCity } from './cityStore'
+import { weatherQueryOf, type City } from './cities'
+import type { Weather24View, WeatherNowView } from './model'
+import { weatherSource } from './source'
+
+export const WEATHER_STALE_MS = 30 * 60_000
+export const NO_WEATHER_TEXT = '暂无天气数据'
+export const WEATHER_FORBIDDEN_TEXT = '当前账号未开通天气功能'
+
+export const weatherKeys = {
+  all: ['weather'] as const,
+  now: (userKey: string | null, kind: string, city: string) => ['weather', userKey, kind, 'now', city] as const,
+  hours: (userKey: string | null, kind: string, city: string) => ['weather', userKey, kind, 'hours', city] as const,
+}
+
+export interface WeatherLoad<T> {
+  status: 'loading' | 'success' | 'error' | 'forbidden'
+  data: T | null
+  /** error / forbidden 时给页面显示的文案 */
+  text: string | null
+  refetch: () => void
+}
+
+/** 当前账号的天气城市；setCity 记住选择（编码不在城市文件里或未登录时不生效，返回 false） */
+export function useWeatherCity(): { city: City; setCity: (code: string) => boolean } {
+  const { userKey } = useSession()
+  const [tick, setTick] = useState(0)
+  // tick 在 setCity 写入后加一，用来重读存储
+  const city = useMemo(() => { void tick; return readCity(userKey) }, [userKey, tick])
+  const setCity = useCallback((code: string) => {
+    const ok = writeCity(userKey, code)
+    if (ok) setTick((t) => t + 1)
+    return ok
+  }, [userKey])
+  return { city, setCity }
+}
+
+const noop = () => {}
+
+function useWeatherQuery<T>(route: '/v1/weather' | '/v1/weather24', which: 'now' | 'hours', city: City, fetch: (q: string, signal: AbortSignal) => Promise<T>): WeatherLoad<T> {
+  const { userKey, authed } = useSession()
+  const src = weatherSource()
+  const permitted = can(route)
+  const q = weatherQueryOf(city)
+  const query = useQuery({
+    queryKey: weatherKeys[which](userKey, src.kind, q),
+    queryFn: ({ signal }) => fetch(q, signal),
+    enabled: authed && permitted,
+    staleTime: src.kind === 'real' ? WEATHER_STALE_MS : Infinity,
+  })
+  const qRefetch = query.refetch
+  const refetch = useCallback(() => { void qRefetch() }, [qRefetch])
+  if (!permitted) return { status: authed ? 'forbidden' : 'loading', data: null, text: authed ? WEATHER_FORBIDDEN_TEXT : null, refetch: noop }
+  if (query.data !== undefined) return { status: 'success', data: query.data, text: null, refetch }
+  if (query.isError) return { status: 'error', data: null, text: NO_WEATHER_TEXT, refetch }
+  return { status: 'loading', data: null, text: null, refetch }
+}
+
+/** /weather：实时 + 7 天 */
+export function useWeatherNow(city: City): WeatherLoad<WeatherNowView> {
+  return useWeatherQuery('/v1/weather', 'now', city, (q, signal) => weatherSource().now(q, signal))
+}
+/** /weather24：24 小时 */
+export function useWeather24(city: City): WeatherLoad<Weather24View> {
+  return useWeatherQuery('/v1/weather24', 'hours', city, (q, signal) => weatherSource().hours(q, signal))
+}
