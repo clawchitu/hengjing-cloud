@@ -121,6 +121,8 @@
 
 ### S7b 首页天气界面和城市选择
 
+> 待办（来源 #52 自审建议 2）：新口径下 `config.ts` 的 `weatherCityFilter` 不再使用，`weatherNowFallback` 是否沿用由 S7b 定；不用就在 S7b 一并删掉开关和 `public/config.js` 里的对应项（高风险路径，按高风险审）。S7b 用 `src/features/weather` 的 `useWeatherCity` / `useWeatherNow` / `useWeather24`，城市选择只到地级市、来源是本地城市文件（3.1 已作废）。
+
 范围：
 - 新文件 `src/pages/home/WeatherSection.tsx`，放天气三块和城市选择。`Home.tsx` 只把现有的天气块换成这个组件，统计卡和常用项目（S6b）不动。
 - 六格（改动 1）：相对湿度、露点、风向、风力、气压、紫外线。去掉能见度，风向和风力拆开。体感温度没有字段，去掉。
