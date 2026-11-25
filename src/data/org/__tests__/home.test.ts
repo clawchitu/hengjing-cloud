@@ -14,7 +14,6 @@ import { clearTokens, writeTokens } from '../../../api/tokens'
 import { fakeBackend, json, text, type Call } from '../../../api/__tests__/helpers'
 import { __resetSessionViewForTests, mockSignIn } from '../../session'
 import { __resetCurrentForTests, PROJECT_KEY } from '../current'
-import { dealerSections, PLATFORM_DEALER } from '../map'
 import { SET_PROJECT_FAIL_TEXT, useCurrentProject, useFrequentProjects, useOrgStat, whenProjectSet } from '../hooks'
 
 type Route = (call: Call, n: number) => Response | Promise<Response>
@@ -393,14 +392,3 @@ describe('useFrequentProjects（首页常用项目）', () => {
   })
 })
 
-describe('dealerSections（侧栏分段）', () => {
-  const d = (id: string) => ({ id, name: id, short: id, region: '' })
-  const g = (id: string, dealerId: string) => ({ id, code: id, dealerId, name: id, type: '', typeColor: 'cyan' as const, desc: '', created: '', projectIds: [] })
-  it('按经销商顺序；没有集成项目的经销商不出段；不在列表里的归属放到最后（dealer=null）', () => {
-    const s = dealerSections([d('D1'), d('D2'), PLATFORM_DEALER], [g('a', 'D3'), g('b', 'D1'), g('c', PLATFORM_DEALER.id), g('e', 'D1')])
-    expect(s.map((x) => [x.dealer?.id ?? null, x.groups.map((y) => y.id)])).toEqual([['D1', ['b', 'e']], [PLATFORM_DEALER.id, ['c']], [null, ['a']]])
-  })
-  it('经销商列表为空（/distributors 失败）时全部归到最后一段', () => {
-    expect(dealerSections([], [g('a', 'D1')]).map((x) => x.dealer)).toEqual([null])
-  })
-})

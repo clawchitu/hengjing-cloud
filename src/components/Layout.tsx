@@ -2,21 +2,22 @@ import { Fragment, useCallback, useEffect, useId, useLayoutEffect, useRef, useSt
 import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import {
   faCloudSun, faLayerGroup, faSliders, faLeaf, faTemperatureHalf, faFan, faSitemap, faRightFromBracket,
-  faChevronDown, faChevronRight, faMagnifyingGlass, faHouse, faPlugCircleXmark,
+  faChevronRight, faMagnifyingGlass, faHouse, faPlugCircleXmark,
 } from '@fortawesome/free-solid-svg-icons'
 import { Avatar, Icon, LogoMark } from './legacy'
 import { SiteFooter } from './Icp'
 import { Badge } from '@/components/ui/badge'
 import { InputGroup, InputGroupInput } from '@/components/ui/input'
 import { Command, CommandEmpty, CommandItem, CommandList } from '@/components/ui/command'
-import { AfterRender, itemById, setActive } from '@/components/ui/command-sync'
-import { Popover, PopoverAnchor, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import { AfterRender, itemById } from '@/components/ui/command-sync'
+import { Popover, PopoverAnchor, PopoverContent } from '@/components/ui/popover'
+import { OrgHint, ProjectSwitch } from './ProjectSwitch'
 import { cn } from '@/lib/utils'
 import { useApp } from '../app/store'
 import { useCancelConfirmOnLeave, useConfirm } from '../app/feedback'
 import { useIsFetching } from '@tanstack/react-query'
 import { seqNames } from '@/lib/seqNames'
-import { dealerSections, orgKeys, projectsInGroup, useOrgScope, whenProjectSet } from '../data/org'
+import { orgKeys, projectsInGroup, useOrgScope, whenProjectSet } from '../data/org'
 import type { Project } from '../api'
 import { OFFLINE_RECHECK_MS } from '../data/connections'
 import { Button } from '@/components/ui/button'
@@ -35,176 +36,6 @@ export const NAV_PROJECT = [
 ]
 const ALL = [...NAV_MAIN, ...NAV_PROJECT]
 
-/** 组织数据后台刷新失败（有旧数据）、经销商列表失败时，弹层顶部的提示；可重试 */
-function OrgHint({ text, onRetry }: { text: string; onRetry: () => void }) {
-  return (
-    <div role="status" className="flex items-center justify-between gap-2 px-2.5 pt-1 pb-1.5 text-[11.5px] text-orange">
-      <span>{text}</span>
-      <button type="button" className="shrink-0 cursor-pointer text-primary hover:underline" onMouseDown={(e) => e.preventDefault()} onClick={onRetry}>重试</button>
-    </div>
-  )
-}
-
-/** 打开菜单时没有高亮（同旧版）；按上下键先高亮当前项目，回车选中 */
-function ProjectSwitch() {
-  const { project, setProjectId, toast, user } = useApp()
-  const org = useOrgScope()
-  const scope = org.data
-  const pname = seqNames(scope.projects, (p) => p.name, (p) => p.id)
-  const [open, setOpen] = useState(false)
-  const [value, setValue] = useState('')
-  const listRef = useRef<HTMLDivElement>(null)
-  const scrolled = useRef('')
-  /*
-   * 触发器的键盘焦点环（浏览器默认外圈，只在 :focus-visible 时出现）。
-   * 问题：菜单关闭时 Radix 用脚本把焦点还给触发器；若之前用过键盘，Chromium 会让这次脚本聚焦也命中 :focus-visible，
-   * 于是鼠标点选项目后触发器上冒出焦点环（原生按钮不会）。做法同 ui/tabs.tsx：只给“由这次指针操作关闭、
-   * 并且 Radix 确实把焦点还给了触发器”的那一次聚焦打 data-pointer-focus，去掉外圈。
-   *
-   * 期望（“Tab 回来”= 焦点先在别处，再按 Tab 回到触发器；“直接按键”= 关闭后焦点就在触发器上，按一个非修饰键）
-   * | 打开方式    | 关闭方式                  | 关闭后焦点               | 触发器外圈 | Tab 回来 | 直接按键 |
-   * | 鼠标 / 键盘 | 鼠标点选项                | 触发器（Radix 还焦点）   | 无         | 有       | 有       |
-   * | 鼠标 / 键盘 | 鼠标再点触发器            | 触发器（鼠标按下聚焦）   | 无         | 有       | 有       |
-   * | —（关着）   | 鼠标点触发器打开          | 列表（触发器先被按下聚焦）| —         | —        | —        |
-   * | 鼠标 / 键盘 | 方向键 + 回车选中         | 触发器（Radix 还焦点）   | 有         | 有       | 有       |
-   * | 鼠标 / 键盘 | Esc                       | 触发器（Radix 还焦点）   | 有         | 有       | 有       |
-   * | 鼠标 / 键盘 | Tab / Shift+Tab           | 触发器（Radix 还焦点）   | 有         | 有       | 有       |
-   * | 鼠标 / 键盘 | 点外部                    | 不还（Radix 尊重外部交互）| —         | 有       | —        |
-   *
-   * 状态：
-   * - lastPointer（ref）：菜单打开期间最后一次操作是不是指针。在菜单或触发器上指针按下置 true；
-   *   菜单里按键、Esc（Radix 在 document 捕获阶段处理，菜单自己的 keydown 不一定执行，所以走 onEscapeKeyDown）、键盘打开置 false；
-   * - pending（ref）：“触发器马上要因指针操作获得焦点”。两个来源：
-   *   ① onCloseAutoFocus 里记“这次关闭由指针造成”，Radix 紧接着同步调用 trigger.focus()；没还焦点（点外部）时
-   *      pending 在本次事件之后的微任务里清掉，不会留到以后的键盘聚焦；
-   *   ② 在未聚焦的触发器上左键（无 Ctrl）/ 触屏按下，浏览器随后聚焦它（再点触发器关菜单就是这条）；click / pointercancel 时清掉；
-   *   触发器 onFocus 时若 pending 则打标记，随即清 pending；
-   * - data-pointer-focus：只在上面那一次聚焦落地时打上；触发器失焦或在它上面按非修饰键时清除。
-   */
-  const lastPointer = useRef(false)
-  const pending = useRef(false)
-  const [pointerFocus, setPointerFocus] = useState(false)
-  const isAdmin = user.role === 'admin'
-  // 平台账号按经销商分段；经销商列表里没有的归属（列表失败等）归到最后的「其他」，菜单里不丢项目
-  const sections = dealerSections(scope.dealers, scope.groups)
-  // 一个项目可能出现在多个集成项目下：菜单项的 cmdk 值用「组 id:项目 id」保证唯一（后端 ObjectId 与演示 id 都不含冒号），
-  // 选中时仍传项目 id。当前项目的高亮落在菜单里它第一次出现的位置（按经销商 → 集成项目的渲染顺序）
-  const currentValue = (() => {
-    for (const sec of sections) for (const g of sec.groups) if (g.projectIds.includes(project.id)) return itemValue(g.id, project.id)
-    return ''
-  })()
-  const show = (keyboard: boolean) => { setValue(keyboard ? currentValue : ''); scrolled.current = ''; if (keyboard) lastPointer.current = false; setOpen(true) }
-  const pick = (p: Project) => { const r = setProjectId(p.id); setOpen(false); whenProjectSet(r, () => toast(`已切换到「${p.name}」`), (t) => toast(t, true)) }
-  // 打开后焦点在列表（listbox）上。高亮项的 id 写到列表的 aria-activedescendant：cmdk 只在它自己移动高亮时更新这个属性，
-  // 高亮由这里改变（键盘打开、先高亮当前项目、鼠标移动清除）时它会过时，所以每次渲染后按实际高亮盖掉。
-  // 高亮变化时滚进可视区（只滚一次，不跟用户的滚轮抢）。鼠标打开时没有高亮，菜单停在顶部（同旧版）
-  const sync = () => {
-    const el = value ? itemById(listRef.current, value) : null
-    setActive(listRef.current, el)
-    if (el && scrolled.current !== value) { el.scrollIntoView({ block: 'nearest' }); scrolled.current = value }
-  }
-  return (
-    <Popover open={open} onOpenChange={(o) => (o ? show(false) : setOpen(false))}>
-      <PopoverTrigger asChild>
-        <div
-          role="button"
-          tabIndex={0}
-          data-pointer-focus={pointerFocus || undefined}
-          className="proj-switch data-[pointer-focus]:outline-none"
-          onPointerDown={(e) => {
-            lastPointer.current = true
-            // 鼠标 / 触屏按下未聚焦的触发器，浏览器随后聚焦它（同 tabs.tsx：左键无 Ctrl）
-            pending.current = e.button === 0 && !e.ctrlKey && document.activeElement !== e.currentTarget
-          }}
-          onPointerCancel={() => { pending.current = false }}
-          onClick={() => { pending.current = false }}
-          onFocus={() => { if (pending.current) setPointerFocus(true); pending.current = false }}
-          onBlur={() => setPointerFocus(false)}
-          // Radix 触发器默认是 <button type="button">，asChild 到 div 上时去掉这个无意义的 type
-          {...{ type: undefined }}
-          onKeyDown={(e) => {
-            if (!['Shift', 'Control', 'Alt', 'Meta'].includes(e.key)) setPointerFocus(false)
-            if (e.key === 'Enter' || e.key === ' ' || e.key === 'ArrowDown') { e.preventDefault(); if (!open) show(true) }
-          }}
-        >
-          <div className="lbl">当前项目</div>
-          <div className="name">{project.name}<Icon className="chev" icon={faChevronDown} /></div>
-          <div className="st">
-            {!project.id ? <span>暂无可用项目</span> : project.online ? <span className="on"><span className="dot" /> 在线</span> : <span className="off"><span className="dot" /> 离线</span>}
-          </div>
-        </div>
-      </PopoverTrigger>
-      {/*
-        旧菜单绝对定位在 .proj-switch 的内边距盒里（左右各让出 1px 边框、上沿距边框 5px），这里用对齐偏移复刻；
-        旧菜单在侧栏的滚动区里，阴影被侧栏右沿裁掉，Portal 出来后用 clip-path 照裁。右沿在菜单右侧 15px 处 =
-        global.css 的 .sb-scroll 右内边距 12px + .proj-switch 右外边距 2px + 右边框 1px（侧栏 232px 定宽）。
-        窗口矮到滚动区出现占宽的竖向滚动条时（Windows 等非覆盖式滚动条），触发器和菜单随滚动区一起变窄，
-        「菜单右沿 + 15px」正好落在滚动条左沿，阴影同旧版一样裁在那里，不会盖住滚动条。改这几处数值时同步改这里。
-        高度不超过视口里实际可用的高度（矮窗口下整个菜单仍在屏内，可滚动到最后一项）
-      */}
-      <PopoverContent
-        asChild
-        sideOffset={5}
-        alignOffset={1}
-        aria-label="切换当前项目"
-        // 打开后焦点直接给列表（listbox），方向键与读屏的活动项都在它上面
-        onOpenAutoFocus={(e) => { e.preventDefault(); listRef.current?.focus() }}
-        onCloseAutoFocus={() => {
-          pending.current = lastPointer.current
-          queueMicrotask(() => { pending.current = false })
-        }}
-        onEscapeKeyDown={() => { lastPointer.current = false }}
-        onPointerDown={() => { lastPointer.current = true }}
-        className="max-h-[min(320px,var(--radix-popover-content-available-height))] w-[calc(var(--radix-popover-trigger-width)-2px)] cursor-pointer overflow-y-auto rounded-lg p-1.5 shadow-[0_10px_30px_rgba(2,6,23,.35)] [clip-path:inset(-60px_-15px_-60px_-60px)]"
-      >
-        <Command
-          shouldFilter={false}
-          value={value}
-          onValueChange={setValue}
-          onKeyDown={(e) => {
-            lastPointer.current = false
-            if (value === '' && currentValue && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) { e.preventDefault(); setValue(currentValue) }
-            // 菜单在 Portal 里，Tab / Shift+Tab 会跳到页面末尾：改为关闭菜单、焦点回到触发器
-            if (e.key === 'Tab') { e.preventDefault(); setOpen(false) }
-          }}
-        >
-          {/* 演示数据不会出现这两条（截图不变）：后台刷新失败时项目在线状态可能过期；经销商列表失败时分段名缺失 */}
-          {org.staleError && <OrgHint text="项目列表刷新失败，数据可能已过期" onRetry={org.refetch} />}
-          {isAdmin && org.dealersError && <OrgHint text="经销商列表加载失败，部分分组暂按「其他」显示" onRetry={org.refetch} />}
-          <CommandList ref={listRef} label="切换当前项目">
-            {sections.map(({ dealer: d, groups }) => {
-              const label = d ? d.short : '其他'
-              return (
-                <div key={d?.id ?? 'other:'} role="presentation">
-                  {isAdmin && <div aria-hidden className="border-t border-line-2 px-2.5 pt-2.5 pb-0.5 text-[11px] font-bold text-primary">{label}</div>}
-                  {groups.map((g) => (
-                    <div key={g.id} role="group" aria-label={isAdmin ? `${label} · ${g.name}` : g.name}>
-                      <div aria-hidden className="px-2.5 pt-2 pb-1 text-[11px] text-faint">{g.name}</div>
-                      {projectsInGroup(g, scope.projects).map((p) => (
-                        <CommandItem
-                          key={p.id}
-                          value={itemValue(g.id, p.id)}
-                          onSelect={() => pick(p)}
-                          data-current={p.id === project.id || undefined}
-                          className={cn('rounded-[7px] text-[13px]', p.id === project.id ? 'bg-primary-soft font-semibold text-primary' : 'hover:bg-background')}
-                        >
-                          <span>{pname.get(p.id) ?? p.name}</span>{!p.online && <small className="text-[11px] text-faint">离线</small>}
-                        </CommandItem>
-                      ))}
-                    </div>
-                  ))}
-                </div>
-              )
-            })}
-            {!scope.projects.length && <div className="px-2.5 py-3 text-[12.5px] text-muted-foreground">暂无可用项目</div>}
-            <AfterRender run={sync} />
-          </CommandList>
-        </Command>
-      </PopoverContent>
-    </Popover>
-  )
-}
-
 /** 项目搜索: only single projects inside the user's visible 集成项目; picking one makes it the 当前项目 */
 function ProjectSearch() {
   const { setProjectId, toast, project } = useApp()
@@ -217,7 +48,19 @@ function ProjectSearch() {
   const [listId, setListId] = useState<string>()
   const [itemId, setItemId] = useState<string>()
   const formRef = useRef<HTMLFormElement>(null)
+  const inputRef = useRef<HTMLInputElement>(null)
   const contentId = useId()
+  // Cmd+K / Ctrl+K：聚焦顶栏搜索（不做单独的命令面板）
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key?.toLowerCase() !== 'k' || !(e.metaKey || e.ctrlKey) || e.altKey || e.shiftKey || e.isComposing) return
+      e.preventDefault()
+      inputRef.current?.focus()
+      inputRef.current?.select()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
   const s = q.trim().toLowerCase()
   const hits = s ? scope.projects.filter((p) => (p.name + ' ' + p.code).toLowerCase().includes(s)).slice(0, 8) : []
   // 一个项目可能属于多个集成项目：列出全部所属组名
@@ -269,8 +112,10 @@ function ProjectSearch() {
             <InputGroup variant="search">
               <Icon icon={faMagnifyingGlass} />
               <InputGroupInput
+                ref={inputRef}
                 className="min-w-0 text-foreground placeholder:text-faint"
                 placeholder="搜索项目名称 / 项目ID"
+                aria-keyshortcuts="Meta+K Control+K"
                 role="combobox"
                 aria-label="搜索项目"
                 aria-autocomplete="list"
@@ -319,9 +164,6 @@ function ProjectSearch() {
     </Popover>
   )
 }
-
-/** cmdk 选项上带 data-value（菜单为「组 id:项目 id」） */
-const itemValue = (groupId: string, projectId: string) => groupId + ':' + projectId
 
 /**
  * 项目离线（项目列表的 online 不为 true：控制屏不在线，且没有在线的 DTU，见接口文档 4）。

@@ -11,6 +11,7 @@ import { can, useSession } from '../session'
 import { capabilitiesOf, type Capabilities } from './capabilities'
 import { bumpSelectTick, forgetRejected, getRejected, getSelectTick, getStoredProjectIdFor, noteScope, setRejected, setStoredProjectId, subscribeCurrent } from './current'
 import { joinScope, resolveCurrentProject, resolveDealerId, withPlatformDealer } from './map'
+import { recordRecent } from './prefs'
 import { mockOrg, orgSource, type OrgContext, type ProjectFilter } from './sources'
 import type { Dealer, Group, LoadStatus, Project, Scope } from './types'
 
@@ -225,6 +226,8 @@ export function useCurrentProject(): CurrentProject {
       // 再选当前项目不算一次切换：不上报，免得抬高常用项目的排序
       const same = id === getStoredProjectIdFor(userKey)
       setStoredProjectId(id, userKey)
+      // 侧栏切换器的「最近使用」（按账号，只存本地）：所有切换入口都记
+      recordRecent(userKey, id)
       if (same) return true
       if (isMockMode()) void reportProjectSelect(user, id).then(bumpSelectTick)
       else reportClick(id)

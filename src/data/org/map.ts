@@ -111,24 +111,6 @@ export function joinScope(dealers: readonly Dealer[], groups: readonly Group[], 
   return { dealers: ds, groups: [...groups], projects: visible }
 }
 
-export interface DealerSection {
-  /** 经销商；null 表示经销商列表里找不到的归属（/distributors 失败或没返回它），侧栏归到「其他」 */
-  dealer: Dealer | null
-  groups: Group[]
-}
-
-/**
- * 侧栏项目菜单的分段：按经销商列表的顺序，每个经销商下面是它的集成项目（没有集成项目的经销商不出段）；
- * 归属不在经销商列表里的集成项目放到最后一段（dealer=null），不会因为经销商列表失败而从菜单里消失。
- */
-export function dealerSections(dealers: readonly Dealer[], groups: readonly Group[]): DealerSection[] {
-  const known = new Set(dealers.map((d) => d.id))
-  const out: DealerSection[] = dealers.map((d) => ({ dealer: d, groups: groups.filter((g) => g.dealerId === d.id) })).filter((s) => s.groups.length)
-  const rest = groups.filter((g) => !known.has(g.dealerId))
-  if (rest.length) out.push({ dealer: null, groups: rest })
-  return out
-}
-
 /**
  * 当前项目：存储的 ID 在可见项目里就用它；否则（失效、换了账号、从没选过）回退到第一个可见项目；
  * 没有可见项目（加载中、无数据）为 null。回退不改写存储：项目列表恢复后仍回到原来的选择。
