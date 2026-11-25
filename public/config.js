@@ -15,7 +15,6 @@
 //   freshAirFilterWarn     false（默认）| true：滤网寿命的告警颜色和更换提示（阈值按 filter_life_p 的比例）。
 //   roomSwitchReported     true（默认）| false：200 的房间开关是否可信。后端已确认真实上报（11/25）；
 //                          写 false 时房间开关显示「未知」、核对开关记无法核对、不拿它禁用温度和节能。
-//   weatherCityFilter      'auto'（默认）| 'intersect' | 'none'：候选城市是否用 /wx/city-list 过滤。
 //   weatherNowFallback     true（默认）| false：/weather 失败时用小时预报顶替实时数据。
 //   例：features: { freshAirWrite: 'off' }
 window.__HJC_CONFIG__ = {}

@@ -37,8 +37,6 @@ export interface Features {
    * 只管真实接口；演示数据的房间开关是真实的，按 true 处理（见 roomSwitchReported()）
    */
   roomSwitchReported: boolean
-  /** 候选城市是否用 /wx/city-list 过滤：'auto' 调用成功且非空才取交集；'intersect' 严格取交集；'none' 不调 */
-  weatherCityFilter: 'auto' | 'intersect' | 'none'
   /** /weather 失败时用 /weather24 最近一小时顶替实时数据 */
   weatherNowFallback: boolean
 }
@@ -48,7 +46,6 @@ export const FEATURE_DEFAULTS: Readonly<Features> = Object.freeze({
   // 后端 11/25 答复字段没反，但 proto 里 filter_life_p 是 int32（按比例只能是 0 或 1），确认前告警保持关，避免 0.72 截成 0 误报
   freshAirFilterWarn: false,
   roomSwitchReported: true,
-  weatherCityFilter: 'auto',
   weatherNowFallback: true,
 })
 
@@ -58,7 +55,6 @@ const FEATURE_VALID: { [K in keyof Features]: (v: unknown) => v is Features[K] }
   freshAirWrite: oneOf('on', 'off'),
   freshAirFilterWarn: isBool,
   roomSwitchReported: isBool,
-  weatherCityFilter: oneOf('auto', 'intersect', 'none'),
   weatherNowFallback: isBool,
 }
 
