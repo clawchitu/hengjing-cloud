@@ -692,6 +692,18 @@ describe('下发前控制屏实时预检（ctrl 205，赤兔 11/25）', () => {
     const order = be.calls.map(pathOf).filter((p) => p === '/ctrl/device-summary-get' || p === R204)
     expect(order).toEqual(['/ctrl/device-summary-get', R204])
   })
+  it('205 返回 403（无连接状态权限）→ 0 个写请求、不占锁，单独文案（不说控制屏未连接），不给重试', async () => {
+    const be = backend({ '/ctrl/device-summary-get': () => new Response('no permission', { status: 403, headers: { 'content-type': 'text/plain' } }) })
+    await draftWindAndSend()
+    await confirmOk()
+    await waitFor(() => expect(toasts()).toContain('TXFS500：当前账号无连接状态权限，无法确认控制屏在线，暂不能下发，请联系管理员'))
+    await flush(50)
+    expect(writes(be)).toHaveLength(0)
+    expect(lockOf(P12 as never)).toBeNull()
+    expect(result()?.textContent).toContain('未下发：当前账号无连接状态权限，无法确认控制屏在线，暂不能下发，请联系管理员')
+    expect(result()?.textContent).not.toContain('控制屏未连接')
+    expect(within(result()!).queryByRole('button', { name: '重试' })).toBeNull()
+  })
   it('写请求收到网关纯文本 504：结果说明补「控制屏 10 秒内没有应答，可能离线」', async () => {
     backend({ [R204]: () => new Response('upstream request timeout', { status: 504, headers: { 'content-type': 'text/plain' } }) })
     await draftWindAndSend()

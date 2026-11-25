@@ -802,7 +802,7 @@ describe('下发', () => {
       expect(be.callsTo('/ctrl/device-summary-get')).toHaveLength(1)
       expect(reads(be)).toBe(r0)
       expect(lockOf('project:p1')).toBeNull()
-      expect(await openNotes()).toContain('未下发（控制屏未连接）')
+      expect(await openNotes()).toContain('未下发（控制屏未连接），可重新勾选下发')
     })
     it('205 超过 5 秒没返回 → 同样未下发、不发 203、不占锁', async () => {
       const be = backend({ '/ctrl/room-temperature-data-get': () => rooms(1, 26), '/ctrl/unified-ctrl-set': () => reply(true), '/ctrl/device-summary-get': () => new Promise<Response>(() => {}) })
@@ -815,7 +815,7 @@ describe('下发', () => {
       await screen.findByText('未下发', { selector: '[data-slot=badge]' }, { timeout: 3000 })
       expect(be.callsTo('/ctrl/unified-ctrl-set')).toHaveLength(0)
       expect(lockOf('project:p1')).toBeNull()
-      expect(await openNotes()).toContain('未下发（控制屏未连接）')
+      expect(await openNotes()).toContain('未下发（控制屏未连接），可重新勾选下发')
     })
     it('一离线一在线：只给在线的发 203，离线的标「未下发（控制屏未连接）」，在线的照常核对出结果（p5 离线在后，p1 在线在前）', async () => {
       const sentTo = new Set<string>()
@@ -830,7 +830,18 @@ describe('下发', () => {
       expect(be.callsTo('/ctrl/unified-ctrl-set').map(pid)).toEqual(['p1'])
       expect(be.callsTo('/ctrl/device-summary-get').map(pid)).toEqual(['p1', 'p5'])
       expect(lockOf('project:p5')).toBeNull()
-      expect(await openNotes()).toContain('未下发（控制屏未连接）')
+      expect(await openNotes()).toContain('未下发（控制屏未连接），可重新勾选下发')
+    })
+    it('205 返回 403（无连接状态权限）→ 0 个写请求、不占锁，单独文案（不说控制屏未连接），没有重试按钮', async () => {
+      const be = backend({ '/ctrl/room-temperature-data-get': () => rooms(1, 26), '/ctrl/unified-ctrl-set': () => reply(true), '/ctrl/device-summary-get': () => text('no permission', 403) })
+      await click(okIn(await prepare()))
+      await screen.findByText('未下发', { selector: '[data-slot=badge]' }, { timeout: 3000 })
+      expect(be.callsTo('/ctrl/unified-ctrl-set')).toHaveLength(0)
+      expect(lockOf('project:p1')).toBeNull()
+      const notes = await openNotes()
+      expect(notes).toContain('未下发（当前账号无连接状态权限，无法确认控制屏在线，暂不能下发，请联系管理员）')
+      expect(notes).not.toContain('控制屏未连接')
+      expect(screen.queryByRole('button', { name: '重试' })).toBeNull()
     })
     it('203 收到网关纯文本 504：说明里补「控制屏 10 秒内没有应答，可能离线」，仍按结果未知', async () => {
       fakeClock()

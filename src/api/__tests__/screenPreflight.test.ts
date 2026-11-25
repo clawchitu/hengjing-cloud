@@ -4,7 +4,7 @@ import { setCurrentUserId } from '../auth'
 import { setConfig } from '../config'
 import { ApiError, errorFromResponse } from '../errors'
 import { __resetHttpForTests } from '../http'
-import { NO_REPLY_504_NOTE, preflightScreen, SCREEN_CHECK_MS, withNoReplyNote } from '../screenPreflight'
+import { NO_REPLY_504_NOTE, preflightScreen, SCREEN_CHECK_MS, SCREEN_FORBIDDEN_TEXT, screenBlockText, withNoReplyNote } from '../screenPreflight'
 import { clearTokens, writeTokens } from '../tokens'
 import { fakeBackend, json, text } from './helpers'
 
@@ -32,10 +32,17 @@ describe('preflightScreen（ctrl 205）', () => {
     fakeBackend({ [R205]: () => text('service unavailable', 503) })
     expect(await preflightScreen('P1')).toBe('offline')
   })
-  it('其他失败（500、无权限、断网）→ offline', async () => {
+  it('205 返回 403（网关 no permission / JSON code 7）→ forbidden（单独文案）；token err 不算', async () => {
+    fakeBackend({ [R205]: () => text('no permission', 403) })
+    expect(await preflightScreen('P1')).toBe('forbidden')
+    fakeBackend({ [R205]: () => json({ code: 7, message: 'permission denied' }, 403) })
+    expect(await preflightScreen('P1')).toBe('forbidden')
+    expect(screenBlockText('forbidden')).toBe(SCREEN_FORBIDDEN_TEXT)
+    expect(screenBlockText('offline')).toBe('控制屏未连接，暂不能下发')
+    expect(screenBlockText('timeout')).toBe('控制屏未连接，暂不能下发')
+  })
+  it('其他失败（500、断网）→ offline', async () => {
     fakeBackend({ [R205]: () => json({ code: 13, message: 'x' }, 500) })
-    expect(await preflightScreen('P1')).toBe('offline')
-    fakeBackend({})
     expect(await preflightScreen('P1')).toBe('offline')
     vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('Failed to fetch') }))
     expect(await preflightScreen('P1')).toBe('offline')

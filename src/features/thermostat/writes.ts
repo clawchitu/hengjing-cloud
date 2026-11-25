@@ -28,7 +28,7 @@ import {
   type FieldResult, type LockInfo, type LockTarget, type MatchDetail, type MatchResult, type SentRecord,
 } from '@/api/writeLock'
 import { getStoredProjectId } from '@/data/org/current'
-import { preflightScreen, SCREEN_OFFLINE_TEXT, withNoReplyNote, type ScreenState } from '@/api/screenPreflight'
+import { preflightScreen, screenBlockText, withNoReplyNote, type ScreenState } from '@/api/screenPreflight'
 import { verdictOf } from '@/api/writeLockVerify'
 import { outcomeOf } from '@/features/unified/machine'
 
@@ -191,8 +191,10 @@ export async function runOp<P, L>(o: OpSpec<P, L>): Promise<RunResult> {
     try { screen = await (o.screen ?? preflightScreen)(projectId, sac.signal) } catch { screen = 'offline' }
     if (!sameSession() || !sameProject() || !o.present()) return 'aborted'
     if (screen !== 'online') {
-      say(`${o.subject}：${SCREEN_OFFLINE_TEXT}`, true)
-      record({ outcome: 'fail', text: `未下发：${SCREEN_OFFLINE_TEXT}`, readback: 'ok', retry: o.retry ?? 'retry' })
+      // 403（无连接状态权限）：单独文案，重试没用，不给重试
+      const why = screenBlockText(screen)
+      say(`${o.subject}：${why}`, true)
+      record({ outcome: 'fail', text: `未下发：${why}`, readback: 'ok', ...(screen === 'forbidden' ? {} : { retry: o.retry ?? 'retry' }) })
       return 'not-sent'
     }
 

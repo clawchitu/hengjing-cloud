@@ -15,7 +15,8 @@
 //   一致的字段也记为结束，全部结束即放；未变化 / 无法核对 / 结果未知都不提前放锁。应答结果未知 → unknown。
 //   批次截止时间只影响界面上的标注，不放锁。
 // - 控制屏实时预检（赤兔 11/25，src/api/screenPreflight.ts）：轮到某个项目时先现查一次 ctrl 205（单独 5 秒超时），没通过
-//   （503 / 超时 / 失败）→ 这一项标「未下发（控制屏未连接）」、不取锁、不发写请求，接着下一个；在线的照常发，整批不受影响
+//   （503 / 超时 / 失败）→ 这一项标「未下发（控制屏未连接），可重新勾选下发」、不取锁、不发写请求，接着下一个；在线的照常发，整批不受影响。
+//   205 返回 403（无连接状态权限）同样拦下，单独标「未下发（当前账号无连接状态权限…）」
 import { callCtrl, writeCtrl, type CtrlReply, type WriteQuery } from '@/api/ctrl'
 import { INVALID_HOURLY, NO_DATA } from '@/api/values'
 import { roomSwitchReported } from '@/api/config'
@@ -27,7 +28,7 @@ import { createUnifiedController, isDone, outcomeOf, type UnifiedController, typ
 import { changedFields, describeQuery, fieldResults, type EchoField, type UnifiedContext, type UnifiedDraft, type UnifiedEcho } from './rules'
 import { acquire, beginRead, checkSentRecord, claim, commitRead, currentAccount, holds, lockOf, markOverdue, markSent, OTHER_ACCOUNT_TEXT, requireVerify, sameAccount, settle, verify, type LockToken } from '@/api/writeLock'
 import { LOCK_BUSY_TEXT, lockTargetOf, recordOf } from './lock'
-import { preflightScreen, SCREEN_OFFLINE_ROW, withNoReplyNote, type ScreenState } from '@/api/screenPreflight'
+import { preflightScreen, SCREEN_FORBIDDEN_ROW, SCREEN_OFFLINE_ROW, withNoReplyNote, type ScreenState } from '@/api/screenPreflight'
 
 /** 页面传进来的项目（S6a 的 Project 直接可用） */
 export interface BatchProject {
@@ -485,7 +486,8 @@ export function createUnifiedBatch(deps: BatchDeps) {
           if (scr === 'deadline') break
           if (scr !== 'online' || stopped || expired) {
             if (!e.final && !stopped && !expired) {
-              e.final = { status: 'not-sent', note: SCREEN_OFFLINE_ROW, retry: true }
+              // 403（无连接状态权限）单独文案、不标可重试；其余按控制屏未连接，可重新勾选下发
+              e.final = scr === 'forbidden' ? { status: 'not-sent', note: SCREEN_FORBIDDEN_ROW } : { status: 'not-sent', note: SCREEN_OFFLINE_ROW, retry: true }
               e.at ??= stamp(now())
               e.ctl.abort()
               emit({})
