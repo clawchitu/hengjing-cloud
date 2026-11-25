@@ -160,8 +160,6 @@ tbody[data-slot="table-body"] > tr:hover > td { background: #fafcfe; }
 .login-brand b { font-size: 18px; font-weight: 600; display: block; }
 .login-brand small { font-size: 9.5px; letter-spacing: 2.6px; color: #94a3b8; }
 .login-copy { margin-top: auto; margin-bottom: auto; padding-top: 110px; }
-.status-chip { display: inline-flex; align-items: center; gap: 7px; font-size: 11px; color: #a5f3fc; background: rgba(15,23,42,.45); border: 1px solid rgba(165,243,252,.25); border-radius: 20px; padding: 4px 12px; backdrop-filter: blur(4px); }
-.status-chip .dot { color: #34d399; }
 .login-copy h2 { font-size: 34px; line-height: 1.35; margin: 18px 0 18px; font-weight: 700; letter-spacing: 0; max-width: 482px; }
 .login-copy p { color: #cbd5e1; font-size: 13.5px; line-height: 1.75; max-width: 470px; margin: 0 0 40px; }
 .feat { display: flex; gap: 14px; }
@@ -170,6 +168,9 @@ tbody[data-slot="table-body"] > tr:hover > td { background: #fafcfe; }
 .feat b { display: block; font-size: 12.5px; font-weight: 600; margin: 14px 0 4px; }
 .feat small { color: #94a3b8; font-size: 11px; }
 .login-foot { color: #64748b; font-size: 11px; margin-top: 40px; }
+.login-foot a, .site-foot a { color: inherit; text-decoration: none; }
+.login-foot a:hover, .site-foot a:hover { text-decoration: underline; }
+.site-foot { margin-top: auto; padding: 0 28px 18px; text-align: center; color: var(--faint); font-size: 11px; }
 .login-right { flex: 1; display: grid; place-items: center; }
 .login-form { width: 346px; }
 .login-form h1 { font-size: 24px; margin: 0 0 8px; font-weight: 700; }
@@ -182,4 +183,3 @@ tbody[data-slot="table-body"] > tr:hover > td { background: #fafcfe; }
 .divider { display: flex; align-items: center; gap: 12px; color: var(--faint); font-size: 11px; margin: 26px 0 16px; }
 .divider::before, .divider::after { content: ''; height: 1px; background: #e2e8f0; flex: 1; }
 .alt-login { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-.login-ver { text-align: center; color: var(--faint); font-size: 11px; margin-top: 40px; }

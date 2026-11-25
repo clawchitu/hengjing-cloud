@@ -472,13 +472,92 @@ describe('下发前控制屏实时预检（ctrl 205，赤兔 11/25）', () => {
     expect(done.rows.map((r) => [r.status, r.note, r.retry])).toEqual([['not-sent', '未下发（控制屏未连接），可重新勾选下发', true], ['success', undefined, undefined]])
     expect(lockOf(a)).toBeNull()
   })
-  it('超时（timeout）与预检抛错同样按未下发；全部离线 → 0 个写请求', async () => {
+  it('两次都超时、预检抛错同样按未下发，文案分开（S13 P2）；全部没通过 → 0 个写请求', async () => {
     const t = make([P('a', '240829001'), P('b', '260911001')], async (id) => { if (id === 'a') return 'timeout'; throw new Error('x') })
     t.batch.prepare(['a', 'b'], { roomSwitch: 1 })
     const done = await t.batch.start()
     expect(t.send).not.toHaveBeenCalled()
-    expect(done.rows.map((r) => r.status)).toEqual(['not-sent', 'not-sent'])
-    expect(done.rows.every((r) => r.note === '未下发（控制屏未连接），可重新勾选下发' && r.retry)).toBe(true)
+    expect(t.screen.mock.calls.map((c) => c[0])).toEqual(['a', 'b', 'a']) // 只有超时的 a 重查一次，抛错的 b 不重查
+    expect(done.rows.map((r) => [r.status, r.note, r.retry])).toEqual([
+      ['not-sent', '控制屏在线检查超时，未下发，请重试', true],
+      ['not-sent', '控制屏在线检查失败，未下发，请重试', true],
+    ])
+  })
+  it('第一次超时、重查在线 → 放行，203 只发一次（S13 P2）', async () => {
+    const n = new Map<string, number>()
+    const a = P('a', '240829001')
+    const t = make([a], async (id) => { n.set(id, (n.get(id) ?? 0) + 1); return n.get(id) === 1 ? 'timeout' : 'online' })
+    t.batch.prepare(['a'], { roomSwitch: 1 })
+    const done = await t.batch.start()
+    expect(t.screen).toHaveBeenCalledTimes(2)
+    expect(t.wire).toEqual(['a'])
+    expect(t.send).toHaveBeenCalledTimes(1)
+    expect(done.rows[0].status).toBe('success')
+  })
+  it('503 不重查，标「控制屏未连接」', async () => {
+    const t = make([P('a', '240829001')], async () => 'offline')
+    t.batch.prepare(['a'], { roomSwitch: 1 })
+    const done = await t.batch.start()
+    expect(t.screen).toHaveBeenCalledTimes(1)
+    expect(done.rows[0].note).toBe('未下发（控制屏未连接），可重新勾选下发')
+  })
+  it('重查只针对超时的项目、并行：3 个项目 2 个 5 秒超时 → 两个重查在第 5 秒同时发出，第 10 秒都有结论', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
+    try {
+      const at: Array<[string, number]> = []
+      const t0 = Date.now()
+      const cnt = new Map<string, number>()
+      const readBack = vi.fn(async () => ({ rooms: 2, roomSwitch: 1, roomTemp: 26 }))
+      const w = fakeWire()
+      const sc = vi.fn((id: string) => {
+        at.push([id, Date.now() - t0])
+        const k = (cnt.get(id) ?? 0) + 1; cnt.set(id, k)
+        if (id === 'ok') return Promise.resolve<ScreenState>('online')
+        return new Promise<ScreenState>((r) => setTimeout(() => r(k === 1 ? 'timeout' : 'online'), 5_000))
+      })
+      const projects = [P('s1', '240829001'), P('s2', '240829002'), P('ok', '260911001')]
+      const batch = createUnifiedBatch({ getProjects: () => projects, readBack, send: w.send, log: () => {}, screen: sc })
+      batch.prepare(['s1', 's2', 'ok'], { roomSwitch: 1 })
+      const run = batch.start()
+      await vi.advanceTimersByTimeAsync(10_100)
+      const done = await run
+      expect(at).toEqual([['s1', 0], ['s2', 0], ['ok', 0], ['s1', 5_000], ['s2', 5_000]])
+      expect(w.wire).toEqual(['s1', 's2', 'ok'])
+      expect(done.rows.every((r) => r.status === 'success')).toBe(true)
+    } finally { vi.useRealTimers() }
+  })
+  it('剩余时间不够「再查 5 秒 + 写 12 秒」→ 不重查，直接按超时拦下', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
+    try {
+      const readBack = vi.fn(async () => ({ rooms: 2, roomSwitch: 1, roomTemp: 26 }))
+      const w = fakeWire()
+      // 截止 21 秒：第 5 秒超时时剩 16 秒 < 17 秒
+      const sc = vi.fn(() => new Promise<ScreenState>((r) => setTimeout(() => r('timeout'), 5_000)))
+      const batch = createUnifiedBatch({ getProjects: () => [P('a', '240829001')], readBack, send: w.send, log: () => {}, screen: sc, deadlineMs: 21_000 })
+      batch.prepare(['a'], { roomSwitch: 1 })
+      const run = batch.start()
+      await vi.advanceTimersByTimeAsync(5_100)
+      const done = await run
+      expect(sc).toHaveBeenCalledTimes(1)
+      expect(w.send).not.toHaveBeenCalled()
+      expect(done.rows[0]).toMatchObject({ status: 'not-sent', note: '控制屏在线检查超时，未下发，请重试', retry: true })
+    } finally { vi.useRealTimers() }
+  })
+  it('剩余时间正好够（截止 22 秒，第 5 秒超时剩 17 秒）→ 重查', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
+    try {
+      const readBack = vi.fn(async () => ({ rooms: 2, roomSwitch: 1, roomTemp: 26 }))
+      const w = fakeWire()
+      let k = 0
+      const sc = vi.fn(() => (++k === 1 ? new Promise<ScreenState>((r) => setTimeout(() => r('timeout'), 5_000)) : Promise.resolve<ScreenState>('online')))
+      const batch = createUnifiedBatch({ getProjects: () => [P('a', '240829001')], readBack, send: w.send, log: () => {}, screen: sc, deadlineMs: 22_000 })
+      batch.prepare(['a'], { roomSwitch: 1 })
+      const run = batch.start()
+      await vi.advanceTimersByTimeAsync(5_100)
+      await run
+      expect(sc).toHaveBeenCalledTimes(2)
+      expect(w.wire).toEqual(['a'])
+    } finally { vi.useRealTimers() }
   })
   it('205 返回 403（无连接状态权限）：同样不取锁、不发，单独文案、不标可重试；在线的照常发', async () => {
     const a = P('a', '240829001'), b = P('b', '260911001')
@@ -490,7 +569,7 @@ describe('下发前控制屏实时预检（ctrl 205，赤兔 11/25）', () => {
     expect(done.rows[0].retry).toBeUndefined()
     expect(lockOf(a)).toBeNull()
   })
-  it('多个 205 超时不影响在线项目：8 个各 5 秒不应答排在前面，最后一个在线的仍在 35 秒截止前发出（开始时并行查）', async () => {
+  it('多个 205 超时不影响在线项目：8 个两次都 5 秒不应答排在前面，最后一个在线的仍在 35 秒截止前发出（开始时并行查、重查也并行）', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
     try {
       const slow = Array.from({ length: 8 }, (_, i) => P('s' + i, '10000000' + i))
@@ -498,12 +577,12 @@ describe('下发前控制屏实时预检（ctrl 205，赤兔 11/25）', () => {
       const t = make([...slow, ok], (id) => (id === 'ok' ? Promise.resolve('online' as const) : new Promise((r) => setTimeout(() => r('timeout'), 5_000))))
       t.batch.prepare([...slow.map((p) => p.id), 'ok'], { roomSwitch: 1 })
       const run = t.batch.start()
-      await vi.advanceTimersByTimeAsync(6_000)
+      await vi.advanceTimersByTimeAsync(11_000)
       const done = await run
-      expect(t.screen).toHaveBeenCalledTimes(9)
+      expect(t.screen).toHaveBeenCalledTimes(17) // 9 次首查 + 8 次重查
       expect(t.wire).toEqual(['ok'])
       expect(done.rows.at(-1)!.status).toBe('success')
-      expect(done.rows.slice(0, 8).every((r) => r.status === 'not-sent' && r.note === '未下发（控制屏未连接），可重新勾选下发')).toBe(true)
+      expect(done.rows.slice(0, 8).every((r) => r.status === 'not-sent' && r.note === '控制屏在线检查超时，未下发，请重试')).toBe(true)
     } finally { vi.useRealTimers() }
   })
   it('演示数据（mock）默认不查 205', async () => {

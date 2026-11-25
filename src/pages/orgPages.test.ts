@@ -37,7 +37,7 @@ type Route = (call: Call, n: number) => Response | Promise<Response>
 const PROJECTS = [
   { id: 'p1', code: '240829001', name: '测试项目0829', app_code: '1', app_name: '通用版', customer_region: '320000/320500/320506', online: true },
   { id: 'p2', code: '260911001', name: '独立空气系统测试', app_code: '12', app_name: '独立空气系统', online: true },
-  { id: 'p3', code: '221031001', name: '科希家办公室', app_code: '1', app_name: '通用版' },
+  { id: 'p3', code: '221031001', name: '科希家办公室', app_code: '1', app_name: '通用版', control_screen_id: '667b7cc60b7d46467c424d33' },
 ]
 const GROUPS = [
   { id: 'g1', code: '2', name: '五恒集成项目', distributor_id: 'D1', project_ids: ['p1', 'p3'] },
@@ -259,6 +259,9 @@ describe('Layout（真实数据形状）', () => {
     mountLayout('/sensors')
     expect(await screen.findByText('项目离线，暂无数据')).toBeTruthy()
     expect(screen.getByRole('alert').textContent).toContain('项目离线')
+    // S13 走查 P6：不显示 control_screen_id（型号 id，不是屏号），只写「控制屏未连接」
+    expect(screen.getByRole('alert').textContent).toContain('控制屏未连接，暂时读不到设备数据，也无法下发控制。')
+    expect(screen.getByRole('alert').textContent).not.toContain('667b7cc6')
     expect(screen.queryByText('传感器页内容')).toBeNull()
   })
 })

@@ -804,18 +804,39 @@ describe('下发', () => {
       expect(lockOf('project:p1')).toBeNull()
       expect(await openNotes()).toContain('未下发（控制屏未连接），可重新勾选下发')
     })
-    it('205 超过 5 秒没返回 → 同样未下发、不发 203、不占锁', async () => {
+    it('205 两次都超过 5 秒没返回（S13 P2：超时重查一次）→ 未下发、不发 203、不占锁，文案是「在线检查超时」不是「控制屏未连接」', async () => {
       const be = backend({ '/ctrl/room-temperature-data-get': () => rooms(1, 26), '/ctrl/unified-ctrl-set': () => reply(true), '/ctrl/device-summary-get': () => new Promise<Response>(() => {}) })
       const dlg = await prepare()
       fakeClock()
       await click(okIn(dlg))
-      await advance(4_900)
+      await advance(5_100)
+      expect(be.callsTo('/ctrl/device-summary-get')).toHaveLength(2) // 第一次超时后重查
       expect(document.querySelector('[role=region] tbody tr [data-slot=badge]')?.textContent ?? '').not.toBe('未下发')
-      await advance(200)
+      await advance(5_000)
       await screen.findByText('未下发', { selector: '[data-slot=badge]' }, { timeout: 3000 })
+      expect(be.callsTo('/ctrl/device-summary-get')).toHaveLength(2) // 只重查一次
       expect(be.callsTo('/ctrl/unified-ctrl-set')).toHaveLength(0)
       expect(lockOf('project:p1')).toBeNull()
-      expect(await openNotes()).toContain('未下发（控制屏未连接），可重新勾选下发')
+      const notes = await openNotes()
+      expect(notes).toContain('控制屏在线检查超时，未下发，请重试')
+      expect(notes).not.toContain('控制屏未连接')
+    })
+    it('205 第一次超时、重查在线（S13 P2）→ 放行：203 只发一次，照常核对出「已生效」', async () => {
+      let n = 0
+      let sent = false
+      const be = backend({
+        '/ctrl/room-temperature-data-get': () => (sent ? rooms(1, 26.5) : rooms(1, 26)),
+        '/ctrl/unified-ctrl-set': () => { sent = true; return reply(true) },
+        '/ctrl/device-summary-get': () => (++n === 1 ? new Promise<Response>(() => {}) : json({ body: '' })),
+      })
+      const dlg = await prepare()
+      fakeClock()
+      await click(okIn(dlg))
+      await advance(5_100)
+      vi.useRealTimers()
+      await waitFor(() => expect(row('240829001')?.querySelector('[data-slot=badge]')?.textContent).toBe('已生效'), { timeout: 3000 })
+      expect(be.callsTo('/ctrl/device-summary-get')).toHaveLength(2)
+      expect(be.callsTo('/ctrl/unified-ctrl-set')).toHaveLength(1)
     })
     it('一离线一在线：只给在线的发 203，离线的标「未下发（控制屏未连接）」，在线的照常核对出结果（p5 离线在后，p1 在线在前）', async () => {
       const sentTo = new Set<string>()

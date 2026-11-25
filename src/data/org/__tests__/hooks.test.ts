@@ -9,8 +9,8 @@ import { createQueryClient } from '../../../api/query'
 import { __resetSessionForTests, signIn } from '../../../api/session'
 import { clearTokens } from '../../../api/tokens'
 import { fakeBackend, json, text, type Call } from '../../../api/__tests__/helpers'
-import { __resetSessionViewForTests, mockSignIn } from '../../session'
-import { __resetCurrentForTests, PROJECT_KEY } from '../current'
+import { __resetSessionViewForTests, logout, mockSignIn } from '../../session'
+import { __resetCurrentForTests, PROJECT_KEY, PROJECT_OWNER_KEY } from '../current'
 import { PLATFORM_DEALER_ID } from '../map'
 import { useCurrentProject, useDealerPick, useDealers, useIntegratedProjects, useOrgScope, useProjects } from '../hooks'
 
@@ -112,6 +112,45 @@ describe('mock 数据源（e2e 截图走这里）', () => {
     const { wrapper: w } = wrapper()
     const { result } = renderHook(() => useCurrentProject(), { wrapper: w })
     expect(result.current.project?.id).toBe('PRJ-10241')
+  })
+})
+
+describe('当前项目按账号分开（S13 走查 P7）', () => {
+  beforeEach(() => setConfig({ dataSource: 'mock' }))
+  it('A 账号选的项目，同一浏览器换 B 账号登录：即使 B 也看得到，也不沿用，从 B 的第一个项目开始；不改写存储；A 再登录仍是自己选的', () => {
+    mockSignIn({ username: 'hjadmin', role: 'admin' }, true)
+    const { wrapper: w } = wrapper()
+    const a = renderHook(() => useCurrentProject(), { wrapper: w })
+    act(() => { expect(a.result.current.setProjectId('PRJ-30057')).toBe(true) }) // 经销商也看得到的项目
+    expect(localStorage.getItem(PROJECT_OWNER_KEY)).toBe('mock:hjadmin')
+    a.unmount()
+    act(() => { logout() })
+    mockSignIn({ username: 'cosyhome', role: 'dealer' }, true)
+    const b = renderHook(() => useCurrentProject(), { wrapper: w })
+    expect(b.result.current.project?.id).toBe('PRJ-10241')
+    expect(localStorage.getItem(PROJECT_KEY)).toBe('PRJ-30057')
+    b.unmount()
+    act(() => { logout() })
+    mockSignIn({ username: 'hjadmin', role: 'admin' }, true)
+    const a2 = renderHook(() => useCurrentProject(), { wrapper: w })
+    expect(a2.result.current.project?.id).toBe('PRJ-30057')
+  })
+  it('B 自己选过之后记到 B 名下', () => {
+    localStorage.setItem(PROJECT_KEY, 'PRJ-30057'); localStorage.setItem(PROJECT_OWNER_KEY, 'mock:hjadmin')
+    mockSignIn({ username: 'cosyhome', role: 'dealer' }, true)
+    const { wrapper: w } = wrapper()
+    const b = renderHook(() => useCurrentProject(), { wrapper: w })
+    expect(b.result.current.project?.id).toBe('PRJ-10241')
+    act(() => { expect(b.result.current.setProjectId('PRJ-30057')).toBe(true) })
+    expect(b.result.current.project?.id).toBe('PRJ-30057')
+    expect(localStorage.getItem(PROJECT_OWNER_KEY)).toBe('mock:cosyhome')
+  })
+  it('升级前没记账号的旧数据：照旧使用（同一个账号不丢上次的项目）', () => {
+    localStorage.setItem(PROJECT_KEY, 'PRJ-30057')
+    mockSignIn({ username: 'cosyhome', role: 'dealer' }, true)
+    const { wrapper: w } = wrapper()
+    const { result } = renderHook(() => useCurrentProject(), { wrapper: w })
+    expect(result.current.project?.id).toBe('PRJ-30057')
   })
 })
 

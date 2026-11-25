@@ -3,6 +3,7 @@ import { useMemo, useState } from 'react'
 import { faEyeSlash, faEye, faChartLine, faSliders, faShieldHalved, faLock, faThermometerHalf, faWind, faDroplet, faCube } from '@fortawesome/free-solid-svg-icons'
 import { faUser as faUserR } from '@fortawesome/free-regular-svg-icons'
 import { Icon, LogoMark } from '../components/legacy'
+import { IcpLink } from '../components/Icp'
 import { Checkbox } from '@/components/ui/checkbox'
 import { InputGroup, InputGroupInput } from '@/components/ui/input'
 import { useForm, type FieldErrors } from 'react-hook-form'
@@ -146,7 +147,6 @@ export default function Login() {
         <div className="inner">
           <div className="login-brand"><LogoMark size={38} /><div><b>恒境云</b><small>HVAC IoT PLATFORM</small></div></div>
           <div className="login-copy">
-            {__HJC_MOCK__ && <span className="status-chip"><span className="dot" />平台运行正常 · 已接入 1,284 台设备</span>}
             <h2>恒温 · 恒湿 · 恒氧<br />让每一个项目的环境都在掌控之中</h2>
             <p>多项目环境监控与统一控制平台，覆盖室内空气、温控面板、新风除湿、电能计量与机组运行全链路数据。</p>
             <div className="feat">
@@ -155,8 +155,8 @@ export default function Login() {
               <div><Icon icon={faShieldHalved} /><b>分级权限</b><small>经销商 / 管理员</small></div>
             </div>
           </div>
-          {/* 交付包不放占位的备案号；正式备案号由对方提供后再加 */}
-          <div className="login-foot">{__HJC_MOCK__ ? '© 2025 恒境云科技 · 沪ICP备2025000000号' : '© 恒境云'}</div>
+          {/* 备案号只在公司域名下显示（config.icp，src/components/Icp.tsx，S13 走查 P3）；其他域名只留版权行 */}
+          <div className="login-foot">{__HJC_MOCK__ ? '© 2025 恒境云科技' : '© 恒境云'}<IcpLink prefix=" · " /></div>
         </div>
       </div>
       <div className="login-right">
@@ -184,10 +184,8 @@ export default function Login() {
               <FormField control={form.control} name="remember" render={({ field }) => (
                 <label><Checkbox name={field.name} ref={field.ref} checked={field.value} onCheckedChange={(v) => field.onChange(v === true)} onBlur={field.onBlur} />记住我</label>
               )} />
-              <a className="cyan" onClick={() => toast(__HJC_MOCK__ ? '已向绑定手机发送重置链接' : '请联系管理员重置密码')} style={{ cursor: 'pointer' }}>忘记密码?</a>
             </div>
             <button className="btn-login" disabled={busy}>{busy ? '登录中…' : '登 录'}</button>
-            {__HJC_MOCK__ && <div className="login-ver">平台版本 <b>v3.6.2</b> · 技术支持 400-820-1234</div>}
           </form>
         </Form>
       </div>

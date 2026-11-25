@@ -15,8 +15,11 @@
 //   一致的字段也记为结束，全部结束即放；未变化 / 无法核对 / 结果未知都不提前放锁。应答结果未知 → unknown。
 //   批次截止时间只影响界面上的标注，不放锁。
 // - 控制屏实时预检（赤兔 11/25，src/api/screenPreflight.ts）：开始时并行现查本批每个项目的 ctrl 205（各自 5 秒超时），轮到某个项目时看它的结果，没通过
-//   （503 / 超时 / 失败）→ 这一项标「未下发（控制屏未连接），可重新勾选下发」、不取锁、不发写请求，接着下一个；在线的照常发，整批不受影响。
-//   205 返回 403（无连接状态权限）同样拦下，单独标「未下发（当前账号无连接状态权限…）」
+//   → 这一项标未下发、不取锁、不发写请求，接着下一个；在线的照常发，整批不受影响。
+//   超时重查（S13 P2）：第一次超时的项目，在它超时的那一刻看批次剩余时间，够「再查 5 秒 + 一次写入 12 秒」才再查一次（各项目各自
+//   发起，互相并行），不够就直接按超时拦下；503、403、其他失败不重查。重查只发 205，不重发写请求。
+//   文案分开：503「未下发（控制屏未连接），可重新勾选下发」；两次超时 / 来不及重查「控制屏在线检查超时，未下发，请重试」；
+//   其他失败「控制屏在线检查失败，未下发，请重试」；403 单独标「未下发（当前账号无连接状态权限…）」、不标可重试
 import { callCtrl, writeCtrl, type CtrlReply, type WriteQuery } from '@/api/ctrl'
 import { INVALID_HOURLY, NO_DATA } from '@/api/values'
 import { roomSwitchReported } from '@/api/config'
@@ -28,7 +31,7 @@ import { createUnifiedController, isDone, outcomeOf, type UnifiedController, typ
 import { changedFields, describeQuery, fieldResults, type EchoField, type UnifiedContext, type UnifiedDraft, type UnifiedEcho } from './rules'
 import { acquire, beginRead, checkSentRecord, claim, commitRead, currentAccount, holds, lockOf, markOverdue, markSent, OTHER_ACCOUNT_TEXT, requireVerify, sameAccount, settle, verify, type LockToken } from '@/api/writeLock'
 import { LOCK_BUSY_TEXT, lockTargetOf, recordOf } from './lock'
-import { preflightScreen, SCREEN_FORBIDDEN_ROW, SCREEN_OFFLINE_ROW, withNoReplyNote, type ScreenState } from '@/api/screenPreflight'
+import { checkScreenOnce, SCREEN_CHECK_MS, SCREEN_RETRIES, SCREEN_WRITE_MS, screenBlockRow, withNoReplyNote, type ScreenState } from '@/api/screenPreflight'
 
 /** 页面传进来的项目（S6a 的 Project 直接可用） */
 export interface BatchProject {
@@ -148,7 +151,7 @@ export interface BatchDeps {
   refreshProjects?: (signal: AbortSignal) => Promise<readonly BatchProject[]>
   /** 当前登录账号（user id，没有就用令牌 sub；演示模式为演示账号名）。确认时记下，beforeSend 核对 */
   getAccount?: () => string | null
-  /** 控制屏实时预检（默认现查 ctrl 205；演示数据不查）；测试注入 */
+  /** 控制屏实时预检，查一次（默认 checkScreenOnce 现查 ctrl 205；演示数据不查）；超时重查由批次按剩余时间决定；测试注入 */
   screen?: (projectId: string, signal: AbortSignal) => Promise<ScreenState>
 }
 
@@ -193,7 +196,7 @@ export function createUnifiedBatch(deps: BatchDeps) {
   const send = deps.send ?? defaultBatchSender
   const now = deps.now ?? (() => new Date())
   const mock = deps.mock ?? false
-  const screen = deps.screen ?? ((pid: string, signal: AbortSignal) => (mock ? Promise.resolve<ScreenState>('online') : preflightScreen(pid, signal)))
+  const screen = deps.screen ?? ((pid: string, signal: AbortSignal) => (mock ? Promise.resolve<ScreenState>('online') : checkScreenOnce(pid, signal)))
   type Entry = {
     p: BatchProject; ctl: UnifiedController<UnifiedSnapshot>; started: boolean; at?: string; unsub: () => void
     /** beforeSend 放行过（写请求确实发出了） */
@@ -467,7 +470,18 @@ export function createUnifiedBatch(deps: BatchDeps) {
         }
         // 控制屏实时预检（205）：开始时并行查本批所有项目（每个单独 5 秒超时、不缓存、只在本批用），避免串行时几个不应答的
         // 项目各吃 5 秒、把后面在线的挤过 35 秒截止
-        const screens = new Map(entries.map((e) => [e, screen(e.p.id, ac.signal).catch((): ScreenState => 'offline')] as const))
+        // 第一次超时的：剩余时间够再查 5 秒 + 写 12 秒才重查（各项目在自己超时时各自发起，互相并行），不够直接按超时拦下
+        const once = (e: Entry) => screen(e.p.id, ac.signal).catch((): ScreenState => 'error')
+        const checkOf = async (e: Entry): Promise<ScreenState> => {
+          let r = await once(e)
+          for (let i = 0; i < SCREEN_RETRIES && r === 'timeout'; i++) {
+            if (stopped || expired || ac.signal.aborted) return r
+            if (deadlineAt - now().getTime() < SCREEN_CHECK_MS + SCREEN_WRITE_MS) return r
+            r = await once(e)
+          }
+          return r
+        }
+        const screens = new Map(entries.map((e) => [e, checkOf(e)] as const))
         // 确认后、整批开始前强制刷新一次在线状态（每批一次）
         if (deps.refreshProjects) {
           try {
@@ -488,9 +502,9 @@ export function createUnifiedBatch(deps: BatchDeps) {
           const scr = await Promise.race([screens.get(e)!, deadline])
           if (scr === 'deadline') break
           if (scr !== 'online' || stopped || expired) {
-            if (!e.final && !stopped && !expired) {
-              // 403（无连接状态权限）单独文案、不标可重试；其余按控制屏未连接，可重新勾选下发
-              e.final = scr === 'forbidden' ? { status: 'not-sent', note: SCREEN_FORBIDDEN_ROW } : { status: 'not-sent', note: SCREEN_OFFLINE_ROW, retry: true }
+            if (scr !== 'online' && !e.final && !stopped && !expired) {
+              // 403（无连接状态权限）单独文案、不标可重试；503、超时、其他失败各自文案，可重新勾选下发
+              e.final = scr === 'forbidden' ? { status: 'not-sent', note: screenBlockRow(scr) } : { status: 'not-sent', note: screenBlockRow(scr), retry: true }
               e.at ??= stamp(now())
               e.ctl.abort()
               emit({})

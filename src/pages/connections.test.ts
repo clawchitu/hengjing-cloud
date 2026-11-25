@@ -282,7 +282,8 @@ describe('项目离线态（S11）', () => {
       expect(await screen.findByText('项目离线，暂无数据')).toBeTruthy()
       const banner = screen.getByRole('alert').textContent
       expect(banner).toContain('项目离线 · 离线项目')
-      expect(banner).toContain('控制屏 cs-off、DTU dtu-off 未连接')
+      expect(banner).toContain('控制屏未连接，暂时读不到设备数据') // S13 P6：不显示控制屏 / DTU 编号
+      expect(banner).not.toMatch(/cs-off|dtu-off/)
       expect(banner).not.toMatch(/最后在线|仅供参考|GW-/)
       if (page) expect(screen.queryByText(page + '页内容')).toBeNull()
       expect(screen.queryByText('设备连接明细')).toBeNull()

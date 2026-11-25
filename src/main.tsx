@@ -12,7 +12,8 @@ import './styles/tailwind.css'
 import './styles/global.css'
 import './styles/pages.css'
 import { AppProvider, useApp } from './app/store'
-import { safeFrom } from './app/redirect'
+import { afterLogin } from './app/redirect'
+import { useSession } from './data/session'
 import { OrgGate } from './app/OrgGate'
 import { QueryProvider } from './api/QueryProvider'
 import Layout from './components/Layout'
@@ -30,22 +31,28 @@ import type { ReactNode } from 'react'
  * 路由守卫。未登录 → 登录页（记下原路径，登录后回去）；真实接口模式下正在用已存令牌恢复登录态时
  * 先不渲染，恢复完再决定。会话过期（续期失败、令牌失效）时 authed 变 false，同样跳回登录页。
  */
+/** 最近一个进过受保护页面的账号：跳登录页时连同原路径一起记下，换了账号登录就不回原路径（S13 走查 P7） */
+let lastUserKey: string | null = null
+
 function Guard({ children }: { children: ReactNode }) {
   const { authed, authLoading } = useApp()
+  const { userKey } = useSession()
   const loc = useLocation()
   if (authLoading) return null
-  return authed ? <>{children}</> : <Navigate to="/login" state={{ from: loc.pathname + loc.search }} replace />
+  if (authed) { lastUserKey = userKey; return <>{children}</> }
+  return <Navigate to="/login" state={{ from: loc.pathname + loc.search, fromUser: lastUserKey }} replace />
 }
 
 /**
- * 登录页。登录成功（authed 变 true）后由这里统一跳转：回到守卫记下的原路径，没有就回首页。
+ * 登录页。登录成功（authed 变 true）后由这里统一跳转：回到守卫记下的原路径（换了账号或没有就回首页）。
  * 不在登录页里另调 navigate：react-router 7 把地址变化放在 transition 里，两处跳转会互相覆盖。
  */
 function LoginRoute() {
   const { authed, authLoading } = useApp()
-  const loc = useLocation() as { state?: { from?: unknown } }
+  const { userKey } = useSession()
+  const loc = useLocation() as { state?: { from?: unknown; fromUser?: unknown } }
   if (authLoading) return null
-  return authed ? <Navigate to={safeFrom(loc.state?.from) ?? '/home'} replace /> : <Login />
+  return authed ? <Navigate to={afterLogin(loc.state, userKey)} replace /> : <Login />
 }
 
 createRoot(document.getElementById('root')!).render(

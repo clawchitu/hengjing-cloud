@@ -4,8 +4,11 @@
 // 另记「切换被拒」的项目（键为 账号 + 项目 id）：refreshing 已在后台刷新组织范围；refreshed 刷新两份都成功了仍不在范围里。
 
 export const PROJECT_KEY = 'hjc-project'
+/** 记下 hjc-project 是哪个账号（session userKey）选的（S13 走查 P7：同一浏览器换账号不沿用上一个账号的当前项目） */
+export const PROJECT_OWNER_KEY = 'hjc-project-owner'
 
 let stored: string | undefined // undefined：还没读过存储
+let owner: string | null | undefined // undefined：还没读过存储；null：没记账号（旧数据）
 let tick = 0
 const subs = new Set<() => void>()
 const emit = () => { for (const fn of subs) fn() }
@@ -14,12 +17,31 @@ function read(): string {
   try { return localStorage.getItem(PROJECT_KEY) || '' } catch { return '' }
 }
 
+function readOwner(): string | null {
+  try { return localStorage.getItem(PROJECT_OWNER_KEY) || null } catch { return null }
+}
+
 export const getStoredProjectId = () => (stored === undefined ? (stored = read()) : stored)
+const getOwner = () => (owner === undefined ? (owner = readOwner()) : owner)
+/**
+ * 某个账号的当前项目：存的项目是别的账号选的 → ''（解析时回退到这个账号的第一个可见项目，不改写存储）。
+ * 没记账号的旧数据、账号未知时照旧返回存的值（升级后同一个账号不丢上次的项目）
+ */
+export const getStoredProjectIdFor = (userKey: string | null | undefined) => {
+  const id = getStoredProjectId()
+  const o = getOwner()
+  return !userKey || !o || o === userKey ? id : ''
+}
 export const getSelectTick = () => tick
 
-export function setStoredProjectId(id: string) {
+/** userKey：选这个项目的账号，一起记下（不传就不改账号记录） */
+export function setStoredProjectId(id: string, userKey?: string | null) {
   stored = id
   try { localStorage.setItem(PROJECT_KEY, id) } catch { /* 存储不可用时只在内存里生效 */ }
+  if (userKey) {
+    owner = userKey
+    try { localStorage.setItem(PROJECT_OWNER_KEY, userKey) } catch { /* 同上 */ }
+  }
   emit()
 }
 
@@ -62,6 +84,7 @@ export function noteScope(sig: string) {
 /** 仅供测试：重置模块内状态 */
 export function __resetCurrentForTests() {
   stored = undefined
+  owner = undefined
   tick = 0
   subs.clear()
   rejected.clear()

@@ -22,6 +22,23 @@ export interface RuntimeConfig {
   ctrlTimeoutMs: number
   /** 功能开关（S10 新风、S7 天气里等后端答复的点），见 FEATURE_DEFAULTS 与 docs/plan-s10-s7.md 2.1 */
   features: Readonly<Features>
+  /** 备案号：只在 hosts 里的域名（含子域名）下显示，见 src/components/Icp.tsx（S13 走查 P3） */
+  icp: Readonly<IcpConfig>
+}
+
+/** 备案号配置：number 备案号；hosts 显示备案号的域名（等于其中一个，或是它的子域名） */
+export interface IcpConfig { number: string; hosts: readonly string[] }
+
+export const ICP_DEFAULT: Readonly<IcpConfig> = Object.freeze({ number: '苏ICP备18008267号-1', hosts: Object.freeze(['cosyhome.com.cn']) })
+
+/** 最后一层写了 icp 且合法（number 非空字符串、hosts 是字符串数组）就用它，否则用默认值 */
+function parseIcp(layers: Input[]): Readonly<IcpConfig> {
+  const set = layers.filter((l) => l && Object.prototype.hasOwnProperty.call(l, 'icp'))
+  if (!set.length) return ICP_DEFAULT
+  const v = set[set.length - 1].icp as { number?: unknown; hosts?: unknown } | null | undefined
+  if (!v || typeof v !== 'object' || typeof v.number !== 'string' || !v.number.trim() || !Array.isArray(v.hosts)) return ICP_DEFAULT
+  const hosts = v.hosts.filter((h): h is string => typeof h === 'string').map((h) => h.trim().toLowerCase()).filter(Boolean)
+  return Object.freeze({ number: v.number.trim(), hosts: Object.freeze(hosts) })
 }
 
 /** 功能开关。后端答复后只改默认值，不改代码路径 */
@@ -81,7 +98,7 @@ export const TEST_API_ORIGIN = 'https://test.cosyhome.com.cn:9443/v1'
 const TEST_HOSTS = new Set(['test.cosyhome.com.cn'])
 
 declare global {
-  interface Window { __HJC_CONFIG__?: Partial<Omit<RuntimeConfig, 'features'>> & { features?: Partial<Features> } }
+  interface Window { __HJC_CONFIG__?: Partial<Omit<RuntimeConfig, 'features' | 'icp'>> & { features?: Partial<Features>; icp?: Partial<IcpConfig> } }
 }
 // vite.config.ts 注入：开发服务器 /api 代理的目标地址（构建产物里为空串）
 declare const __HJC_DEV_PROXY_TARGET__: string | undefined
@@ -108,7 +125,7 @@ export function envOfUrl(url: string): ApiEnv {
   try { return TEST_HOSTS.has(new URL(url.startsWith('//') ? 'https:' + url : url).hostname) ? 'test' : 'prod' } catch { return 'prod' }
 }
 
-type Input = Partial<Omit<RuntimeConfig, 'apiEnv' | 'writeProjectCodes' | 'features'>> & { apiEnv?: string; writeProjectCodes?: unknown; features?: unknown }
+type Input = Partial<Omit<RuntimeConfig, 'apiEnv' | 'writeProjectCodes' | 'features' | 'icp'>> & { apiEnv?: string; writeProjectCodes?: unknown; features?: unknown; icp?: unknown }
 
 /**
  * 合并各层配置并推导 apiEnv。导出供测试使用。
@@ -133,6 +150,7 @@ export function resolveConfig(layers: Input[], devProxyTarget = '', mockAllowed 
     requestTimeoutMs: Number(m.requestTimeoutMs) > 0 ? Number(m.requestTimeoutMs) : 10_000,
     ctrlTimeoutMs: Number(m.ctrlTimeoutMs) > 0 ? Number(m.ctrlTimeoutMs) : 12_000,
     features: parseFeatures(layers),
+    icp: parseIcp(layers),
   }
 }
 

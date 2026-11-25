@@ -371,6 +371,39 @@ describe('205 预检与写锁 held 30 秒定时器（#30）叠加', () => {
     expect(L.lockOf(P1)).not.toBeNull() // held 定时器已停，不会把已发出的锁放掉
     void run
   })
+  it('205 重查与写锁期限（S13 P2）：从取锁（预检之前）起算，最坏 205 两次 10 秒 + 确认后读近 15 秒 + 写 12 秒应答 ≤ 45 秒，锁全程不被提前放掉、只发一次', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
+    const { SCREEN_CHECK_MS, SCREEN_RETRIES, SCREEN_WRITE_MS } = await import('@/api/screenPreflight')
+    const screenWorst = SCREEN_CHECK_MS * (1 + SCREEN_RETRIES)
+    expect(screenWorst).toBe(10_000)
+    expect(screenWorst + W.PREFLIGHT_MS).toBeLessThan(L.HELD_TTL_MS) // markSent 之前不超 held 30 秒
+    expect(screenWorst + SCREEN_WRITE_MS).toBeLessThanOrEqual(45_000)
+    expect(SCREEN_WRITE_MS).toBeLessThan(L.MIN_TTL_MS) // markSent 之后写应答在锁有效期内
+    const t0 = Date.now()
+    let replyAt = -1
+    let sends = 0
+    const { s, calls } = spec({
+      // 第一次 5 秒超时、第二次将近 5 秒才在线：共约 10 秒
+      screen: () => new Promise((r) => setTimeout(() => r('online'), screenWorst - 1)),
+      preflight: () => new Promise((r) => setTimeout(() => { calls.push('preflight'); r({ ok: true, payload: 26 }) }, W.PREFLIGHT_MS - 100)),
+      send: (_p, bs) => {
+        if (!bs()) return Promise.reject(new ApiError('write_blocked', 'x'))
+        sends++
+        return new Promise<void>((r) => setTimeout(() => { replyAt = Date.now() - t0; r() }, SCREEN_WRITE_MS))
+      },
+    })
+    const run = W.runOp(s)
+    await vi.advanceTimersByTimeAsync(screenWorst + W.PREFLIGHT_MS - 200)
+    expect(L.lockOf(P1)?.phase).toBe('held') // 还在预检：锁在
+    await vi.advanceTimersByTimeAsync(200)
+    expect(sends).toBe(1)
+    expect(L.lockOf(P1)).not.toBeNull()
+    await vi.advanceTimersByTimeAsync(SCREEN_WRITE_MS)
+    expect(replyAt).toBeGreaterThan(0)
+    expect(replyAt).toBeLessThanOrEqual(45_000)
+    expect(await run).toBe('ok') // 锁一直有效：回读一致后才正常放开，不是到期放掉
+    expect(sends).toBe(1)
+  })
   it('205 超时（5 秒）：立即放锁、0 次发送，不等 held 30 秒', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
     const { s, calls } = spec({ screen: () => new Promise((r) => setTimeout(() => r('timeout'), 5_000)) })

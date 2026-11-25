@@ -9,7 +9,7 @@ import { ApiError, isApiError } from '../../api/errors'
 import { getFrequentProjects, getIntegratedProjectStat, reportProjectClick } from '../../api/pcfg'
 import { can, useSession } from '../session'
 import { capabilitiesOf, type Capabilities } from './capabilities'
-import { bumpSelectTick, forgetRejected, getRejected, getSelectTick, getStoredProjectId, noteScope, setRejected, setStoredProjectId, subscribeCurrent } from './current'
+import { bumpSelectTick, forgetRejected, getRejected, getSelectTick, getStoredProjectIdFor, noteScope, setRejected, setStoredProjectId, subscribeCurrent } from './current'
 import { joinScope, resolveCurrentProject, resolveDealerId, withPlatformDealer } from './map'
 import { mockOrg, orgSource, type OrgContext, type ProjectFilter } from './sources'
 import type { Dealer, Group, LoadStatus, Project, Scope } from './types'
@@ -200,7 +200,7 @@ function reportClick(id: string) {
 }
 
 /**
- * 当前项目：持久化在 localStorage 的 hjc-project，在可见范围（useOrgScope().projects）里解析，
+ * 当前项目：持久化在 localStorage 的 hjc-project（连同选它的账号，换账号不沿用），在可见范围（useOrgScope().projects）里解析，
  * 失效或换了账号就回退到第一个可见项目。切换时上报：演示数据记入本地计数；真实接口发 POST /project/click/{id}
  * （失败只记日志，不影响切换）。上报完成后 selectTick 加一，常用项目据此重取。
  */
@@ -208,7 +208,9 @@ export function useCurrentProject(): CurrentProject {
   const { ctx, userKey } = useOrgCtx()
   const qc = useQueryClient()
   const scope = useOrgScope()
-  const stored = useSyncExternalStore(subscribeCurrent, getStoredProjectId, getStoredProjectId)
+  // 存的项目是别的账号选的就不用（S13 走查 P7），回退到这个账号的第一个可见项目
+  const storedFor = useCallback(() => getStoredProjectIdFor(userKey), [userKey])
+  const stored = useSyncExternalStore(subscribeCurrent, storedFor, storedFor)
   const selectTick = useSyncExternalStore(subscribeCurrent, getSelectTick, getSelectTick)
   const project = resolveCurrentProject(scope.data.projects, stored)
   // 账号或组织范围变了：之前「刷新后仍不在范围」的结论作废（签名不含在线状态）
@@ -221,8 +223,8 @@ export function useCurrentProject(): CurrentProject {
     if (visible.some((p) => p.id === id)) {
       forgetRejected(k)
       // 再选当前项目不算一次切换：不上报，免得抬高常用项目的排序
-      const same = id === getStoredProjectId()
-      setStoredProjectId(id)
+      const same = id === getStoredProjectIdFor(userKey)
+      setStoredProjectId(id, userKey)
       if (same) return true
       if (isMockMode()) void reportProjectSelect(user, id).then(bumpSelectTick)
       else reportClick(id)
