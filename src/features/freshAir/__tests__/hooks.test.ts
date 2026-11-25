@@ -11,7 +11,7 @@ import { createQueryClient } from '@/api/query'
 import { clearTokens, writeTokens } from '@/api/tokens'
 import { fakeBackend, json } from '@/api/__tests__/helpers'
 import { __resetWriteLockForTests } from '@/api/writeLock'
-import { __resetFreshAirForTests, SETTINGS_POLL_MS, putNewer, useFreshRead, useSettings, useUnits } from '../hooks'
+import { __resetFreshAirForTests, SETTINGS_POLL_MS, UNITS_POLL_MS, putNewer, useFreshRead, useSettings, useUnits } from '../hooks'
 import { TEXT_UNSUPPORTED } from '../model'
 import { ID_240829001, ID_260911001, R202_260911001, R210_240829001, R210_260911001 } from './fixtures'
 
@@ -225,6 +225,44 @@ describe('useSettings（210）', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+  it('unsupported 的缓存被 202 的 503 作废后，控制屏恢复时照常重读，不停在「正在读取」', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      let r202 = 'ok'
+      fakeBackend({
+        [R202]: () => (r202 === 'ok' ? json({ body: R202_260911001 }) : P503()),
+        [R210]: () => json({ body: R210_240829001 }),
+      })
+      const { result } = renderHook(() => ({ u: useUnits(P12), s: useSettings(P12, { deviceId: ID_240829001, connected: true }) }), { wrapper })
+      await waitFor(() => expect(result.current.s.kind).toBe('unsupported'))
+      r202 = '503'
+      await act(async () => { if (result.current.u.kind === 'ready') result.current.u.retry() })
+      await waitFor(() => expect(result.current.u.kind).toBe('unavailable'))
+      expect(result.current.s.kind).toBe('unavailable')
+      r202 = 'ok'
+      await act(async () => { await vi.advanceTimersByTimeAsync(UNITS_POLL_MS + 1000) })
+      await waitFor(() => expect(result.current.u.kind).toBe('ready'))
+      await act(async () => { await vi.advanceTimersByTimeAsync(SETTINGS_POLL_MS + 1000) })
+      await waitFor(() => expect(result.current.s.kind).toBe('unsupported'))
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+  it('503 之后只读不写的新读（defer 没 apply）不解除 down：作废的读数仍显示占位，不显示「正在读取」', async () => {
+    let r210 = '503'
+    fakeBackend({
+      [R202]: () => json({ body: R202_260911001 }),
+      [R210]: () => (r210 === 'ok' ? json({ body: R210_260911001 }) : P503()),
+    })
+    const { result, rerender } = renderHook(() => ({ u: useUnits(P12), s: useSettings(P12, unit), read: useFreshRead(P12) }), { wrapper })
+    await waitFor(() => expect(result.current.s.kind).toBe('unavailable'))
+    await waitFor(() => expect(result.current.u.kind).toBe('unavailable'))
+    r210 = 'ok'
+    await act(async () => { await result.current.read(ID_260911001, undefined, { defer: true }) })
+    await flush()
+    rerender()
+    expect(result.current.u.kind).toBe('unavailable')
   })
     it('503 → unavailable；回包设备不符 → error', async () => {
     fakeBackend({ [R210]: () => json({ code: 14, message: '控制屏消息发送失败' }, 503) })

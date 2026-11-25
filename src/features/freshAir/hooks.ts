@@ -68,13 +68,16 @@ const valid = (pid: string, d: Seq | undefined): boolean => d !== undefined && d
 const okSeq = new Map<string, number>()
 /** 控制屏当前视为不可用：最近的 503 晚于最近的成功读取 */
 const down = (pid: string) => invalidSeq(pid) > (okSeq.get(pid) ?? 0)
+/** 成功读数写进缓存时记下（只读不写的新读——defer 没 apply、中止、会话已变——不算，否则 down 解除了缓存里却还是作废的读数） */
+const markOk = <T extends Seq>(pid: string, d: T): T => { if (d.seq > (okSeq.get(pid) ?? 0)) okSeq.set(pid, d.seq); return d }
+/** 作废的读数按过期算：查询重新启用 / 挂载时立即重读（不主动触发，所以不会互相作废循环） */
+const staleFor = (kind: Kind, pid: string) => (query: { state: { data: Seq | undefined } }) =>
+  !valid(pid, query.state.data) ? 0 : kind === 'real' ? 10_000 : Infinity
 /** 发起一次读取：取序号；503 时记失效序号 */
 async function runSeq<T>(key: readonly unknown[], pid: string, fn: () => Promise<T>): Promise<T & Seq> {
   const seq = nextSeq(key)
   try {
-    const r = await fn()
-    if (seq > (okSeq.get(pid) ?? 0)) okSeq.set(pid, seq)
-    return { ...r, seq }
+    return { ...(await fn()), seq }
   } catch (e) {
     if (isApiError(e) && e.kind === 'unavailable' && seq > invalidSeq(pid)) invalid.set(pid, seq)
     throw e
@@ -118,9 +121,9 @@ export function useUnits(project: FreshProject | null, paused = false): UnitsVie
   const key = unitsKey(src.kind, pid)
   const q = useQuery({
     queryKey: key,
-    queryFn: ({ signal }): Promise<UnitsData> => runSeq(key, pid, () => src.units(pid, signal)),
+    queryFn: ({ signal }): Promise<UnitsData> => runSeq(key, pid, () => src.units(pid, signal)).then((d) => markOk(pid, d)),
     enabled: canRead(project, src.kind) && permitted,
-    staleTime: src.kind === 'real' ? 10_000 : Infinity,
+    staleTime: staleFor(src.kind, pid),
     refetchInterval: src.kind === 'real' && !paused ? UNITS_POLL_MS : false,
   })
   const qRefetch = q.refetch
@@ -165,10 +168,10 @@ export function useSettings(project: FreshProject | null, unit: Pick<UnitView, '
   const key = settingsKey(src.kind, pid, deviceId ?? 0)
   const q = useQuery({
     queryKey: key,
-    queryFn: ({ signal }): Promise<SettingsData> => runSeq(key, pid, () => src.settings(pid, deviceId!, signal)),
+    queryFn: ({ signal }): Promise<SettingsData> => runSeq(key, pid, () => src.settings(pid, deviceId!, signal)).then((d) => markOk(pid, d)),
     enabled: active && permitted,
-    staleTime: src.kind === 'real' ? 10_000 : Infinity,
-    refetchInterval: (query) => (src.kind === 'real' && !paused && query.state.data?.kind !== 'unsupported' ? SETTINGS_POLL_MS : false),
+    staleTime: staleFor(src.kind, pid),
+    refetchInterval: (query) => (src.kind === 'real' && !paused && (query.state.data?.kind !== 'unsupported' || !valid(pid, query.state.data)) ? SETTINGS_POLL_MS : false),
   })
   const qRefetch = q.refetch
   const retry = useCallback(() => { void qRefetch() }, [qRefetch])
@@ -211,6 +214,7 @@ export function useFreshRead(project: Pick<Project, 'id'> | null) {
     const apply = () => {
       if (currentSessionKey() !== session) return
       qc.setQueryData<SettingsData>(key, (old) => putNewer(old, { ...r, seq }))
+      markOk(pid, { seq })
     }
     if (!opts.defer) apply()
     const latest = () => startedSeq.get(JSON.stringify(key)) === seq && !((qc.getQueryData<SettingsData>(key)?.seq ?? 0) > seq)
@@ -237,6 +241,7 @@ export function useFreshUnits(project: Pick<Project, 'id'> | null) {
     const apply = () => {
       if (currentSessionKey() !== session) return
       qc.setQueryData<UnitsData>(key, (old) => putNewer(old, { ...r, seq }))
+      markOk(pid, { seq })
     }
     if (!opts.defer) apply()
     const latest = () => startedSeq.get(JSON.stringify(key)) === seq && !((qc.getQueryData<UnitsData>(key)?.seq ?? 0) > seq)

@@ -74,6 +74,8 @@ export function CityPicker({ city, onPick }: { city: City; onPick: (code: string
     const list = el?.querySelector('[cmdk-list]')
     setListId(list?.id)
     setItemId(hl ? itemById(el, hl)?.id : undefined)
+    // 绝对定位只用于打开时的那个高亮；高亮离开过当前城市，之后都按 nearest 滚
+    if (hl !== opened.current) opened.current = ''
     // 弹层刚挂载时还在定位、列表高度（取决于可用高度）还没定，当场滚的位置不可靠：
     // 下一帧滚一次（每个高亮只滚一次），之后列表尺寸每变一次再按当时的高度重算，最终位置与定位完成的先后无关
     if (hl && scrolled.current !== hl) {
