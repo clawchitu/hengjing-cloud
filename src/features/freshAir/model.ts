@@ -57,8 +57,8 @@ export interface UnitView {
   runningTime: number | null
   /** 运行模式文案；没有为空串 */
   runningMode: string
-  /** 开关：只有 switch === 1 才算开 */
-  on: boolean
+  /** 开关：1 开，0（proto3 缺省）关；其他值（-100 等无效读数）为 null，界面显示 -- */
+  on: boolean | null
   /** 202 的 is_connected；缺省 false */
   connected: boolean
 }
@@ -87,7 +87,7 @@ export function toUnitViews(raw: Partial<Raw202> | null | undefined): UnitView[]
       filterRunning: num(u.filterRunning),
       runningTime: num(u.runningTime),
       runningMode: u.runningMode ?? '',
-      on: u.switch === 1,
+      on: u.switch === 1 ? true : u.switch === undefined || u.switch === 0 ? false : null,
       connected: u.isConnected === true,
     }
   })

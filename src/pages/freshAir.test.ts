@@ -184,6 +184,16 @@ describe('运行设置的口径', () => {
 })
 
 describe('202 读数', () => {
+  it('开关读数无效（-100）时显示 --、状态「开关未知」，不当成关机', async () => {
+    backend({ [R202]: () => body202([UNIT({ switch: -100 })]) }, { projects: [P1] })
+    await signIn('u', 'pw', true)
+    mount(P1.id)
+    const summary = (await screen.findByText('设备汇总')).closest('[data-slot=card]') as HTMLElement
+    const cells = within(summary).getAllByRole('row')[1].querySelectorAll('td')
+    expect(cells[1].textContent).toBe('--')
+    expect(screen.getAllByText('开关未知').length).toBeGreaterThan(0)
+    expect(screen.queryByText('已关机')).toBeNull()
+  })
   it('实时数据只放接口有的字段；65536 / -100 显示 --，0 是有效值', async () => {
     backend({ [R202]: () => body202([UNIT({ supplyTemp: 65536, returnTemp: -100, windLevel: 0, dehumidifierStatus: 0, dehumidifierFreq: 0 })]) }, { projects: [P1] })
     await signIn('u', 'pw', true)

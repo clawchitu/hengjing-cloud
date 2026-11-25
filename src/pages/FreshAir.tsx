@@ -36,7 +36,7 @@ const num = (v: number | null, digits = 0, unit = '') => (v === null ? PLACEHOLD
 const unitName = (u: UnitView, i: number) => u.name || `新风设备 ${i + 1}`
 /** 压缩机状态（A6）：0 停止、1 运行，其他显示原数字 */
 const compressorText = (v: number | null) => (v === null ? PLACEHOLDER : v === 0 ? '停止' : v === 1 ? '运行' : String(v))
-const statusOf = (u: UnitView): [string, 'green' | 'gray' | 'red'] => (!u.connected ? ['未连接', 'red'] : u.on ? ['运行中', 'green'] : ['已关机', 'gray'])
+const statusOf = (u: UnitView): [string, 'green' | 'gray' | 'red'] => (!u.connected ? ['未连接', 'red'] : u.on === null ? ['开关未知', 'gray'] : u.on ? ['运行中', 'green'] : ['已关机', 'gray'])
 const warnOn = () => getConfig().features.freshAirFilterWarn === true
 
 function PageHead({ project, count, right }: { project: Project | null; count?: number; right?: ReactNode }) {
@@ -259,7 +259,7 @@ export default function FreshAir() {
                   return (
                     <TableRow key={f.key} onClick={() => setSel(f.key)} style={{ cursor: 'pointer', color: live && f.on ? undefined : 'var(--muted)' }}>
                       <TableCell style={{ fontWeight: 500, color: 'var(--text)' }}>{unitName(f, i)}</TableCell>
-                      <TableCell>{live ? <Badge variant={f.on ? 'green' : 'gray'}><Icon icon={faPowerOff} /> {f.on ? '开' : '关'}</Badge> : <Badge variant="red">未连接</Badge>}</TableCell>
+                      <TableCell>{live ? (f.on === null ? PLACEHOLDER : <Badge variant={f.on ? 'green' : 'gray'}><Icon icon={faPowerOff} /> {f.on ? '开' : '关'}</Badge>) : <Badge variant="red">未连接</Badge>}</TableCell>
                       <TableCell>{live ? f.runningMode || PLACEHOLDER : PLACEHOLDER}</TableCell>
                       <TableCell className="num text-right">{live ? num(f.runningTime) : PLACEHOLDER}</TableCell>
                       <TableCell className="num text-right">{live ? num(f.filterRunning) : PLACEHOLDER}</TableCell>

@@ -26,6 +26,8 @@ describe('202 真实回包解码 → UnitView', () => {
   it('65536、-100 → null；running_mode 空串；is_connected 缺省为未连接', () => {
     const [u] = toUnitViews(enc202([{ id: 7, supplyTemp: 65536, returnTemp: -100, dehumidifierFreq: 65536, filterLife: -100, filterLifeP: 65536, switch: 1 }]))
     expect(u).toMatchObject({ supplyTemp: null, returnTemp: null, compressorFreq: null, filter: { days: null, ratio: null }, runningMode: '', on: true, connected: false })
+    // 开关：0 / 缺省是关，-100 等无效读数是 null（不能当成关）
+    expect(toUnitViews(enc202([{ id: 8, switch: 0 }, { id: 9 }, { id: 10, switch: -100 }, { id: 12, switch: 2 }])).map((x) => x.on)).toEqual([false, false, null, null])
   })
   it('202 的 -1 读数也转成 null（plan S10a）', () => {
     const [u] = toUnitViews(enc202([{ id: 7, supplyTemp: -1, returnTemp: -1, windLevel: -1, windSpeed: -1, dehumidifierStatus: -1, dehumidifierFreq: -1, filterRunning: -1, runningTime: -1 }]))
