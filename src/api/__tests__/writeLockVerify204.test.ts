@@ -116,6 +116,14 @@ describe('blocked204（Fable 11/25 裁定）', () => {
 })
 
 describe('checkSentRecord(204)', () => {
+  it('露点、湿度设定值：65536、-100、超出合法范围一律拒绝；-1（不变）照常放行', () => {
+    for (const bad of [65536, -100, 7.5, 16.5, 0]) expect(checkSentRecord(rec({ dewPoint: bad }))).toMatch(/不在合法范围内|不合规/)
+    for (const bad of [65536, -100, 34, 71, 0]) expect(checkSentRecord(rec({ humiditySet: bad }))).toMatch(/不在合法范围内|不合规/)
+    expect(checkSentRecord(rec({ dewPoint: 8, humiditySet: -1 }))).toBeNull()
+    expect(checkSentRecord(rec({ dewPoint: 16 }))).toBeNull()
+    expect(checkSentRecord(rec({ humiditySet: 35 }))).toBeNull()
+    expect(checkSentRecord(rec({ humiditySet: 70, dewPoint: -1, windSpeed: 1 }))).toBeNull()
+  })
   it('deviceId 为 null、0、负数、小数 → 拒绝', () => {
     for (const deviceId of [null, 0, -5, 1.5]) expect(checkSentRecord({ ...rec({ windSpeed: 1 }), deviceId })).toMatch(/没有读到新风设备 id.*未下发/)
   })

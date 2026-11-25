@@ -302,6 +302,11 @@ const copyRecord = (r: SentRecord): SentRecord => ({ msg: r.msg, deviceId: r.dev
 /** 正整数设备 id（204 的下发、核对、读数检查共用这一个判断） */
 export const isDeviceId = (v: unknown): v is number => typeof v === 'number' && Number.isSafeInteger(v) && v > 0
 const FIELDS_204 = new Set(['controlType', 'dewPoint', 'humiditySet', 'windSpeed', 'switch'])
+/**
+ * 204 设定值的合法范围（docs/plan-s10-s7.md A3：露点 8–16°C、湿度 35–70%，后端给范围前按这个）。
+ * 65536（未初始化）、-100（无效数据）以及范围外的值一律拒绝；-1 是「不变」，不在这里检查
+ */
+export const SETPOINT_RANGE_204: Readonly<Record<string, { min: number; max: number }>> = Object.freeze({ dewPoint: { min: 8, max: 16 }, humiditySet: { min: 35, max: 70 } })
 function check204Target(t: SentRecord['target']): string | null {
   const ENUM: Record<string, readonly number[]> = { controlType: [0, 1], windSpeed: [0, 1, 2], switch: [0, 1] }
   const entries = Object.entries(t)
@@ -313,6 +318,8 @@ function check204Target(t: SentRecord['target']): string | null {
   if (entries.some(([, v]) => typeof v !== 'number' || !Number.isFinite(v))) return '核对数据不合规，未下发'
   for (const [k, v] of changed) {
     if (ENUM[k] && !ENUM[k].includes(v as number)) return '核对数据不合规，未下发'
+    const r = SETPOINT_RANGE_204[k]
+    if (r && ((v as number) < r.min || (v as number) > r.max)) return '设定值不在合法范围内，未下发'
   }
   return null
 }
