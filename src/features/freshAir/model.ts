@@ -8,7 +8,7 @@
 // - 设备 id 只从 202 取。202 里 id 不是正整数、或同一 id 出现多次的条目，deviceId 记为 null（不能拿去读 210）。
 // 这一段没有写函数，也不组装 204。
 import type { CtrlReply } from '@/api/ctrl'
-import { INVALID_HOURLY, NO_DATA, reading, UNCHANGED } from '@/api/values'
+import { INVALID_HOURLY, NO_DATA, setting, UNCHANGED } from '@/api/values'
 import { isDeviceId } from '@/api/writeLock'
 import { BLOCK_204_CONTROL_TYPE, BLOCK_204_NOT_SETTABLE, FIELDS_204, type Field204 } from '@/api/writeLockVerify'
 import { filterOf, type FilterView } from './filter'
@@ -62,8 +62,8 @@ export interface UnitView {
   connected: boolean
 }
 
-/** 计量类读数：65536、-100、非有限数 → null；0 有效 */
-const num = (v: unknown): number | null => (typeof v === 'number' ? reading(v) : null)
+/** 202 的读数：65536、-100、-1、非有限数 → null（plan S10a「无效值（65536、-1）在这里统一成 null」）；0 有效 */
+const num = (v: unknown): number | null => (typeof v === 'number' ? setting(v) : null)
 
 /** 202 回包 → 设备列表（保持回包顺序） */
 export function toUnitViews(raw: Partial<Raw202> | null | undefined): UnitView[] {
@@ -126,7 +126,10 @@ export function fieldOf(f: Field204, v: unknown): SettingField {
   return { state: 'settable', value: n }
 }
 
-/** 字段被禁用时的原因（null = 可设置）。S10b / S10c 共用；-1 的文案沿用 writeLockVerify.ts */
+/**
+ * 字段因读数被禁用的原因（null = 读数上可设置）：只管 writeBlock、-1 和无效值。
+ * 不看 can_change、露点 / 湿度二选一、设备开关等规则，那些在 S10c 的 editBlock 里，S10c 不能直接拿它当 editBlock。-1 的文案沿用 writeLockVerify.ts
+ */
 export function fieldBlock(s: SettingsView, f: Field204): string | null {
   if (s.writeBlock) return s.writeBlock
   const x = s.fields[f]
@@ -154,9 +157,9 @@ export function toSettingsView(raw: Raw210 | null | undefined, deviceId: number)
   const fields = Object.fromEntries(FIELDS_204.map((f) => [f, fieldOf(f, raw[f])])) as Record<Field204, SettingField>
   const ct = fields.controlType
   // control_type = -1：控制类型、露点、湿度连带不能设置（同 settable204）
+  // 本身是无效读数的保留 invalid，只把可设置的改成不可设置
   if (ct.state === 'unsettable') {
-    fields.dewPoint = { state: 'unsettable', value: null }
-    fields.humiditySet = { state: 'unsettable', value: null }
+    for (const f of ['dewPoint', 'humiditySet'] as const) if (fields[f].state === 'settable') fields[f] = { state: 'unsettable', value: null }
   }
   const writeBlock = ct.state === 'unsettable' ? BLOCK_204_CONTROL_TYPE
     : ct.state === 'invalid' ? '该设备的控制类型读数无效，不能设置'

@@ -11,9 +11,9 @@ import { createQueryClient } from '@/api/query'
 import { clearTokens, writeTokens } from '@/api/tokens'
 import { fakeBackend, json } from '@/api/__tests__/helpers'
 import { __resetWriteLockForTests } from '@/api/writeLock'
-import { __resetFreshAirForTests, putNewer, useFreshRead, useSettings, useUnits } from '../hooks'
+import { __resetFreshAirForTests, SETTINGS_POLL_MS, putNewer, useFreshRead, useSettings, useUnits } from '../hooks'
 import { TEXT_UNSUPPORTED } from '../model'
-import { ID_240829001, ID_260911001, R202_240829001, R202_260911001, R210_240829001, R210_260911001 } from './fixtures'
+import { ID_240829001, ID_260911001, R202_260911001, R210_240829001, R210_260911001 } from './fixtures'
 
 const perm = vi.hoisted(() => ({ allowed: new Set<string>(['/v1/ctrl/fresh-dehumidifier-get', '/v1/ctrl/running-ctrl-get']) }))
 vi.mock('@/data/session', () => ({ can: (r: string) => perm.allowed.has(r) }))
@@ -134,8 +134,24 @@ describe('useSettings（210）', () => {
     const { result } = renderHook(() => useSettings(P12, { deviceId: ID_240829001, connected: true }), { wrapper })
     await waitFor(() => expect(result.current.kind).toBe('unsupported'))
     expect(result.current).toEqual({ kind: 'unsupported', message: TEXT_UNSUPPORTED, detail: '该软件类型不支持此控制' })
-    await flush()
     expect(be.callsTo(R210)).toHaveLength(1)
+  })
+  it('unsupported 之后不再轮询（推进超过 SETTINGS_POLL_MS 仍只有 1 次）；ready 时照常轮询', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      const be = fakeBackend({ [R210]: () => json({ body: R210_240829001 }) })
+      const { result } = renderHook(() => useSettings(P12, { deviceId: ID_240829001, connected: true }), { wrapper })
+      await waitFor(() => expect(result.current.kind).toBe('unsupported'))
+      await act(async () => { await vi.advanceTimersByTimeAsync(SETTINGS_POLL_MS * 2 + 1000) })
+      expect(be.callsTo(R210)).toHaveLength(1)
+      const be2 = fakeBackend({ [R210]: () => json({ body: R210_260911001 }) })
+      const ok = renderHook(() => useSettings(P12, { deviceId: ID_260911001, connected: true }), { wrapper })
+      await waitFor(() => expect(ok.result.current.kind).toBe('ready'))
+      await act(async () => { await vi.advanceTimersByTimeAsync(SETTINGS_POLL_MS + 1000) })
+      expect(be2.callsTo(R210).length).toBeGreaterThanOrEqual(2)
+    } finally {
+      vi.useRealTimers()
+    }
   })
   it('同项目的 202 遇到 503：210 之前的读数也作废，不当成当前值', async () => {
     let r202 = 'ok'
@@ -151,7 +167,21 @@ describe('useSettings（210）', () => {
     await waitFor(() => expect(result.current.s.kind).not.toBe('ready'), { timeout: 3000 })
     await waitFor(() => expect(['loading', 'error']).toContain(result.current.s.kind), { timeout: 3000 })
   })
-  it('503 → unavailable；回包设备不符 → error', async () => {
+  it('同项目的 210 遇到 503：202 之前的读数也作废', async () => {
+    let r210 = 'ok'
+    fakeBackend({
+      [R202]: () => (r210 === 'ok' ? json({ body: R202_260911001 }) : json({ code: 13, message: 'x' }, 500)),
+      [R210]: () => (r210 === 'ok' ? json({ body: R210_260911001 }) : json({ code: 14, message: '控制屏消息发送失败' }, 503)),
+    })
+    const { result } = renderHook(() => ({ u: useUnits(P12), s: useSettings(P12, unit) }), { wrapper })
+    await waitFor(() => expect(result.current.s.kind).toBe('ready'))
+    expect(result.current.u.kind).toBe('ready')
+    r210 = '503'
+    await act(async () => { if (result.current.s.kind === 'ready') result.current.s.retry() })
+    await waitFor(() => expect(result.current.s.kind).toBe('unavailable'))
+    await waitFor(() => expect(['loading', 'error']).toContain(result.current.u.kind), { timeout: 3000 })
+  })
+    it('503 → unavailable；回包设备不符 → error', async () => {
     fakeBackend({ [R210]: () => json({ code: 14, message: '控制屏消息发送失败' }, 503) })
     const a = renderHook(() => useSettings(P12, unit), { wrapper })
     await waitFor(() => expect(a.result.current.kind).toBe('unavailable'))

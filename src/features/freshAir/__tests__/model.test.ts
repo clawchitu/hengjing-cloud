@@ -27,6 +27,10 @@ describe('202 真实回包解码 → UnitView', () => {
     const [u] = toUnitViews(enc202([{ id: 7, supplyTemp: 65536, returnTemp: -100, dehumidifierFreq: 65536, filterLife: -100, filterLifeP: 65536, switch: 1 }]))
     expect(u).toMatchObject({ supplyTemp: null, returnTemp: null, compressorFreq: null, filter: { days: null, ratio: null }, runningMode: '', on: true, connected: false })
   })
+  it('202 的 -1 读数也转成 null（plan S10a）', () => {
+    const [u] = toUnitViews(enc202([{ id: 7, supplyTemp: -1, returnTemp: -1, windLevel: -1, windSpeed: -1, dehumidifierStatus: -1, dehumidifierFreq: -1, filterRunning: -1, runningTime: -1 }]))
+    expect([u.supplyTemp, u.returnTemp, u.windLevel, u.fanSpeed, u.compressorStatus, u.compressorFreq, u.filterRunning, u.runningTime]).toEqual([null, null, null, null, null, null, null, null])
+  })
   it('设备 id 无效或重复：deviceId 为 null（不能拿去读 210），键不重复', () => {
     const list = toUnitViews(enc202([{ id: 5, name: 'a' }, { id: 5, name: 'b' }, { name: '缺省 0' }, { id: -3 }, { id: 9 }]))
     expect(list.map((u) => u.deviceId)).toEqual([null, null, null, null, 9])
@@ -76,6 +80,13 @@ describe('210 真实回包解码 → SettingsView（三类标注）', () => {
     expect(v.fields).toMatchObject({ controlType: { state: 'unsettable' }, dewPoint: { state: 'unsettable' }, humiditySet: { state: 'unsettable' }, windSpeed: { state: 'settable', value: 1 } })
     expect(v.writeBlock).toBe(BLOCK_204_CONTROL_TYPE)
     for (const f of FIELDS_204) expect(fieldBlock(v, f)).toBe(BLOCK_204_CONTROL_TYPE)
+  })
+  it('control_type = -1 时，露点 / 湿度本身是无效读数的保留 invalid', () => {
+    const v = toSettingsView({ id: 3, controlType: -1, dewPoint: -100, humiditySet: 65536 }, 3)
+    expect([v.fields.dewPoint.state, v.fields.humiditySet.state]).toEqual(['invalid', 'invalid'])
+    const w = toSettingsView({ id: 3, controlType: -1, dewPoint: -100, humiditySet: 40 }, 3)
+    expect([w.fields.dewPoint.state, w.fields.humiditySet.state]).toEqual(['invalid', 'unsettable'])
+    expect(w.writeBlock).toBe(BLOCK_204_CONTROL_TYPE)
   })
   it('control_type 无效（-100）：写入口也禁用', () => {
     const v = toSettingsView({ id: 3, controlType: -100 }, 3)
