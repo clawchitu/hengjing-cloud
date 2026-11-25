@@ -72,7 +72,8 @@ export function summarizeRooms(
 ): UnifiedSnapshot {
   const switchReported = opts.switchReported ?? roomSwitchReported()
   const online = rooms.filter((r) => r.isConnected !== false)
-  const sws = online.map((r) => (switchReported ? num(r.switch) : null))
+  // 开关只认 0 / 1，其他值按没回报（null → 无法核对）
+  const sws = online.map((r) => (switchReported && (r.switch === 0 || r.switch === 1) ? r.switch : null))
   // 逐房间温度用原始读数核对（按 0.01 容差）；汇总值四舍五入到两位，只用于显示和整体比较
   const ts = online.map((r) => num(r.setTemp))
   const shown = ts.map((v) => (v === null ? null : Math.round(v * 100) / 100))

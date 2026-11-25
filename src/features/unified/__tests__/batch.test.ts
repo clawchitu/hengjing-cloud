@@ -44,6 +44,11 @@ describe('summarizeRooms（ctrl 200 → 回读快照）', () => {
     expect(s).toEqual({ rooms: 2, roomSwitch: null, roomTemp: 26, switchUnreported: true, perRoom: { roomSwitch: [null, null], roomTemp: [26, 26] } })
     expect(echoMismatches({ systemSwitch: -1, systemMode: 0, roomSwitch: 1, roomTemp: -1 }, s).map((m) => m.kind)).toEqual(['missing'])
     expect(summarizeRooms([{ switch: 0, setTemp: -100 }], { switchReported: true })).toMatchObject({ roomSwitch: 0, roomTemp: null })
+    // 开关可信时，开关读数不是 0 / 1 按没回报：203 核对记无法核对，不判未变化
+    const odd = summarizeRooms([{ switch: 2, setTemp: 26 }, { switch: 1, setTemp: 26 }], { switchReported: true })
+    expect(odd.perRoom?.roomSwitch).toEqual([null, 1])
+    expect(echoMismatches({ systemSwitch: -1, systemMode: 0, roomSwitch: 0, roomTemp: -1 }, { roomSwitch: null, perRoom: { roomSwitch: [null] } }).map((m) => m.kind)).toEqual(['missing'])
+    expect(echoMismatches({ systemSwitch: -1, systemMode: 0, roomSwitch: 1, roomTemp: -1 }, odd).map((m) => m.kind)).toEqual(['missing'])
   })
 
   it('逐房间温度保留原始读数核对（不先四舍五入）：24.494 与 24.5 差 0.006 算一致', async () => {

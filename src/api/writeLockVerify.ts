@@ -103,6 +103,8 @@ export function matchRoomSet(rec: Pick<SentRecord, 'msg' | 'deviceId' | 'target'
     if (room.isConnected !== true) { fields[field] = 'unknown'; continue }
     const got = ROOM_READ[field](room)
     if (!validReading(got)) { fields[field] = 'unverifiable'; continue }
+    // 开关只有 0 / 1 是有效状态，其他值（如 2）按设备没回报，无法核对，不判「未变化」
+    if (field === 'switch' && got !== 0 && got !== 1) { fields[field] = 'unverifiable'; continue }
     fields[field] = (field === 'temperature' ? sameTemp(got, v) : got === v) ? 'applied' : 'unchanged'
   }
   return detail(fields)
@@ -122,7 +124,7 @@ export function matchAllRoomsSwitch(rec: Pick<SentRecord, 'msg' | 'target' | 'ro
   const rooms = reply.data ?? []
   // 开关未上报：一律无法核对（先于离线判断）
   const judge = (r: Room | undefined): FieldResult =>
-    !r || !switchReported ? 'unverifiable' : r.isConnected !== true ? 'unknown' : !validReading(r.switch) ? 'unverifiable' : r.switch === want ? 'applied' : 'unchanged'
+    !r || !switchReported ? 'unverifiable' : r.isConnected !== true ? 'unknown' : !validReading(r.switch) || (r.switch !== 0 && r.switch !== 1) ? 'unverifiable' : r.switch === want ? 'applied' : 'unchanged'
   const perRoom: FieldResult[] = rec.roomIds.map((id) => judge(rooms.find((r) => r.id === id)))
   return detail({ switch: verdictOf(perRoom) })
 }

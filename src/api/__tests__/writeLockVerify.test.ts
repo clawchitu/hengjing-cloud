@@ -151,4 +151,10 @@ describe('房间开关未上报（features.roomSwitchReported = false，后端 1
     expect(set({ temperature: 24.5 }, reply(room({ setTemp: -100 })))).toEqual({ verdict: 'unverifiable', fields: { temperature: 'unverifiable' } })
     expect((set({ eco: 0 }, wire(room({ eco: 0 }))) as { verdict: string }).verdict).toBe('applied')
   })
+  it('开关可信时，开关读数不是 0 / 1（如 2、-100、65536）：201、206 一律无法核对，不判未变化', () => {
+    for (const sw of [2, 3, -100, 65536]) {
+      expect(matchRoomSet({ msg: 201, deviceId: D, target: { switch: 1 } }, reply(room({ switch: sw })), { switchReported: true })).toEqual({ verdict: 'unverifiable', fields: { switch: 'unverifiable' } })
+      expect(matchAllRoomsSwitch({ msg: 206, target: { switch: 0 }, roomIds: [D] }, reply(room({ switch: sw })), { switchReported: true })).toEqual({ verdict: 'unverifiable', fields: { switch: 'unverifiable' } })
+    }
+  })
 })
