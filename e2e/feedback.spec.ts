@@ -368,34 +368,19 @@ test.describe('文字提示', () => {
     await expect(tip(page)).toHaveCount(0)
   })
 
-  test('新风「露点控制」不可用时：按钮本身可聚焦（aria-disabled），Tab 聚焦显示原因、Esc 关闭；点击不切换', async ({ page, login }) => {
+  test('新风运行设置「不可设置」：锁图标可用 Tab 聚焦，聚焦显示原因、Esc 关闭；下发按钮是禁用的占位', async ({ page, login }) => {
     await login('dealer', 'PRJ-10252')
     await page.goto('/fresh-air')
     await settle(page)
-    await page.locator('.dev-tab').nth(4).click() // 模式 5：仅湿度控制
-    await settle(page)
-    const dew = page.getByRole('button', { name: '露点控制' })
-    await expect(dew).toHaveAttribute('aria-disabled', 'true')
-    await expect(dew).toBeDisabled() // Playwright 认 aria-disabled
-    // 外观与真正 disabled 的「湿度控制」同一组规则
-    expect(await dew.evaluate((n) => [getComputedStyle(n).cursor, getComputedStyle(n).opacity])).toEqual(['not-allowed', '0.45'])
-    await tabTo(page, dew) // 真实 Tab 导航能到达
+    // 第 1 台（FA-01）演示数据是「中」速：210 只有 低 / 高 / 自动，没有对应档位，按无效读数
+    const lock = page.getByRole('img', { name: /^风速不能设置/ })
+    await tabTo(page, lock)
     await tick(page)
-    await expect(tip(page)).toHaveText('当前模式固定为湿度控制')
-    await expect(dew).toHaveAttribute('aria-describedby', /.+/)
+    await expect(tip(page)).toHaveText('该设备的这一项没有有效读数，不能设置')
     await page.keyboard.press('Escape')
     await tick(page)
     await expect(tip(page)).toHaveCount(0)
-    await page.keyboard.press('Enter')
-    await dew.click({ force: true }) // Playwright 对 aria-disabled 的按钮默认等它可用，这里强制点
-    await tick(page)
-    await expect(page.locator('.setbox.on', { hasText: '湿度设定值' })).toBeVisible()
-    await expect(page.locator('.setbox.dis', { hasText: '露点设定值' })).toBeVisible()
-    // 可用时没有提示，是普通按钮
-    await page.locator('.dev-tab').nth(0).click()
-    await settle(page)
-    await expect(page.getByRole('button', { name: '露点控制' })).toBeEnabled()
-    await expect(page.getByRole('button', { name: '露点控制' })).not.toHaveAttribute('aria-disabled')
+    await expect(page.getByRole('button', { name: '下发设置' })).toBeDisabled()
   })
 
   test('常用项目卡片的可访问名称：项目名、在线状态、编号', async ({ page, login }) => {

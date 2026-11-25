@@ -55,21 +55,19 @@ test.describe('新风单机版 运行模式', () => {
       await tick(page, 1500)
       await page.locator('.dev-tab').nth(i).click()
       await tick(page)
-      await expect(page.getByText('运行设置')).toBeVisible()
+      const panel = page.getByLabel('运行设置')
+      await expect(panel).toBeVisible()
+      // S10b 起只读：没有步进和控制类型按钮，下发按钮是禁用的占位
+      await expect(panel.locator('.stepper button')).toHaveCount(0)
+      await expect(panel.getByRole('button', { name: '下发设置' })).toBeDisabled()
       if (m === 5) {
-        // 仅湿度：控制类型锁定为湿度，露点设定值未启用
-        await expect(page.locator('.ctl-type button', { hasText: '露点控制' })).toBeDisabled()
-        await expect(page.locator('.setbox.dis', { hasText: '露点设定值' }).getByText('未启用')).toBeVisible()
-        await expect(page.locator('.setbox.on', { hasText: '湿度设定值' })).toBeVisible()
+        // 模式 5 不在露点可控模式里：演示数据 can_change = false，湿度控制生效
+        await expect(panel.getByText('该设备的控制类型不可切换')).toBeVisible()
+        await expect(panel.locator('.setbox.on', { hasText: '湿度设定' })).toBeVisible()
       } else if (m === 2) {
-        await expect(page.locator('.ctl-type button', { hasText: '露点控制' })).toBeEnabled()
+        await expect(panel.getByText('该设备的控制类型不可切换')).toHaveCount(0)
       }
       await shot(page, `standalone12-fa-mode${m}`)
-      if (m === 5) {
-        // 仅湿度模式下湿度设定值可调：点加号后 50 → 51
-        await page.locator('.setbox.on button.plus').click()
-        await expect(page.locator('.setbox.on .sv')).toHaveText(/^51/)
-      }
     })
   }
 

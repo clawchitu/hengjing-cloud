@@ -3,7 +3,7 @@ import { decodeReply, encodeMessage } from '@/api/ctrl'
 import * as pb from '@/api/gen/ctrl200_pb.js'
 import { ApiError } from '@/api/errors'
 import { BLOCK_204_CONTROL_TYPE, BLOCK_204_NOT_SETTABLE, FIELDS_204, settable204 } from '@/api/writeLockVerify'
-import { fieldBlock, fieldOf, SettingsMismatch, toSettingsView, toUnitViews, type Raw202, type Raw210 } from '../model'
+import { fieldBlock, fieldOf, SettingsMismatch, TEXT_CT_INVALID, TEXT_FIELD_INVALID, toSettingsView, toUnitViews, type Raw202, type Raw210 } from '../model'
 import { ID_240829001, ID_260911001, R202_240829001, R202_260911001, R210_240829001, R210_260911001 } from './fixtures'
 
 const d202 = (b64: string) => decodeReply(pb.FreshDehumidifierGetReplySchema, b64) as Raw202
@@ -46,7 +46,7 @@ describe('210 真实回包解码 → SettingsView（三类标注）', () => {
   it('260911001：湿度设定 -1 不可设置，其余可设置；缺省 0 是真实读数', () => {
     const v = toSettingsView(d210(R210_260911001), ID_260911001)
     expect(v).toEqual({
-      deviceId: ID_260911001, name: 'TXFS500', canChange: false, writeBlock: null,
+      deviceId: ID_260911001, name: 'TXFS500', canChange: false,
       fields: {
         controlType: { state: 'settable', value: 0 },
         dewPoint: { state: 'settable', value: 13 },
@@ -73,26 +73,33 @@ describe('210 真实回包解码 → SettingsView（三类标注）', () => {
     const v = toSettingsView({ id: 3, controlType: 1, dewPoint: 12.5, humiditySet: 50, windSpeed: 1, switch: 1, canChange: true }, 3)
     expect(v.fields.controlType).toEqual({ state: 'settable', value: 1 })
     expect(v.canChange).toBe(true)
-    expect(v.writeBlock).toBeNull()
+    for (const f of FIELDS_204) expect(fieldBlock(v, f)).toBeNull()
   })
-  it('control_type = -1：控制类型、露点、湿度不可设置，整个写入口禁用', () => {
+  it('control_type = -1：只禁用控制类型、露点、湿度；风速、开关照常可设（后端答复第 5 条）', () => {
     const v = toSettingsView({ id: 3, controlType: -1, dewPoint: 12, humiditySet: 50, windSpeed: 1, switch: 1 }, 3)
-    expect(v.fields).toMatchObject({ controlType: { state: 'unsettable' }, dewPoint: { state: 'unsettable' }, humiditySet: { state: 'unsettable' }, windSpeed: { state: 'settable', value: 1 } })
-    expect(v.writeBlock).toBe(BLOCK_204_CONTROL_TYPE)
-    for (const f of FIELDS_204) expect(fieldBlock(v, f)).toBe(BLOCK_204_CONTROL_TYPE)
+    expect(v.fields).toMatchObject({ controlType: { state: 'unsettable' }, dewPoint: { state: 'unsettable' }, humiditySet: { state: 'unsettable' }, windSpeed: { state: 'settable', value: 1 }, switch: { state: 'settable', value: 1 } })
+    expect(fieldBlock(v, 'controlType')).toBe(BLOCK_204_NOT_SETTABLE)
+    expect(fieldBlock(v, 'dewPoint')).toBe(BLOCK_204_CONTROL_TYPE)
+    expect(fieldBlock(v, 'humiditySet')).toBe(BLOCK_204_CONTROL_TYPE)
+    expect(fieldBlock(v, 'windSpeed')).toBeNull()
+    expect(fieldBlock(v, 'switch')).toBeNull()
+    expect(settable204({ id: 3, controlType: -1, dewPoint: 12, humiditySet: 50, windSpeed: 1, switch: 1 })).toMatchObject({ windSpeed: null, switch: null })
   })
   it('control_type = -1 时，露点 / 湿度本身是无效读数的保留 invalid', () => {
     const v = toSettingsView({ id: 3, controlType: -1, dewPoint: -100, humiditySet: 65536 }, 3)
     expect([v.fields.dewPoint.state, v.fields.humiditySet.state]).toEqual(['invalid', 'invalid'])
     const w = toSettingsView({ id: 3, controlType: -1, dewPoint: -100, humiditySet: 40 }, 3)
     expect([w.fields.dewPoint.state, w.fields.humiditySet.state]).toEqual(['invalid', 'unsettable'])
-    expect(w.writeBlock).toBe(BLOCK_204_CONTROL_TYPE)
+    expect(fieldBlock(w, 'dewPoint')).toBe(BLOCK_204_CONTROL_TYPE)
   })
-  it('control_type 无效（-100）：写入口也禁用', () => {
-    const v = toSettingsView({ id: 3, controlType: -100 }, 3)
+  it('control_type 无效（-100）：控制类型、露点、湿度禁用；风速、开关照常', () => {
+    const v = toSettingsView({ id: 3, controlType: -100, dewPoint: 12, humiditySet: 50, windSpeed: 2, switch: 0 }, 3)
     expect(v.fields.controlType.state).toBe('invalid')
-    expect(v.writeBlock).not.toBeNull()
-    expect(fieldBlock(v, 'switch')).toBe(v.writeBlock)
+    expect([v.fields.dewPoint.state, v.fields.humiditySet.state]).toEqual(['unsettable', 'unsettable'])
+    expect(fieldBlock(v, 'controlType')).toBe(TEXT_FIELD_INVALID)
+    expect(fieldBlock(v, 'dewPoint')).toBe(TEXT_CT_INVALID)
+    expect(fieldBlock(v, 'windSpeed')).toBeNull()
+    expect(fieldBlock(v, 'switch')).toBeNull()
   })
   it('标注与 settable204 一致：读数有效时，不可设置 ⇔ settable204 给出原因', () => {
     const cases: Raw210[] = [

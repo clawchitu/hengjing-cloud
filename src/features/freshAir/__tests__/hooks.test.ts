@@ -109,7 +109,7 @@ describe('useSettings（210）', () => {
     const be = fakeBackend({ [R210]: () => json({ body: R210_260911001 }) })
     const { result } = renderHook(() => useSettings(P12, unit), { wrapper })
     await waitFor(() => expect(result.current.kind).toBe('ready'))
-    expect(result.current).toMatchObject({ settings: { fields: { humiditySet: { state: 'unsettable' }, dewPoint: { state: 'settable', value: 13 } }, writeBlock: null } })
+    expect(result.current).toMatchObject({ settings: { fields: { humiditySet: { state: 'unsettable' }, dewPoint: { state: 'settable', value: 13 } } } })
     expect(be.callsTo(R210)).toHaveLength(1)
   })
   it('非 12 项目不发 210；离线项目、设备未连接、设备 id 无效、无权限都不发', async () => {

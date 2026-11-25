@@ -93,7 +93,8 @@ test.describe('确认弹窗', () => {
     await shotView(page, 'confirm-control-send')
   })
 
-  test('新风下发确认', async ({ page, login }) => {
+  // S10b 起新风运行设置只读、下发按钮是禁用的占位；S10c 接入 204 后恢复本用例并重录 confirm-fresh-air-send
+  test.skip('新风下发确认', async ({ page, login }) => {
     await login('dealer', 'PRJ-10252')
     await page.goto('/fresh-air')
     await tick(page, 1500)

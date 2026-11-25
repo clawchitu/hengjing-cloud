@@ -7,11 +7,11 @@ import { expect, test } from './fixtures'
 const tick = (page: Page, ms = 100) => page.clock.runFor(ms)
 
 test('Switch：空格切换，aria-checked 跟随', async ({ page, login }) => {
-  // 系统设置页的通知开关已按 Q12 去掉（S11），改用新风单机版「运行设置」的开关：它只改本地草稿，不下发
-  await login('dealer', 'PRJ-10252')
-  await page.goto('/fresh-air')
+  // 系统设置页的通知开关已按 Q12 去掉（S11）；新风运行设置在 S10b 改为只读，改用温控卡片的「节能模式」开关：它只改本地草稿，不下发
+  await login('dealer')
+  await page.goto('/thermostat')
   await tick(page, 1500)
-  const sw = page.getByRole('switch', { name: '开关', exact: true })
+  const sw = page.getByRole('switch', { name: '客厅 节能模式', exact: true })
   const before = await sw.getAttribute('aria-checked')
   const after = before === 'true' ? 'false' : 'true'
   await sw.focus()
