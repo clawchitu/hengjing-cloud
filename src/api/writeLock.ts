@@ -34,11 +34,12 @@
 //    次数且来得及（或正在核对、退避定时器在等），并且没到期；一致但被否决（lastVetoed）也算。settling 期间界面只显示「正在核对…」，
 //    不报未变化 / 无法核对 / 结果未知；退避都用完（或来不及再排）、到期时才按最近一次结论显示四态。锁怎么结束的（一致放开 / 到期）
 //    另记在 endOf(主锁键)（带到期时间认是哪一把，以及结束时最近一次核对的结论），供一次性结果卡片（统一控制）在锁放开后改显示。
-//    核对证据（evidence，#64 赤兔定）：核对函数在读取时可用 attachEvidence(signal, 读数) 给这次核对挂一份不透明的读数，写锁不解读它。
+//    核对证据（evidence，#66 赤兔定）：核对函数在读取时可用 attachEvidence(signal, 读数) 给这次核对挂一份不透明的读数，写锁不解读它。
 //    只有这次核对被写锁收下（commitRead 通过、记入 lastVerify / lastFields，或一致放锁）时才随结论一起存到锁上（lastEvidence），
-//    放锁时随 endOf 一并记下；迟到、超时、中止、换账号、被否决的核对不留证据，结论没变的证据也不变。页面按它重算展示，
-//    保证与 lastVerify 对得上。只有当前账号（mine）的锁视图 / 结束记录带证据；会话代次一变（换账号、登出、重登），
-//    结束记录（ends）与所有锁上的证据一律清空。
+//    放锁时随 endOf 一并记下；迟到、超时、换账号、读失败的核对不留证据，读到一致但在提交时被否决（lastVetoed，按未变化记）的
+//    也不留；中止不改上次的结论与证据。页面按它重算展示，保证与 lastVerify 对得上。只有当前账号（mine）的锁视图 / 结束记录带证据；
+//    会话代次一变（换账号、登出、重登），所有锁上和结束记录里的证据一律清空；结束记录本身（怎么结束、到期时间、最后结论）保留，
+//    同一用户重登后结果卡片仍能按它定结论。
 // 7. 持久化：markSent 时就写 localStorage（键 = STORAGE_PREFIX + 主锁键），放锁时删（核对一致、确定失败、未认领、到期）；刷新后读到的记录一律按「结果未知」
 //    恢复（原 Promise 已不存在，视为已结算），靠 registerVerifier(消息号, fn) 注册的核对器重建核对，注册时若已有该消息号的锁就立刻
 //    核对一次。记录只存：锁键、projectId、消息号、设备 id、目标字段与值、206 的目标房间 id 集合、userId、sentAt（不存 label、项目名、
@@ -423,14 +424,14 @@ export interface LockEndInfo { expiresAt: number; how: LockEnd; lastVerify?: Ver
 interface EndRecord { info: LockEndInfo; account: Account; evidence?: unknown }
 let ends = new Map<string, EndRecord>()
 
-// 会话代次变化（换账号、登出、重登）：清空结束记录与所有锁上的核对证据。读取方（view / endOf）和写入方（drop、收下核对）
-// 先调它，所以不依赖订阅回调的时机；默认账号来源的 session 订阅里也调一次
+// 会话代次变化（换账号、登出、重登）：清空结束记录里与所有锁上的核对证据（结束记录本身保留）。读取方（view / endOf）和写入方
+// （drop、收下核对）先调它，所以不依赖订阅回调的时机；默认账号来源的 session 订阅里也调一次
 let sweptFor: Account | null = null
 function sweepSession() {
   const cur = currentAccount()
   if (sweptFor && sameAccount(sweptFor, cur)) return
   if (sweptFor) {
-    ends = new Map()
+    for (const r of ends.values()) r.evidence = undefined
     for (const e of byKey.values()) e.evidence = undefined
   }
   sweptFor = cur

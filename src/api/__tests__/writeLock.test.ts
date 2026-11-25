@@ -1049,7 +1049,7 @@ describe('订阅与模块级', () => {
   })
 })
 
-describe('核对证据（evidence，#64）：只存写锁最后收下的那次核对；会话代次变化清空', () => {
+describe('核对证据（evidence，#66）：只存写锁最后收下的那次核对；会话代次变化清空', () => {
   const fake = () => vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
   /** 已认领、登记、定为已下发、原写立即结算：开始自动核对 */
   async function sentOk(fn: L.VerifyFn) {
@@ -1172,14 +1172,23 @@ describe('核对证据（evidence，#64）：只存写锁最后收下的那次�
     expect(lockOf(PA)?.owner).toBe('current')
     expect(lockOf(PA)?.lastEvidence).toBeUndefined()
   })
-  it('换代后 ends 清空：新账号 endOf 为 null；锁的账号与当前不同时 endOf 不带证据', async () => {
-    await unknownSettled(async (sig) => { L.attachEvidence(sig, 'E1'); return true })
+  it('换代后 ends 里的证据清空、结束记录保留（同号重登仍能定结论）；别的账号看不到证据', async () => {
+    const t1 = await unknownSettled(async (sig) => { L.attachEvidence(sig, 'E1'); return false })
+    expect(await verify(KEY)).toBe('mismatch')
+    const exp = lockOf(PA)!.expiresAt!
+    requireVerify(t1, async (sig) => { L.attachEvidence(sig, 'E1b'); return true })
     expect(await verify(KEY)).toBe('released')
-    expect(L.endOf(KEY)).toMatchObject({ how: 'applied', lastEvidence: 'E1' })
-    acct = { user: 'u2', gen: 2 }
-    expect(L.endOf(KEY)).toBeNull()
-    acct = { user: 'u1', gen: 1 }
-    expect(L.endOf(KEY)).toBeNull() // 清空的，不是隐藏
+    expect(L.endOf(KEY)).toMatchObject({ expiresAt: exp, how: 'applied', lastEvidence: 'E1b' })
+    acct = { user: 'u2', gen: 2 } // 换成别的账号
+    const forB = L.endOf(KEY)!
+    expect(forB).toMatchObject({ expiresAt: exp, how: 'applied' })
+    expect('lastEvidence' in forB).toBe(false)
+    acct = { user: 'u1', gen: 3 } // 同一用户重新登录：结束记录还在，证据没了
+    const again = L.endOf(KEY)!
+    expect(again).toMatchObject({ expiresAt: exp, how: 'applied' })
+    expect('lastEvidence' in again).toBe(false)
+    acct = { user: 'u1', gen: 1 } // 只为证明证据是清空而不是隐藏
+    expect('lastEvidence' in L.endOf(KEY)!).toBe(false)
     // 上一账号的锁由新账号核对放开：结束记录给新账号看时不带证据（证据也只在当前账号自己的锁上）
     acct = { user: 'u1', gen: 1 }
     const t3 = await unknownSettled(async (sig) => { L.attachEvidence(sig, 'E2'); return false })
@@ -1191,7 +1200,7 @@ describe('核对证据（evidence，#64）：只存写锁最后收下的那次�
     expect(end.how).toBe('applied')
     expect('lastEvidence' in end).toBe(false)
   })
-  it('默认账号来源（api/session）：退出登录后 ends 与证据清空', async () => {
+  it('默认账号来源（api/session）：退出登录后 ends 里与锁上的证据清空（结束记录保留）', async () => {
     __resetWriteLockForTests()
     setConfig({ apiBase: '/api', dataSource: 'real' })
     __resetHttpForTests(); __resetSessionForTests(); clearTokens()
@@ -1212,7 +1221,8 @@ describe('核对证据（evidence，#64）：只存写锁最后收下的那次�
     await flush()
     expect(lockOf(PC)?.lastEvidence).toBe('S2')
     await signOut()
-    expect(L.endOf(KEY)).toBeNull()
+    expect(L.endOf(KEY)).toMatchObject({ how: 'applied' })
+    expect('lastEvidence' in L.endOf(KEY)!).toBe(false)
     expect(lockOf(PC)?.lastEvidence).toBeUndefined()
     setConfig(null)
   })

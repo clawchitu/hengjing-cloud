@@ -12,7 +12,7 @@ import { decodeReply, encodeMessage } from '../api/ctrl'
 import * as pb from '../api/gen/ctrl200_pb.js'
 import { __resetHttpForTests } from '../api/http'
 import { createQueryClient } from '../api/query'
-import { __resetSessionForTests, signIn } from '../api/session'
+import { __resetSessionForTests, signIn, signOut } from '../api/session'
 import { clearTokens, writeTokens } from '../api/tokens'
 import { fakeBackend, json, text, type Call } from '../api/__tests__/helpers'
 import { AppProvider } from '../app/store'
@@ -576,8 +576,23 @@ describe('下发', () => {
       expect(notes).toContain('回读（最后一次自动再核对）：房间开 · 26.0°C')
       expect(reads()).toBeGreaterThanOrEqual(5)
     })
+    it('离开页面后写锁在后台核对一致放开，登出再用同一账号登录：回到统一控制仍显示「已生效」（结束记录跨重登保留，#66）', async () => {
+      fakeClock()
+      const { be } = after203((n) => (n <= 2 ? rooms(0, 26) : rooms(1, 26.5)))
+      void be
+      const dlg = await prepare()
+      await click(okIn(dlg))
+      await screen.findByText(TEXT.verifying, { selector: '[data-slot=badge]' }, { timeout: 3000 })
+      cleanup() // 离开页面
+      await advance(RETRY_DELAYS_MS[0]) // 后台第一次退避读到新值：一致放锁
+      await tick(30)
+      await act(async () => { await signOut() })
+      await mount() // 同一账号重新登录（会话换代）
+      expect(await screen.findByText('已生效', { selector: '[data-slot=badge]' }, { timeout: 3000 })).toBeTruthy()
+      expect(screen.queryByText('未变化', { selector: '[data-slot=badge]' })).toBeNull()
+    })
     /**
-     * 迟到读数（#64）：第一次退避（203 后第 3 次读）的回读忽略中止，核对超时（15 秒）后才回来，读到「房间开、温度没变」；
+     * 迟到读数（#66）：第一次退避（203 后第 3 次读）的回读忽略中止，核对超时（15 秒）后才回来，读到「房间开、温度没变」；
      * 之后写锁收下的核对都读到旧值。lateAt 决定这份迟到读数在什么时候回来
      */
     async function lateRead(lateAt: 'before-expiry' | 'after-expiry') {
@@ -623,8 +638,8 @@ describe('下发', () => {
       expect(screen.getByText('未变化', { selector: '[data-slot=badge]' })).toBeTruthy()
       expect(screen.queryByText('1 项未生效，1 项已生效', { selector: '[data-slot=badge]' })).toBeNull()
     }
-    it('迟到读数（核对超时后、到期前才回来）不改变最终卡片：按写锁最后收下的那次核对的读数重算（#64）', () => lateRead('before-expiry'))
-    it('迟到读数（锁到期后才回来）不改变最终卡片（#64）', () => lateRead('after-expiry'))
+    it('迟到读数（核对超时后、到期前才回来）不改变最终卡片：按写锁最后收下的那次核对的读数重算（#66）', () => lateRead('before-expiry'))
+    it('迟到读数（锁到期后才回来）不改变最终卡片（#66）', () => lateRead('after-expiry'))
     it('批次截止时还没收到应答（锁仍在 sent）：应答之后写锁核对一致 → 卡片最终显示「已生效」', async () => {
       fakeClock()
       setConfig({ apiBase: '/api', dataSource: 'real', apiEnv: 'test', requestTimeoutMs: 120_000, features: { roomSwitchReported: true } } as never)
