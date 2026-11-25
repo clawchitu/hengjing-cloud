@@ -1,4 +1,5 @@
 import { defineConfig } from '@playwright/test'
+import { checkCli } from './e2e-live/cli'
 import type { Role } from './e2e-live/harness'
 import { LOCAL_PROXY_TARGET, ORIGIN, TARGET } from './e2e-live/target'
 
@@ -8,6 +9,18 @@ import { LOCAL_PROXY_TARGET, ORIGIN, TARGET } from './e2e-live/target'
 // 单次登录：setup 项目每个账号登录一次并存 storageState，platform / dealer 两个项目依赖它、复用登录态；
 // 全程不续期（闸门拦 /auth/refresh）。retries 必须为 0：重试 setup 就是第二次登录。
 // 不截图、不录视频、不录 trace：登录页上有账号，trace 里有请求头（令牌）。失败证据是去敏的 network.txt 附件（JSON 报告里）。
+// 命令行护栏：只在主进程判断（worker 进程有 TEST_WORKER_INDEX，重新加载配置时 argv 不同，沿用主进程算好的 H1_ROLES）
+if (process.env.TEST_WORKER_INDEX === undefined) {
+  const cli = checkCli(process.argv, process.env)
+  if (cli.errors.length) throw new Error(cli.errors.join('；'))
+  process.env.H1_ROLES = cli.roles.join(',')
+  // 演练专用的开关（故障注入、保留失败现场）只能经 playwright.live-dry.config.ts 使用
+  const dry = process.argv.some((a) => a.includes('playwright.live-dry.config'))
+  if (!dry && (process.env.H1_DRY || process.env.H1_DRY_BREAK || process.env.H1_DRY_KEEP)) throw new Error('H1_DRY* 只能用于演练')
+}
+// 失败时不生成「复制给 AI 的提示」（其中含页面快照）
+process.env.PLAYWRIGHT_NO_COPY_PROMPT = '1'
+
 export default defineConfig<{ role: Role }>({
   testDir: './e2e-live',
   testMatch: /\.(spec|setup)\.ts$/,

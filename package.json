@@ -16,7 +16,7 @@
     "gen:proto": "buf generate && oxlint src/api/gen",
     "test:live": "vitest run --config vitest.live.config.ts",
     "e2e:live": "playwright test -c playwright.live.config.ts",
-    "e2e:live:dry": "playwright test -c playwright.live-dry.config.ts"
+    "e2e:live:dry": "playwright test -c playwright.live-dry.config.ts && node e2e-live/dry/leak-check.mjs"
   },
   "dependencies": {
     "@bufbuild/protobuf": "^2.17.0",

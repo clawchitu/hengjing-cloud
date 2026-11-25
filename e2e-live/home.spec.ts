@@ -38,8 +38,8 @@ test('首页统计卡与接口一致', async ({ page, api }) => {
   }
   await expect(card('集成项目')).toHaveText(want.groups)
   await expect(card('项目总数')).toHaveText(want.projects)
-  expect(squash(await card('在线项目').innerText())).toBe(want.online)
-  expect(squash(await card('离线项目').innerText())).toBe(want.offline)
+  await expect.poll(async () => squash(await card('在线项目').innerText())).toBe(want.online)
+  await expect.poll(async () => squash(await card('离线项目').innerText())).toBe(want.offline)
 })
 
 test('首页常用项目与 /projects/frequent 一致（只留可见范围里的，最多 4 个，按接口顺序）', async ({ page, api }) => {

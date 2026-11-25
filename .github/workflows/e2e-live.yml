@@ -28,8 +28,8 @@ jobs:
     name: 测试服只读 e2e（${{ inputs.target }}）
     runs-on: ubuntu-latest
     timeout-minutes: 40
-    # 账号放在这个 environment 的 secrets 里。须在仓库设置里给它设「必需审批人」：手动触发可选任意分支，
-    # 工作流文件取自那个分支，没有审批就等于任何有写权限的人都能拿到账号
+    # 账号放在这个 environment 的 secrets 里。environment 已设必需审批人（clawchitu）、只允许 main 部署：
+    # 手动触发可选任意分支，工作流文件取自那个分支，没有这两条就等于任何有写权限的人都能拿到账号
     environment: h1-live
     container:
       image: mcr.microsoft.com/playwright:v1.65.1-noble
@@ -57,7 +57,8 @@ jobs:
           H1_DEALER_ACCOUNT: ${{ secrets.H1_DEALER_ACCOUNT }}
           H1_DEALER_PASSWORD: ${{ secrets.H1_DEALER_PASSWORD }}
         run: npm run e2e:live
-      # 只上传 JSON 报告（不含步骤参数、不含令牌；附件 network.txt 只有方法和路径）。登录态文件由 globalTeardown 删除
+      # 仓库公开：artifact 任何人可下载，所以只上传 JSON 报告（不含步骤参数、不含令牌；附件 network.txt 只有方法和路径），保留 1 天。
+      # 登录态文件和失败现场（test-results-live/）由 globalTeardown 删除
       - name: 上传运行记录
         if: always()
         uses: actions/upload-artifact@v7
@@ -65,4 +66,4 @@ jobs:
           name: h1-live-report
           path: playwright-report-live/results.json
           if-no-files-found: ignore
-          retention-days: 7
+          retention-days: 1

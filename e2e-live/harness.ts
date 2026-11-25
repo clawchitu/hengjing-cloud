@@ -19,28 +19,63 @@ export interface AuthMeta { role: Role; loginAt: number; expiresAt: number }
 /** 令牌至少还要剩这么久才开跑一个用例（app 在到期前 REFRESH_LEEWAY_MS 内会主动续期，留出用例本身的时长） */
 export const MIN_TOKEN_LEFT_MS = REFRESH_LEEWAY_MS + 10 * 60_000
 
-/** 闸门记账：违规（用例失败）、静默 abort（点击上报）、放行的登录次数、去敏的网络记录（只有方法、路径、判定） */
-export interface Ledger { violations: string[]; silent: string[]; logins: number; net: string[] }
-export const newLedger = (): Ledger => ({ violations: [], silent: [], logins: 0, net: [] })
+/**
+ * 闸门记账：违规（用例失败）、静默 abort（点击上报等）、已放行的登录次数、剩余登录许可、
+ * 去敏的网络记录（只有判定、方法、路径）
+ */
+export interface Ledger { violations: string[]; silent: string[]; logins: number; loginPermits: number; net: string[] }
+export const newLedger = (): Ledger => ({ violations: [], silent: [], logins: 0, loginPermits: 0, net: [] })
+
+const LOGIN_PATH = '/api/auth/login'
 
 /**
- * 装闸门。opts.allowLogin 只给 setup 的登录用；opts.selfCheck 只给闸门自检用：放行的请求交给更早注册的处理器
- * （自检里是一个本地应答的兜底），整个自检不发任何网络请求
+ * 装闸门（context 级：同一 context 里新开的页面、弹窗、iframe 都经过它）：
+ * - 普通请求：context.route 在请求发出前按 policy.ts 判定，放行之外的 abort；
+ * - 登录：opts.loginPermits 给出本 context 可放行的登录次数（只有 setup 给 1）。许可在 route.continue() 之前同步扣减，
+ *   第二次（含并发的第二个）在发出前 abort 并判违规；
+ * - 重定向：route 只对重定向链的第一个地址调用，所以在 request 事件里对 redirectedFrom() 非空的请求再判一次，
+ *   不该放行的判违规（此时已发出，无法再拦，只能让用例失败）；
+ * - WebSocket：一律关闭并判违规。唯一例外是本机目标下 vite 开发服务器自己的热更新连接（只连本机，不到测试服）。
+ * opts.selfCheck 只给闸门自检用：放行的请求交给更早注册的本地兜底，整个自检不发任何网络请求
  */
-export async function installGate(context: BrowserContext, ledger: Ledger, opts: { allowLogin?: boolean; selfCheck?: boolean } = {}) {
+export async function installGate(context: BrowserContext, ledger: Ledger, opts: { loginPermits?: number; selfCheck?: boolean } = {}) {
+  ledger.loginPermits = opts.loginPermits ?? 0
+  const allowLogin = ledger.loginPermits > 0
   await context.route('**/*', async (route) => {
     const req = route.request()
-    const d = decide(req.method(), req.url(), { origin: ORIGIN, allowLogin: opts.allowLogin })
+    const d = decide(req.method(), req.url(), { origin: ORIGIN, allowLogin })
     const u = URL.canParse(req.url()) ? new URL(req.url()) : null
     // 只记 /api 和非本站的请求（静态资源太多）；只记方法、源和路径，不记查询串、请求头、请求体
     if (u && (u.origin !== ORIGIN || u.pathname.startsWith('/api'))) ledger.net.push(`${d.action} ${req.method()} ${u.origin === ORIGIN ? '' : u.origin}${u.pathname}`)
     if (d.action === 'allow') {
-      if (`${req.method()} ${u?.pathname}` === 'POST /api/auth/login') ledger.logins++
+      if (req.method() === 'POST' && u?.pathname === LOGIN_PATH) {
+        // 同步的检查加扣减（中间没有 await），并发的两个登录请求也只有一个能拿到许可
+        if (ledger.loginPermits <= 0) {
+          ledger.violations.push('登录许可已用完：第二次登录在发出前被拦（每个账号每次运行只登录一次）')
+          return route.abort('blockedbyclient')
+        }
+        ledger.loginPermits--
+        ledger.logins++
+      }
       return opts.selfCheck ? route.fallback() : route.continue()
     }
     if (d.action === 'abort-silent') ledger.silent.push(d.reason)
     else ledger.violations.push(d.reason)
     return route.abort('blockedbyclient')
+  })
+  context.on('request', (req) => {
+    if (!req.redirectedFrom()) return
+    const d = decide(req.method(), req.url(), { origin: ORIGIN })
+    if (d.action !== 'allow') ledger.violations.push(`重定向后的请求不在白名单：${d.reason}`)
+  })
+  await context.routeWebSocket(/.*/, (ws) => {
+    const u = new URL(ws.url())
+    if (TARGET === 'local' && u.host === new URL(ORIGIN).host && (u.protocol === 'ws:' || u.protocol === 'wss:')) {
+      ws.connectToServer()
+      return
+    }
+    ledger.violations.push(`WebSocket 一律不允许：${u.protocol}//${u.host}${u.pathname}`)
+    void ws.close({ code: 1008, reason: 'H1 闸门：不允许 WebSocket' })
   })
 }
 
@@ -53,12 +88,12 @@ export interface ApiHit { method: string; path: string; status: number; reqBody:
 
 export class ApiLog {
   readonly hits: ApiHit[] = []
-  /** 已发出的 /api 请求（方法 路径），在 request 事件里同步记，不等回包 */
-  readonly sent: string[] = []
+  /** 已发起的 /api 请求（路由与请求体），在 request 事件里同步记，不等回包；被闸门拦下的也算 */
+  readonly sent: { path: string; reqBody: Record<string, unknown> | null }[] = []
   constructor(page: Page) {
     page.on('request', (req) => {
       const u = new URL(req.url())
-      if (u.origin === ORIGIN && u.pathname.startsWith('/api/')) this.sent.push(u.pathname.slice(4))
+      if (u.origin === ORIGIN && u.pathname.startsWith('/api/')) this.sent.push({ path: u.pathname.slice(4), reqBody: bodyOf(req) })
     })
     page.on('response', async (res) => {
       const req = res.request()
@@ -70,7 +105,7 @@ export class ApiLog {
     })
   }
   /** 是否发过这个路由的请求（不论回包是否已到） */
-  wasSent(path: string) { return this.sent.includes(path) }
+  wasSent(path: string) { return this.sent.some((x) => x.path === path) }
   all(path: string, filter: (h: ApiHit) => boolean = () => true) { return this.hits.filter((h) => h.path === path && filter(h)) }
   /** 等到至少一条匹配的回包，返回最新一条 */
   async latest(path: string, filter?: (h: ApiHit) => boolean, timeout = 20_000): Promise<ApiHit> {
@@ -84,8 +119,8 @@ export class ApiLog {
     if (hit.status !== 200) return { hit, reply: null }
     return { hit, reply: decodeReply(CTRL[type].reply, (hit.json as { body?: string } | null)?.body) as CtrlReply<T> }
   }
-  /** 发往某个项目的 ctrl 请求条数（离线空态不应发） */
-  ctrlCalls(projectId: string) { return this.hits.filter((h) => h.path.startsWith('/ctrl/') && h.path !== '/ctrl/projects' && h.reqBody?.project_id === projectId).length }
+  /** 对某个项目已发起的 ctrl 请求条数（按 request 事件统计，不等回包；离线空态不应发） */
+  ctrlCalls(projectId: string) { return this.sent.filter((h) => h.path.startsWith('/ctrl/') && h.path !== '/ctrl/projects' && h.reqBody?.project_id === projectId).length }
 }
 
 function bodyOf(req: Request): Record<string, unknown> | null {

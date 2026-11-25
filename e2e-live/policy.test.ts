@@ -1,4 +1,6 @@
 // H1 放行规则的单元测试（npm test 里跑，不连任何服务器）
+import { readdirSync, readFileSync, statSync } from 'node:fs'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { CTRL, WRITE_CTRL } from '../src/api/ctrl'
 import { isWritePath, WRITE_ROUTES } from '../src/api/guard'
@@ -93,5 +95,22 @@ describe('H1 放行规则', () => {
     expect(decideAt('GET', `${SITE_ORIGIN}/api/me`, { origin: local }).action).toBe('abort')
     expect(decideAt('GET', 'https://control.cosyhome.com.cn/', { origin: 'https://control.cosyhome.com.cn' }).action).toBe('abort')
     expect(decideAt('GET', 'http://localhost:5173/api/me', { origin: 'http://localhost:5173' }).action).toBe('abort')
+  })
+
+  it('e2e-live/ 不使用 APIRequestContext（它不经过 context.route，闸门拦不到）', () => {
+    const files: string[] = []
+    const walk = (d: string) => { for (const f of readdirSync(d)) { const p = join(d, f); if (statSync(p).isDirectory()) { if (f !== '.auth') walk(p) } else if (/\.(ts|mjs|js)$/.test(f)) files.push(p) } }
+    walk('e2e-live')
+    expect(files.length).toBeGreaterThan(5)
+    const banned = [
+      /\bAPIRequestContext\b/, /\brequest\.newContext\b/, /\b(page|context)\.request\b/,
+      // 夹具解构里的 request（例如 async ({ request }) => …）
+      /\(\s*\{[^}]*\brequest\b[^}]*\}\s*[,)]/,
+    ]
+    const hits = files.filter((f) => !f.endsWith('policy.test.ts')).flatMap((f) => {
+      const src = readFileSync(f, 'utf8')
+      return banned.filter((re) => re.test(src)).map((re) => `${f}: ${re}`)
+    })
+    expect(hits).toEqual([])
   })
 })
