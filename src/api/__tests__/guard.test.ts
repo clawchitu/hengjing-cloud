@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { resolveConfig } from '../config'
+import { MODE_OPTIONS } from '@/features/unified/constants'
+import { OPERATING_MODES } from '../values'
 import { assertNoImplicitZero, assertWriteAllowed, checkWrite, isNonCanonicalPath, isWritePath, normalizePath, WRITE_OPS } from '../guard'
 
 const TEST = resolveConfig([{ apiBase: 'https://test.cosyhome.com.cn:9443/v1' }])
@@ -147,6 +149,19 @@ describe('写消息最后防线 assertNoImplicitZero（不变一律 -1，0 只�
       expect(() => assertNoImplicitZero(op, q, new Set(['roomSwitch', 'systemMode']))).toThrow(/运行模式为 0/)
     }
     expect(() => assertNoImplicitZero('ctrl-203', { ...q, systemMode: -1 }, new Set(['roomSwitch']))).not.toThrow()
+  })
+  it('203 / 批量统一控制：枚举外的运行模式（1、7、-2）拒发；-1 和界面可选的全部模式能发', () => {
+    const q = (systemMode: number) => ({ systemSwitch: -1, systemMode, roomSwitch: -1, roomTemp: 26 })
+    const given = new Set(['roomTemp', 'systemMode'])
+    for (const op of ['ctrl-203', 'unified-ctrls-send'] as const) {
+      for (const m of [1, 7, -2, 99, 101]) expect(() => assertNoImplicitZero(op, q(m), given), `${op} ${m}`).toThrow(/不是可选的模式/)
+      for (const o of MODE_OPTIONS) expect(() => assertNoImplicitZero(op, q(o.value), given), `${op} ${o.label}`).not.toThrow()
+      expect(() => assertNoImplicitZero(op, q(-1), new Set(['roomTemp']))).not.toThrow()
+    }
+  })
+  it('界面的 MODE_OPTIONS 与写入口的可选模式集合 OPERATING_MODES 完全一致', () => {
+    expect(new Set(MODE_OPTIONS.map((o) => o.value))).toEqual(OPERATING_MODES)
+    expect(MODE_OPTIONS).toHaveLength(OPERATING_MODES.size)
   })
   it('没有明确给出的数值为 0 → 拒发（proto3 里漏设的字段解出来就是 0）', () => {
     expect(() => assertNoImplicitZero('ctrl-201', { equipmentId: 1, temperature: 26, humidity: 0, windSpeed: -1, eco: -1, switch: -1, endModes: [] }, new Set(['equipmentId', 'temperature']))).toThrow(/humidity/)

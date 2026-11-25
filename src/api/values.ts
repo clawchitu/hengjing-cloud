@@ -6,7 +6,23 @@
 //   0 是有效读数，不能当成「没有数据」。
 // - 210 的露点 / 设定湿度 / 控制类型读到 -1：这一项不能设置（后端 11/25 答复第 5 条），显示 --。
 
+import { UnifiedCtrlSetQuery_OperatingMode as Mode } from './gen/ctrl200_pb.js'
+
 export const UNCHANGED = -1
+
+/**
+ * 203 运行模式可以下发的值：界面可选的 14 个模式（src/features/unified/constants.ts 的 MODE_OPTIONS 必须与此一致，有测试钉住）。
+ * 「不变」是 -1（UNCHANGED）；0（OPERATION_MODE_NONE）和枚举外的值一律不发（guard.ts assertNoImplicitZero、writeLock checkSentRecord）
+ */
+export const OPERATING_MODES: ReadonlySet<number> = new Set<number>([
+  Mode.OPERATION_MODE_SUMMER, Mode.OPERATION_MODE_WINTER, Mode.OPERATION_MODE_VENTILATION, Mode.OPERATION_MODE_DEHUMIDIFY,
+  Mode.OPERATION_MODE_FREE_COOLING, Mode.OPERATION_MODE_HEATING_DEHUMIDIFY, Mode.OPERATION_MODE_HEATING,
+  Mode.OPERATION_MODE_HEATING_HUMIDIFY, Mode.OPERATION_MODE_HUMIDIFY, Mode.OPERATION_MODE_REFRIGERATION,
+  Mode.OPERATION_MODE_REFRIGERATION_HUMIDIFY, Mode.OPERATION_MODE_REFRIGERATION_DEHUMIDIFY,
+  Mode.OPERATION_MODE_REFRIGERATION_HEATING, Mode.OPERATION_MODE_AUTO,
+])
+/** 203 运行模式能不能下发：-1（不变）或 OPERATING_MODES 里的模式 */
+export const isSendableMode = (v: unknown): boolean => v === UNCHANGED || (typeof v === 'number' && OPERATING_MODES.has(v))
 export const NO_DATA = 65536
 export const INVALID_HOURLY = -100
 export const PLACEHOLDER = '--'

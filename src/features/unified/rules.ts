@@ -5,7 +5,7 @@
 //   运行模式 0 不是「不变」：界面没有这个选项，传进来按无效拒绝（11/25 00:20 的 203 传了 0，现场反馈系统模式变成「关闭」）。
 import { buildUnifiedCtrlSet, MODE_UNCHANGED, type WriteQuery } from '@/api/ctrl'
 import { UnifiedCtrlSetQuery_OperatingMode as Mode } from '@/api/gen/ctrl200_pb.js'
-import { hasChanges, UNCHANGED } from '@/api/values'
+import { hasChanges, OPERATING_MODES, UNCHANGED } from '@/api/values'
 import {
   DEFAULT_TEMP_RANGE, MODE_OPTIONS, SWITCH_OFF, SWITCH_ON, TEMP_DISABLED_APP_CODES, TEMP_ENABLED_APP_CODES, TEXT,
   type SwitchValue, type TempRange,
@@ -71,7 +71,8 @@ export function clampTemp(v: number, range: TempRange = DEFAULT_TEMP_RANGE): num
 }
 
 const isSwitch = (v: unknown): v is SwitchValue => v === SWITCH_ON || v === SWITCH_OFF
-const MODE_VALUES = new Set<number>(MODE_OPTIONS.map((o) => o.value))
+/** 可选模式集合以 src/api/values.ts 的 OPERATING_MODES 为准（写入口的最后防线用同一份）；MODE_OPTIONS 与它一致由测试钉住 */
+const MODE_VALUES = OPERATING_MODES
 
 /** 校验问题的固定代码（日志只记代码，不记文案） */
 export type IssueCode =

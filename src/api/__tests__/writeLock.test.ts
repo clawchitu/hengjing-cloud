@@ -806,6 +806,7 @@ describe('持久化（localStorage）', () => {
     expect(checkSentRecord(r203(0))).toMatch(/运行模式为 0.*未下发/)
     expect(checkSentRecord(r203(-1))).toBeNull()
     expect(checkSentRecord(r203(100))).toBeNull()
+    for (const m of [1, 7, -2]) expect(checkSentRecord(r203(m)), String(m)).toMatch(/不是可选的模式.*未下发/)
   })
   it('206 漏传目标房间集合：告警、照常落盘锁住；回包里的房间全部一致也按无法核对，不放锁', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})

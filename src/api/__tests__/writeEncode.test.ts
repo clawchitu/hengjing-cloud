@@ -4,7 +4,7 @@
 import { fromBinary, ScalarType, type DescMessage } from '@bufbuild/protobuf'
 import { base64Decode } from '@bufbuild/protobuf/wire'
 import { describe, expect, it } from 'vitest'
-import { CTRL, MODE_UNCHANGED, WRITE_CTRL, buildProjectRoomSwitchSet, buildRoomTemperatureSet, buildRunningCtrlSet, buildUnifiedCtrlSet, decodeReply, encodeMessage, unchangedOf } from '../ctrl'
+import { CTRL, MODE_UNCHANGED, WRITE_CTRL, buildProjectRoomSwitchSet, buildRoomTemperatureSet, buildRunningCtrlSet, buildUnifiedCtrlSet, decodeReply, encodeMessage, encodeWrite, unchangedOf } from '../ctrl'
 import * as pb from '../gen/ctrl200_pb.js'
 import { buildRoomSet, buildRoomSwitch, newDraft, editDraft, resolveTempRange } from '@/features/thermostat/edit'
 import { toRoomView } from '@/features/thermostat/model'
@@ -186,6 +186,20 @@ describe('204 RunningCtrlSetQuery 线上字节：不改的标量为 -1', () => {
   it('proto 字段集合与本测试覆盖的一致（加字段时失败）', () => {
     expect(Q204).toBe(pb.RunningCtrlSetQuerySchema)
     expect(Q204.fields.map((f) => f.localName).sort()).toEqual(['id', 'name', ...SCALARS_204].sort())
+  })
+})
+
+describe('encodeWrite：编码异常统一为 bad_request，不发', () => {
+  it('非整数、NaN、无穷、超出 int32 → ApiError(bad_request)，消息里带字段名', () => {
+    for (const v of [1.5, Number.NaN, Number.POSITIVE_INFINITY, 2 ** 40]) {
+      expect(() => encodeWrite('ctrl-206', CTRL[206].query, { switch: v }), String(v))
+        .toThrow(expect.objectContaining({ kind: 'bad_request', message: expect.stringMatching(/写消息编码失败，未下发.*switch/) }))
+    }
+    expect(() => encodeWrite('ctrl-203', CTRL[203].query, { ...buildUnifiedCtrlSet({ roomTemp: 26 }), roomSwitch: 0.5 }))
+      .toThrow(expect.objectContaining({ kind: 'bad_request' }))
+  })
+  it('最后防线的拒发仍是 write_blocked（不被包成 bad_request）', () => {
+    expect(() => encodeWrite('ctrl-206', CTRL[206].query, { switch: 0 })).toThrow(expect.objectContaining({ kind: 'write_blocked' }))
   })
 })
 

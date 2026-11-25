@@ -236,8 +236,16 @@ export function buildProjectRoomSwitchSet(on: boolean): WriteQuery<206> {
  * 交给 guard.ts 的 assertNoImplicitZero 检查：除了明确给出的字段，任何数值为 0 一律拒发；203 运行模式为 0 一律拒发
  */
 export function encodeWrite(op: WriteOp, schema: DescMessage, query: object): string {
-  const body = encodeMessage(schema, query)
-  const decoded = toPlain(fromBinary(schema, body ? base64Decode(body) : new Uint8Array())) as Record<string, unknown>
+  let body: string
+  let decoded: Record<string, unknown>
+  try {
+    body = encodeMessage(schema, query)
+    decoded = toPlain(fromBinary(schema, body ? base64Decode(body) : new Uint8Array())) as Record<string, unknown>
+  } catch (e) {
+    // 非整数、超范围等编码异常：统一成 bad_request，不发（原始异常放在 cause 里）
+    if (e instanceof ApiError) throw e
+    throw new ApiError('bad_request', `写消息编码失败，未下发：${e instanceof Error ? e.message : String(e)}`, { cause: e })
+  }
   assertNoImplicitZero(op, decoded, explicitFieldsOf(query))
   return body
 }

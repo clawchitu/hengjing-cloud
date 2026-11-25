@@ -10,6 +10,7 @@
 // 判断不出环境时 config.ts 按生产处理，所以「不确定」等于「拦截」。
 import { getConfig, type RuntimeConfig } from './config'
 import { ApiError } from './errors'
+import { isSendableMode } from './values'
 
 /** 写接口 → 路径（相对 apiBase） */
 export const WRITE_ROUTES = {
@@ -117,12 +118,13 @@ export function assertWriteAllowed(op: WriteOp, projects: readonly unknown[], cf
  * 写消息内容的最后防线（ctrl.ts 的 encodeWrite 在编码后再解码，把解出来的值交给这里，和后端看到的一致）：
  * - 后端口径「0 是真实值，不变一律传 -1」，而 proto3 里没赋值的标量编码后就是 0。所以除了明确给出的字段（目标 id、用户改动），
  *   任何数值为 0 一律拒发。明确给出的列表（end_modes 完整回传）里的值是读到的原样，不逐项查；没给的列表必须为空。
- * - 203（含批量统一控制）的运行模式为 0 一律拒发：界面没有 0 这个选项，0 的含义后端未确认（11/25 00:20 那条 203 传了 0，
+ * - 203（含批量统一控制）的运行模式只能是 -1（不变）或界面可选的模式（values.ts OPERATING_MODES），0 和枚举外的值一律拒发：界面没有 0 这个选项，0 的含义后端未确认（11/25 00:20 那条 203 传了 0，
  *   现场随后反馈系统模式变成「关闭」）。
  */
 export function assertNoImplicitZero(op: WriteOp, decoded: Readonly<Record<string, unknown>>, explicit: ReadonlySet<string>): void {
-  if ((op === 'ctrl-203' || op === 'unified-ctrls-send') && decoded.systemMode === 0) {
-    throw new ApiError('write_blocked', '运行模式为 0（不变应传 -1），未下发')
+  if (op === 'ctrl-203' || op === 'unified-ctrls-send') {
+    if (decoded.systemMode === 0) throw new ApiError('write_blocked', '运行模式为 0（不变应传 -1），未下发')
+    if (!isSendableMode(decoded.systemMode)) throw new ApiError('write_blocked', `运行模式 ${String(decoded.systemMode)} 不是可选的模式，未下发`)
   }
   const walk = (o: Readonly<Record<string, unknown>>, path: string, top: boolean) => {
     for (const [k, v] of Object.entries(o)) {
