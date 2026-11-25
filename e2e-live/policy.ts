@@ -39,6 +39,8 @@ const READ_ROUTES: readonly (readonly [Method, string])[] = [
   ['POST', '/distributors'], // 平台账号的经销商分段
   ['POST', '/apps'], // 应用名称
   ['POST', '/projects/frequent'], // 首页常用项目
+  ['POST', '/weather'], // 首页天气：实时 + 7 天（S7b）
+  ['POST', '/weather24'], // 首页天气：24 小时（S7b）
   ...CTRL_READ_PATHS.map((p) => ['POST', p] as const),
 ]
 export const READ_ALLOW: readonly string[] = Object.freeze(READ_ROUTES.map(([m, p]) => `${m} ${p}`))

@@ -63,7 +63,8 @@ describe('H1 放行规则', () => {
     expect(decide('POST', api('/ctrl/projects/')).action).toBe('abort')
     expect(decide('POST', api('/ctrl/projects?x=1')).action).toBe('abort')
     expect(decide('POST', api('/ctrl/unified-ctrls-records')).action).toBe('abort')
-    expect(decide('POST', api('/weather24')).action).toBe('abort')
+    expect(decide('GET', api('/weather24')).action).toBe('abort')
+    expect(decide('POST', api('/wx/city-list')).action).toBe('abort')
   })
 
   it('点击上报只 abort、不算违规', () => {
