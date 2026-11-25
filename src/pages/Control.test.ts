@@ -268,6 +268,17 @@ describe('S13 同名序号（第 2 轮评审）', () => {
     await screen.findByText('别处同名 (2)')
     expect(resultNames()).toEqual(['别处同名', '别处同名 (2)', '同名项目 (2)'])
   })
+
+  it('结果表：一行按当前列表取名、另一行照记录显示且同名 → 照记录的那行接着编号，不和列表里的显示名撞（第 3 轮评审）', async () => {
+    sessionStorage.setItem('hjc-unified-last:real:dealer-1', JSON.stringify([
+      { name: '同名项目', code: '901', status: 'success', at: '2026-11-24 10:00:00' },
+      { name: '同名项目', code: '222', status: 'success', at: '2026-11-24 10:00:00' },
+    ]))
+    dupBackend()
+    await mount()
+    await screen.findByText('同名项目 (3)')
+    expect(resultNames()).toEqual(['同名项目 (3)', '同名项目 (2)'])
+  })
 })
 
 describe('离线', () => {
