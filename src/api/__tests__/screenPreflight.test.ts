@@ -8,9 +8,14 @@ import { NO_REPLY_504_NOTE, preflightScreen, SCREEN_CHECK_MS, SCREEN_FORBIDDEN_T
 import { clearTokens, writeTokens } from '../tokens'
 import { fakeBackend, json, text } from './helpers'
 
+// 账号的 permission_paths 里有没有 205（本地 can(CONN_ROUTE)）
+let canConn = true
+vi.mock('@/data/session', () => ({ can: () => canConn }))
+
 const R205 = '/ctrl/device-summary-get'
 
 beforeEach(() => {
+  canConn = true
   __resetHttpForTests(); clearTokens()
   writeTokens({ accessToken: `h.${btoa(JSON.stringify({ sub: 'u1' }))}.s`, refreshToken: 'R1', expiresAt: Date.now() + 3600_000 })
   setCurrentUserId('u1')
@@ -40,6 +45,21 @@ describe('preflightScreen（ctrl 205）', () => {
     expect(screenBlockText('forbidden')).toBe(SCREEN_FORBIDDEN_TEXT)
     expect(screenBlockText('offline')).toBe('控制屏未连接，暂不能下发')
     expect(screenBlockText('timeout')).toBe('控制屏未连接，暂不能下发')
+  })
+  it('本地 permission_paths 没有 205 → forbidden，不发请求', async () => {
+    canConn = false
+    const be = fakeBackend({ [R205]: () => json({ body: '' }) })
+    expect(await preflightScreen('P1')).toBe('forbidden')
+    expect(be.calls).toHaveLength(0)
+  })
+  it('5 秒后 205 才返回成功 → 结果仍是 timeout（迟到的成功不算）', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    // 假后端不理会中止：5.5 秒时照样返回成功
+    vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>((r) => { setTimeout(() => r(json({ body: '' })), 5_500) })))
+    let got: string | null = null
+    void preflightScreen('P1').then((x) => { got = x })
+    await vi.advanceTimersByTimeAsync(6_000)
+    expect(got).toBe('timeout')
   })
   it('其他失败（500、断网）→ offline', async () => {
     fakeBackend({ [R205]: () => json({ code: 13, message: 'x' }, 500) })

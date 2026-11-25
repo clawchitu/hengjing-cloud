@@ -490,6 +490,22 @@ describe('下发前控制屏实时预检（ctrl 205，赤兔 11/25）', () => {
     expect(done.rows[0].retry).toBeUndefined()
     expect(lockOf(a)).toBeNull()
   })
+  it('多个 205 超时不影响在线项目：8 个各 5 秒不应答排在前面，最后一个在线的仍在 35 秒截止前发出（开始时并行查）', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      const slow = Array.from({ length: 8 }, (_, i) => P('s' + i, '10000000' + i))
+      const ok = P('ok', '240829001')
+      const t = make([...slow, ok], (id) => (id === 'ok' ? Promise.resolve('online' as const) : new Promise((r) => setTimeout(() => r('timeout'), 5_000))))
+      t.batch.prepare([...slow.map((p) => p.id), 'ok'], { roomSwitch: 1 })
+      const run = t.batch.start()
+      await vi.advanceTimersByTimeAsync(6_000)
+      const done = await run
+      expect(t.screen).toHaveBeenCalledTimes(9)
+      expect(t.wire).toEqual(['ok'])
+      expect(done.rows.at(-1)!.status).toBe('success')
+      expect(done.rows.slice(0, 8).every((r) => r.status === 'not-sent' && r.note === '未下发（控制屏未连接），可重新勾选下发')).toBe(true)
+    } finally { vi.useRealTimers() }
+  })
   it('演示数据（mock）默认不查 205', async () => {
     const readBack = vi.fn(async () => ({ rooms: 2, roomSwitch: 1, roomTemp: 26 }))
     const w = fakeWire()

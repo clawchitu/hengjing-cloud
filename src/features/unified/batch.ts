@@ -14,7 +14,7 @@
 //   下发后回读里一致的字段先记为结束（这次读数只是候选，经写锁 commitRead 提交：读取途中换号、锁换了 / 取消 / 过期就丢弃）；还有没结束的 → unknown，交给写锁核对（本次登记的核对函数，见 fieldVerifier），之后复核读到
 //   一致的字段也记为结束，全部结束即放；未变化 / 无法核对 / 结果未知都不提前放锁。应答结果未知 → unknown。
 //   批次截止时间只影响界面上的标注，不放锁。
-// - 控制屏实时预检（赤兔 11/25，src/api/screenPreflight.ts）：轮到某个项目时先现查一次 ctrl 205（单独 5 秒超时），没通过
+// - 控制屏实时预检（赤兔 11/25，src/api/screenPreflight.ts）：开始时并行现查本批每个项目的 ctrl 205（各自 5 秒超时），轮到某个项目时看它的结果，没通过
 //   （503 / 超时 / 失败）→ 这一项标「未下发（控制屏未连接），可重新勾选下发」、不取锁、不发写请求，接着下一个；在线的照常发，整批不受影响。
 //   205 返回 403（无连接状态权限）同样拦下，单独标「未下发（当前账号无连接状态权限…）」
 import { callCtrl, writeCtrl, type CtrlReply, type WriteQuery } from '@/api/ctrl'
@@ -118,7 +118,7 @@ export interface BatchRow {
   notExecuted?: boolean
   /** 控制屏已应答 success=true（进度里据此显示「已下发，正在核对…」） */
   replyOk?: boolean
-  /** 控制屏实时预检（205）没通过、未下发：可重试 */
+  /** 控制屏实时预检（205）没通过（控制屏未连接）、未下发：可重新勾选下发。暂无界面使用（统一控制页不设重试按钮，赤兔 11/25） */
   retry?: boolean
   state: UnifiedState<UnifiedSnapshot>
 }
@@ -465,6 +465,9 @@ export function createUnifiedBatch(deps: BatchDeps) {
           emit({ phase: 'done' })
           return state
         }
+        // 控制屏实时预检（205）：开始时并行查本批所有项目（每个单独 5 秒超时、不缓存、只在本批用），避免串行时几个不应答的
+        // 项目各吃 5 秒、把后面在线的挤过 35 秒截止
+        const screens = new Map(entries.map((e) => [e, screen(e.p.id, ac.signal).catch((): ScreenState => 'offline')] as const))
         // 确认后、整批开始前强制刷新一次在线状态（每批一次）
         if (deps.refreshProjects) {
           try {
@@ -481,8 +484,8 @@ export function createUnifiedBatch(deps: BatchDeps) {
           if (stopped || expired) break
           e.started = true
           emit({})
-          // 控制屏实时预检（205，每个项目现查）：没通过 → 这一项未下发（不取锁、不发），接着下一个
-          const scr = await Promise.race([screen(e.p.id, ac.signal).catch((): ScreenState => 'offline'), deadline])
+          // 控制屏实时预检（205，开始时已并行发出）：没通过 → 这一项未下发（不取锁、不发），接着下一个
+          const scr = await Promise.race([screens.get(e)!, deadline])
           if (scr === 'deadline') break
           if (scr !== 'online' || stopped || expired) {
             if (!e.final && !stopped && !expired) {

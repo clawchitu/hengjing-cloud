@@ -53,7 +53,7 @@ type Handler = (c: Call, n: number) => Response | Promise<Response>
 function backend(routes: Record<string, Handler> = {}) {
   return fakeBackend({
     '/auth/login': () => json({ access_token: J('dealer-1'), refresh_token: 'R1', expires_in: 7200 }),
-    '/me': () => json({ user_entity: { id: 'dealer-1', name: '测试', type: 1 } }),
+    '/me': () => json({ user_entity: { id: 'dealer-1', name: '测试', type: 1 }, permission_paths: ['/v1/ctrl/device-summary-get'] }),
     '/ctrl/projects': () => json({ project_entities: PROJECTS }),
     // 下发前的控制屏实时预检（ctrl 205）：默认在线
     '/ctrl/device-summary-get': () => json({ body: '' }),

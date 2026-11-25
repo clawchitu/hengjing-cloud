@@ -47,7 +47,7 @@ const P12 = { id: '6aa3a0ade8f3372b86b15b05', code: '260911001', name: '独立�
 /** 另一个 app 12 项目（不在下发名单里，切项目用） */
 const P12B = { id: 'p12b', code: '261124012', name: '另一个新风项目', app_code: '12', online: true }
 const GROUPS = [{ id: 'g1', code: '2', name: '五恒集成项目', distributor_id: 'D1', project_ids: [P1.id, P12.id, P12B.id] }]
-const PERMS = [FRESH_ROUTES.units, FRESH_ROUTES.settings, FRESH_ROUTES.write]
+const PERMS = [FRESH_ROUTES.units, FRESH_ROUTES.settings, FRESH_ROUTES.write, '/v1/ctrl/device-summary-get']
 const R202 = '/ctrl/fresh-dehumidifier-get'
 const R210 = '/ctrl/running-ctrl-get'
 const R204 = '/ctrl/running-ctrl-set'

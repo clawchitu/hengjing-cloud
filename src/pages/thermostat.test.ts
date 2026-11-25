@@ -83,7 +83,7 @@ let rooms: object[] = []
 function backend(routes: Record<string, Handler> = {}) {
   return fakeBackend({
     '/auth/login': () => json({ access_token: jwt('admin-1'), refresh_token: 'R1', expires_in: 7200 }),
-    '/me': () => json({ user_entity: { id: 'admin-1', name: '测试' }, permission_paths: [] }),
+    '/me': () => json({ user_entity: { id: 'admin-1', name: '测试' }, permission_paths: ['/v1/ctrl/device-summary-get'] }),
     '/ctrl/projects': () => json({ project_entities: [P1, P2, P12, POFF] }),
     // 下发前的控制屏实时预检（ctrl 205）：默认在线
     '/ctrl/device-summary-get': () => json({ body: '' }),
@@ -965,7 +965,7 @@ describe('下发状态机：确认后新读、写后新读、会话、期限', (
     let user = 'admin-1'
     const be = backend({
       '/ctrl/room-temperature-set': slow.handler,
-      '/me': () => json({ user_entity: { id: user, name: '测试' }, permission_paths: [] }),
+      '/me': () => json({ user_entity: { id: user, name: '测试' }, permission_paths: ['/v1/ctrl/device-summary-get'] }),
       '/ctrl/room-temperature-data-get': () => reply200(rooms), // 与下发值不一致：核对不会解锁
     })
     await draftAndSend()
@@ -1790,6 +1790,17 @@ describe('下发前控制屏实时预检（ctrl 205，赤兔 11/25）', () => {
     expect(writes(be)).toHaveLength(0)
     expect(lockOfKey(P1)).toBeNull()
     expect(btn(card('客厅'), '重试')).toBeTruthy()
+  })
+  it('205 在 5 秒之后才返回成功 → 仍按超时拦下：0 个写请求、不占锁', async () => {
+    const be = backend({ '/ctrl/room-temperature-set': ok201, '/ctrl/device-summary-get': () => new Promise<Response>((r) => { setTimeout(() => r(json({ body: '' })), 5_500) }) })
+    await draftAndSend()
+    fakeClock()
+    await confirmOk()
+    await advance(6_000)
+    await waitFor(() => expect(toasts()).toContain('客厅：控制屏未连接，暂不能下发'))
+    await flush(50)
+    expect(writes(be)).toHaveLength(0)
+    expect(lockOfKey(P1)).toBeNull()
   })
   it('房间开关、全部开关同样预检：205 503 → 不发 201 / 206，重试按原操作重新确认', async () => {
     const be = backend({ '/ctrl/room-temperature-set': ok201, '/ctrl/project-room-switch-set': ok206, '/ctrl/device-summary-get': offline205 })
