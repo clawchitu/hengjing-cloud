@@ -282,7 +282,11 @@ export default function Control() {
   const shownLast = last?.map(shown) ?? null
   // 界面不显示项目 id（S13 走查）：同名项目用序号区分
   // 序号和项目列表用同一份（按整个集成项目算），确认框、结果表里的「X (2)」就是列表里勾的那个
-  const lastNames = new Map((shownLast ?? []).map((r) => { const n = codeNames.get(r.code); return [r.code, n && (n === r.name || n.startsWith(r.name + ' (')) ? n : r.name] as const }))
+  // 记录里的名称和项目当前的原始名称一致才用序号名；改过名（或不在当前列表里）就照记录显示
+  // 照记录显示的那些（比如切换了集成项目）里也可能同名：在这些行内部按名称加序号
+  const matched = (r: { code: string; name: string }) => inGroup.some((p) => p.code === r.code && p.name === r.name)
+  const ownNames = seqNames((shownLast ?? []).filter((r) => !matched(r)), (r) => r.name, (r) => r.code)
+  const lastNames = new Map((shownLast ?? []).map((r) => [r.code, matched(r) ? codeNames.get(r.code) ?? r.name : ownNames.get(r.code) ?? r.name] as const))
   // 写锁结束了（核对一致放开 / 到期）：把这一行定下来并存进本标签页（刷新后也是最终结论）
   useEffect(() => {
     if (!last?.some((r) => settledRow(r))) return

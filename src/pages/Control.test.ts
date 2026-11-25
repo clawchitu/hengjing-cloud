@@ -5,6 +5,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { QueryClientProvider } from '@tanstack/react-query'
 import { createElement } from 'react'
+import { toast as sonner } from 'sonner'
 import { MemoryRouter, Route, Routes, useNavigate, type NavigateFunction } from 'react-router-dom'
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { setConfig } from '../api/config'
@@ -132,7 +133,8 @@ beforeEach(() => {
   __resetHttpForTests(); __resetSessionForTests(); __resetSessionViewForTests(); __resetCurrentForTests(); clearTokens()
   vi.spyOn(console, 'info').mockImplementation(() => {})
 })
-afterEach(() => { cleanup(); vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks(); setConfig(null) })
+// Sonner 的 toast 队列是模块级的：上一条用例没消失的 toast 会在下一条挂载 Toaster 时又显示出来
+afterEach(() => { cleanup(); sonner.dismiss(); vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks(); setConfig(null) })
 
 describe('温度区', () => {
   it('默认「保持不变」：温度区真正禁用，键盘和 ± 都改不了', async () => {
@@ -193,6 +195,78 @@ describe('S13 走查', () => {
     expect(document.body.textContent).not.toMatch(/推荐夏季|冷热过度/)
     const list = screen.getByText('测试项目0829').closest('.pick')!.textContent!
     expect(list).not.toMatch(/240829001|4\.3\.9/)
+  })
+})
+
+describe('S13 同名序号（第 2 轮评审）', () => {
+  // 同一集成项目里两个同名项目（q1、q2），另有一个原始名称本身带「 (2)」的项目；另有一个同名的集成项目
+  const DUP_PROJECTS = [
+    ...PROJECTS,
+    { id: 'q1', code: '111', name: '同名项目', app_code: '1', online: true },
+    { id: 'q2', code: '222', name: '同名项目', app_code: '1', online: true },
+    { id: 'q3', code: '333', name: '改名 (2)', app_code: '1', online: true },
+  ]
+  const DUP_GROUPS = [
+    { ...GROUPS[0], project_ids: ['p1', 'p3', 'q1', 'q2', 'q3'] },
+    ...GROUPS.slice(1),
+    { id: 'g4', code: '5', name: '五恒集成项目', distributor_id: 'D1', project_ids: ['p2'] },
+  ]
+  const dupBackend = (routes: Record<string, Handler> = {}) => backend({
+    '/ctrl/projects': () => json({ project_entities: DUP_PROJECTS }),
+    '/integrated-projects': () => json({ entities: DUP_GROUPS }),
+    ...routes,
+  })
+  const resultNames = () => within(screen.getByRole('region', { name: '最近一次执行结果' })).getAllByRole('row').slice(1)
+    .map((tr) => within(tr).getAllByRole('cell')[0].textContent)
+
+  it('集成项目下拉：同名集成项目第 2 个写「五恒集成项目 (2)」', async () => {
+    dupBackend()
+    await mount()
+    const sel = screen.getByRole('combobox', { name: '集成项目' })
+    await act(async () => { fireEvent.keyDown(sel, { key: 'Enter' }) })
+    const opts = within(await screen.findByRole('listbox')).getAllByRole('option').map((o) => o.textContent)
+    expect(opts).toEqual(['五恒集成项目', '独立空气系统', '空气单机', '五恒集成项目 (2)'])
+  })
+
+  it('只勾同名项目里的第 2 个：项目列表、确认框、结果表都写「同名项目 (2)」', async () => {
+    const be = dupBackend({ '/ctrl/room-temperature-data-get': () => rooms(0, 26), '/ctrl/unified-ctrl-set': () => reply(true) })
+    await mount()
+    expect(screen.getAllByText(/^同名项目/).map((e) => e.textContent)).toEqual(['同名项目', '同名项目 (2)'])
+    await click(screen.getByText('同名项目 (2)'))
+    await click(screen.getByRole('button', { name: '全部开启' }))
+    await click(screen.getByRole('button', { name: '确认下发' }))
+    const dlg = await screen.findByRole('alertdialog')
+    expect(dlg.textContent).toContain('同名项目 (2)')
+    expect(dlg.textContent).not.toContain('222')
+    await click(within(dlg).getByRole('button', { name: '确认下发' }))
+    // 222 不在可下发白名单里，写防护拦下（未执行）；这里只核对结果表里的名称
+    await screen.findByText('失败（未执行）', { selector: '[data-slot=badge]' }, { timeout: 3000 })
+    expect(be.callsTo('/ctrl/unified-ctrl-set')).toHaveLength(0)
+    expect(resultNames()).toEqual(['同名项目 (2)'])
+  })
+
+  it('结果表：记录名和项目当前原始名称一致才用序号名；改过名的照记录显示（原始名称本身带「 (2)」也不误认）', async () => {
+    sessionStorage.setItem('hjc-unified-last:real:dealer-1', JSON.stringify([
+      { name: '同名项目', code: '222', status: 'success', at: '2026-11-24 10:00:00' },
+      { name: '旧名字', code: '111', status: 'success', at: '2026-11-24 10:00:00' },
+      { name: '改名', code: '333', status: 'success', at: '2026-11-24 10:00:00' },
+    ]))
+    dupBackend()
+    await mount()
+    await screen.findByText('旧名字')
+    expect(resultNames()).toEqual(['同名项目 (2)', '旧名字', '改名'])
+  })
+
+  it('结果表：记录里的同名项目在当前集成项目里找不到（切换过集成项目）→ 在结果内部按名称加序号', async () => {
+    sessionStorage.setItem('hjc-unified-last:real:dealer-1', JSON.stringify([
+      { name: '别处同名', code: '901', status: 'success', at: '2026-11-24 10:00:00' },
+      { name: '别处同名', code: '902', status: 'success', at: '2026-11-24 10:00:00' },
+      { name: '同名项目', code: '222', status: 'success', at: '2026-11-24 10:00:00' },
+    ]))
+    dupBackend()
+    await mount()
+    await screen.findByText('别处同名 (2)')
+    expect(resultNames()).toEqual(['别处同名', '别处同名 (2)', '同名项目 (2)'])
   })
 })
 
