@@ -10,7 +10,7 @@ describe('运行时配置', () => {
     })
   })
   it('功能开关：不写全部取默认值', () => {
-    expect(resolveConfig([]).features).toEqual({ freshAirWrite: 'on', freshAirFilterWarn: false, roomSwitchReported: false, weatherCityFilter: 'auto', weatherNowFallback: true })
+    expect(resolveConfig([]).features).toEqual({ freshAirWrite: 'on', freshAirFilterWarn: false, roomSwitchReported: true, weatherCityFilter: 'auto', weatherNowFallback: true })
   })
   it('功能开关：按键合并，后面的层覆盖前面的；非法值不报错、取默认值', () => {
     const f = resolveConfig([
@@ -24,11 +24,11 @@ describe('运行时配置', () => {
     for (const bad of [null, 'off', [1], 42]) expect(resolveConfig([{ features: bad }]).features).toEqual(FEATURE_DEFAULTS)
     expect(resolveConfig([{ features: { weatherNowFallback: 0, freshAirFilterSwapped: 'true', roomSwitchReported: 'true' } }]).features).toEqual(FEATURE_DEFAULTS)
   })
-  it('roomSwitchReported()：真实接口默认 false；写 true 才认；演示数据恒为 true', () => {
+  it('roomSwitchReported()：真实接口默认 true；config 写 false 才关；演示数据恒为 true', () => {
     try {
-      expect(setConfig({ dataSource: 'real' }) && roomSwitchReported()).toBe(false)
-      setConfig({ dataSource: 'real', features: { roomSwitchReported: true } } as never)
-      expect(roomSwitchReported()).toBe(true)
+      expect(setConfig({ dataSource: 'real' }) && roomSwitchReported()).toBe(true)
+      setConfig({ dataSource: 'real', features: { roomSwitchReported: false } } as never)
+      expect(roomSwitchReported()).toBe(false)
       setConfig({ dataSource: 'mock' })
       expect(roomSwitchReported()).toBe(true)
     } finally { setConfig(null) }

@@ -64,7 +64,7 @@ describe('ctrl 200 → RoomView', () => {
     expect(toRoomViews(roundTrip([room({ setTemp: 0 })]))[0].setTemp).toBe(0)
   })
 
-  it('房间开关可信与否：switchReported 显式给出；默认取 features.roomSwitchReported（真实接口默认 false）', () => {
+  it('房间开关可信与否：switchReported 显式给出；默认取 features.roomSwitchReported（真实接口默认 true）', () => {
     expect(toRoomViews(roundTrip([room({ switch: 0 })]), { switchReported: false })[0]).toMatchObject({ on: false, switchKnown: false })
     expect(toRoomViews(roundTrip([room({ switch: 1 })]), { switchReported: true })[0]).toMatchObject({ on: true, switchKnown: true })
     expect(toRoomViews(roundTrip([room({ switch: 0 })]), { switchReported: true })[0]).toMatchObject({ on: false, switchKnown: true })
@@ -72,9 +72,9 @@ describe('ctrl 200 → RoomView', () => {
     for (const sw of [-100, 65536, -1]) expect(toRoomViews(roundTrip([room({ switch: sw })]), { switchReported: true })[0].switchKnown).toBe(false)
     try {
       setConfig({ dataSource: 'real' })
-      expect(toRoomViews(roundTrip([room()]))[0].switchKnown).toBe(false)
-      setConfig({ dataSource: 'real', features: { roomSwitchReported: true } })
       expect(toRoomViews(roundTrip([room()]))[0].switchKnown).toBe(true)
+      setConfig({ dataSource: 'real', features: { roomSwitchReported: false } })
+      expect(toRoomViews(roundTrip([room()]))[0].switchKnown).toBe(false)
     } finally { setConfig(null) }
   })
 
