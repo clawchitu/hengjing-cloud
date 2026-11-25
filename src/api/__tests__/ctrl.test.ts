@@ -168,7 +168,7 @@ describe('callCtrl', () => {
     setConfig({ apiBase: '/api', apiEnv: 'test' })
     const be = fakeBackend({ '/ctrl/unified-ctrls-send': () => json({ batch_id: 'b1', total: 2 }) })
     const q = buildUnifiedCtrlSet({ roomTemp: 26 })
-    expect(q).toEqual({ systemSwitch: -1, systemMode: -1, roomSwitch: -1, roomTemp: 26 })
+    expect(q).toEqual({ systemSwitch: -1, systemMode: 0, roomSwitch: -1, roomTemp: 26 })
     await expect(sendUnifiedCtrls([P1, P2, { ...P1 }], q)).resolves.toEqual({ batch_id: 'b1', total: 2 })
     const body = be.calls[0].body as { project_ids: string[]; body: string; user_id?: string }
     expect(body.project_ids).toEqual([P1.id, P2.id])
@@ -347,7 +347,8 @@ describe('写消息不依赖 proto 默认值', () => {
   it('build* 收到 null 或不传 changes 时一律按不变（-1）处理，不会落成 0', () => {
     expect(buildRoomTemperatureSet(1, { switch: null, eco: null } as never)).toMatchObject({ switch: -1, eco: -1 })
     expect(buildRoomTemperatureSet(1, undefined as never)).toMatchObject({ temperature: -1, switch: -1, endModes: [] })
-    expect(buildUnifiedCtrlSet(undefined as never)).toEqual({ systemSwitch: -1, systemMode: -1, roomSwitch: -1, roomTemp: -1 })
+    // 203 运行模式是枚举，不变是 0（OPERATION_MODE_NONE）；其余数值字段 -1
+    expect(buildUnifiedCtrlSet(undefined as never)).toEqual({ systemSwitch: -1, systemMode: 0, roomSwitch: -1, roomTemp: -1 })
     expect(buildRunningCtrlSet(1, 'x', undefined as never)).toMatchObject({ controlType: -1, switch: -1 })
   })
 
@@ -413,7 +414,7 @@ describe('写接口只有一个入口', () => {
   })
 })
 
-describe('11/25 事故回归：203 运行模式不变传 -1，0 在编码前被拦下', () => {
+describe('11/25 事故回归：203 运行模式不变传 0（枚举 NONE），-1 在编码前被拦下', () => {
   beforeEach(() => {
     __resetHttpForTests(); clearTokens()
     writeTokens({ accessToken: `h.${btoa(JSON.stringify({ sub: 'u1' }))}.s`, refreshToken: 'R1', expiresAt: Date.now() + 3600_000 })
@@ -423,21 +424,29 @@ describe('11/25 事故回归：203 运行模式不变传 -1，0 在编码前被�
   afterEach(() => { vi.unstubAllGlobals(); setConfig(null) })
   const ok = (t: 203 | 201 | 206) => ({ [`/ctrl/${CTRL[t].route}`]: () => json({ body: encodeMessage(CTRL[t].reply, { success: true }) }) })
 
-  it('「全部开启」实际发出的 body：system_mode = -1（base64 断言）', async () => {
+  it('「全部开启」实际发出的 body：system_mode = 0 不上线（base64 断言，与 11/25 15:35 真机成功的编码同形）', async () => {
     const be = fakeBackend(ok(203))
     await writeCtrl(203, P1, buildUnifiedCtrlSet({ roomSwitch: 1 }))
     const body = (be.calls[0].body as { body: string }).body
-    expect(body).toBe('CP///////////wEQ////////////ARgBJQAAgL8=')
-    expect(decodeReply(pb.UnifiedCtrlSetQuerySchema, body)).toEqual({ systemSwitch: -1, systemMode: -1, roomSwitch: 1, roomTemp: -1 })
+    // 08 <-1> 18 01 25 <-1.0f>：没有 #2，后端解出 system_mode = 0 = OPERATION_MODE_NONE（不变）
+    expect(body).toBe('CP///////////wEYASUAAIC/')
+    expect(decodeReply(pb.UnifiedCtrlSetQuerySchema, body)).toEqual({ systemSwitch: -1, systemMode: 0, roomSwitch: 1, roomTemp: -1 })
   })
 
-  it('00:20 那条请求（system_mode = 0）不发：writeCtrl 与批量统一控制都拒绝，不发请求', async () => {
+  it('#60 那种请求（system_mode = -1，枚举外）不发：writeCtrl 与批量统一控制都拒绝，不发请求', async () => {
     const be = fakeBackend({ ...ok(203), '/ctrl/unified-ctrls-send': () => json({ batch_id: 'b1' }) })
-    const q = { systemSwitch: -1, systemMode: 0, roomSwitch: 1, roomTemp: -1 } as never
+    const q = { systemSwitch: -1, systemMode: -1, roomSwitch: 1, roomTemp: -1 } as never
     await expect(writeCtrl(203, P1, q)).rejects.toMatchObject({ kind: 'write_blocked' })
-    await expect(writeCtrl(203, P1, buildUnifiedCtrlSet({ systemMode: 0 as never, roomSwitch: 1 }))).rejects.toMatchObject({ kind: 'write_blocked', message: expect.stringMatching(/运行模式为 0/) })
+    await expect(writeCtrl(203, P1, buildUnifiedCtrlSet({ systemMode: -1 as never, roomSwitch: 1 }))).rejects.toMatchObject({ kind: 'write_blocked', message: expect.stringMatching(/不在枚举|运行模式为 -1/) })
     await expect(sendUnifiedCtrls([P1], q)).rejects.toMatchObject({ kind: 'write_blocked' })
     expect(be.calls).toHaveLength(0)
+  })
+
+  it('system_mode = 0（不变）照常下发：writeCtrl 与批量统一控制都放行', async () => {
+    const be = fakeBackend({ ...ok(203), '/ctrl/unified-ctrls-send': () => json({ batch_id: 'b1' }) })
+    await expect(writeCtrl(203, P1, buildUnifiedCtrlSet({ systemMode: 0 as never, roomTemp: 24 }))).resolves.toMatchObject({ success: true })
+    await expect(sendUnifiedCtrls([P1], buildUnifiedCtrlSet({ roomTemp: 24 }))).resolves.toMatchObject({ batch_id: 'b1' })
+    expect(be.calls).toHaveLength(2)
   })
 
   it('不是 build* 组装的写消息：任何数值为 0 都拒发；组装函数明确给出的 0 照常下发', async () => {

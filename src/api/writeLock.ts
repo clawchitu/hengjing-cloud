@@ -326,7 +326,7 @@ const copyRecord = (r: SentRecord): SentRecord => ({ msg: r.msg, deviceId: r.dev
 
 /**
  * 204 的核对目标（只放用户改了的字段，其余 -1）：只认 5 个字段名，每个值都是有限数；至少改一项；枚举字段只能是合法取值。
- * 核对数据里的 -1 表示「没改」（不变一律传 -1）；210 读到 -1 的那一项不能设置，由 writeLockVerify.ts 的 settable204 / blocked204 判断
+ * 核对数据里的 -1 表示「没改」（204 全是数值字段，不变传 -1）；210 读到 -1 的那一项不能设置，由 writeLockVerify.ts 的 settable204 / blocked204 判断
  */
 /** 正整数设备 id（204 的下发、核对、读数检查共用这一个判断） */
 export const isDeviceId = (v: unknown): v is number => typeof v === 'number' && Number.isSafeInteger(v) && v > 0
@@ -364,9 +364,9 @@ export function checkSentRecord(r: SentRecord): string | null {
     const bad = check204Target(r.target)
     if (bad) return bad
   }
-  // 203 运行模式：不变是 -1；0 不是界面可选的模式，含义后端未确认（11/25 00:20 的 203 传了 0，现场反馈系统模式变成「关闭」）→ 一律拒发
-  if (r.msg === 203 && r.target.systemMode === 0) return '运行模式为 0（不变应传 -1），未下发'
-  // 枚举外的值（1、7、-2 等）同样不发：只有 -1 和界面可选的模式（values.ts OPERATING_MODES）
+  // 203 运行模式是枚举 OperatingMode：不变是 0（OPERATION_MODE_NONE），枚举里没有 -1（11/25 传 -1：后端报 unknown enum、504、没执行）→ -1 拒发
+  if (r.msg === 203 && r.target.systemMode === -1) return '运行模式为 -1（枚举里没有 -1，不变应传 0），未下发'
+  // 其他枚举外的值（1、7、-2 等）同样不发：只有 0（不变）和界面可选的模式（values.ts OPERATING_MODES）
   if (r.msg === 203 && !isSendableMode(r.target.systemMode)) return `运行模式 ${String(r.target.systemMode)} 不是可选的模式，未下发`
   if (r.msg === 206) {
     if (!Array.isArray(r.roomIds) || !r.roomIds.length) return '没有读到目标房间，无法核对下发结果，未下发'

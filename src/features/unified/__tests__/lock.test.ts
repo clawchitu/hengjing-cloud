@@ -145,7 +145,7 @@ describe('S12b 接入写锁', () => {
       const got = L.acquire({ id: 'x', controlScreenId: 'S3' }, 'x')
       if (!got.ok) throw new Error('busy')
       L.claim(got.token)
-      L.markSent(got.token, new Promise(() => {}), recordOf({ systemSwitch: 1, systemMode: -1, roomSwitch: -1, roomTemp: -1 } as never))
+      L.markSent(got.token, new Promise(() => {}), recordOf({ systemSwitch: 1, systemMode: 0, roomSwitch: -1, roomTemp: -1 } as never))
       L.settle(got.token, 'unknown')
       const hits: boolean[] = []
       const off = L.onForceReread((ev) => hits.push(rereadHits(ev, [{ id: 'other', controlScreenId: 'S3' }])))
@@ -173,7 +173,7 @@ describe('S12b 接入写锁', () => {
 })
 
 describe('203 核对口径', () => {
-  const t = (o: object) => recordOf({ systemSwitch: -1, systemMode: -1, roomSwitch: -1, roomTemp: -1, ...o } as never).target
+  const t = (o: object) => recordOf({ systemSwitch: -1, systemMode: 0, roomSwitch: -1, roomTemp: -1, ...o } as never).target
   it('只核对房间开关与设定温度；改了系统开关 / 运行模式的无法核对（不一致）', () => {
     expect(match203(t({ roomSwitch: 1, roomTemp: 26 }), snap)).toBe(true)
     expect(match203(t({ roomTemp: 25 }), snap)).toBe(false)
@@ -181,11 +181,15 @@ describe('203 核对口径', () => {
     expect(verifiable203(t({ systemSwitch: 1, roomSwitch: 1 }))).toBe(false)
     expect(match203(t({ systemSwitch: 1, roomSwitch: 1 }), snap)).toBe(false)
     expect(match203(t({ systemMode: 3 }), snap)).toBe(false)
+    // 运行模式不变是 0；旧版本落盘的 -1（#60）按「改了运行模式」处理，无法核对
+    expect(verifiable203(t({ roomSwitch: 1, roomTemp: 26 }))).toBe(true)
+    expect(verifiable203(t({ systemMode: -1, roomSwitch: 1, roomTemp: 26 }))).toBe(false)
+    expect(match203(t({ systemMode: -1, roomSwitch: 1, roomTemp: 26 }), snap)).toBe(false)
     expect(match203(t({}), snap)).toBe(false)
     expect(match203(t({ roomSwitch: 1 }), { rooms: 0, roomSwitch: null, roomTemp: null })).toBe(false)
   })
   it('写锁核对用逐房间原始读数（与状态机同口径）：目标 20.01、回读 20.024（四舍五入为 20.02）不一致；24.494 与 24.5 一致；有房间离线不一致', () => {
-    const t = (roomTemp: number) => recordOf({ systemSwitch: -1, systemMode: -1, roomSwitch: -1, roomTemp } as never).target
+    const t = (roomTemp: number) => recordOf({ systemSwitch: -1, systemMode: 0, roomSwitch: -1, roomTemp } as never).target
     expect(match203(t(20.01), summarizeRooms([{ switch: 1, setTemp: 20.024 }]))).toBe(false)
     expect(match203(t(24.5), summarizeRooms([{ switch: 1, setTemp: 24.494 }, { switch: 1, setTemp: 24.5 }]))).toBe(true)
     expect(match203(t(24.5), summarizeRooms([{ switch: 1, setTemp: 24.5 }, { switch: 1, setTemp: 24.5, isConnected: false }]))).toBe(false)
@@ -236,7 +240,7 @@ describe('注册了 203 核对器时', () => {
     read.mockClear()
     const got = L.acquire({ id: 'v', controlScreenId: 'SV' }, 'x'); if (!got.ok) throw new Error('busy')
     L.claim(got.token)
-    L.markSent(got.token, Promise.reject(new Error('x')).catch(() => { throw new Error('x') }), recordOf({ systemSwitch: 1, systemMode: -1, roomSwitch: 1, roomTemp: -1 } as never))
+    L.markSent(got.token, Promise.reject(new Error('x')).catch(() => { throw new Error('x') }), recordOf({ systemSwitch: 1, systemMode: 0, roomSwitch: 1, roomTemp: -1 } as never))
     await flush()
     L.settle(got.token, 'unknown')
     await flush()
@@ -343,7 +347,7 @@ describe('注册了 203 核对器时', () => {
 })
 
 describe('刷新后补核对（恢复的锁）', () => {
-  const rec = { v: 1, op: 'o1', keys: ['screen:SR'], projectId: 'r1', userId: 'u1', sentAt: Date.now() - 1000, msg: 203, deviceId: null, target: { systemSwitch: -1, systemMode: -1, roomSwitch: 1, roomTemp: -1 } }
+  const rec = { v: 1, op: 'o1', keys: ['screen:SR'], projectId: 'r1', userId: 'u1', sentAt: Date.now() - 1000, msg: 203, deviceId: null, target: { systemSwitch: -1, systemMode: 0, roomSwitch: 1, roomTemp: -1 } }
   async function fresh() {
     localStorage.setItem('hjc-write-lock:screen:SR', JSON.stringify({ ...rec, sentAt: Date.now() - 1000 }))
     vi.resetModules()
@@ -477,7 +481,7 @@ describe('下发后第一次回读经写锁提交', () => {
       // 新的一条下发占住同一块屏，结果未知、待核对
       const got = L.acquire({ id: 'f3', controlScreenId: 'Sf3' }, '新'); if (!got.ok) throw new Error('busy')
       L.claim(got.token)
-      L.markSent(got.token, Promise.reject(new Error('x')), recordOf({ systemSwitch: -1, systemMode: -1, roomSwitch: 1, roomTemp: -1 } as never))
+      L.markSent(got.token, Promise.reject(new Error('x')), recordOf({ systemSwitch: -1, systemMode: 0, roomSwitch: 1, roomTemp: -1 } as never))
       const check = vi.fn(async () => false)
       L.requireVerify(got.token, check)
       L.settle(got.token, 'unknown')
@@ -510,7 +514,7 @@ describe('下发后第一次回读经写锁提交', () => {
     expect(L.lockOf('screen:Sf4')).toBeNull()
     const got = L.acquire({ id: 'f4', controlScreenId: 'Sf4' }, '新'); if (!got.ok) throw new Error('busy')
     L.claim(got.token)
-    L.markSent(got.token, Promise.reject(new Error('x')), recordOf({ systemSwitch: -1, systemMode: -1, roomSwitch: 1, roomTemp: -1 } as never))
+    L.markSent(got.token, Promise.reject(new Error('x')), recordOf({ systemSwitch: -1, systemMode: 0, roomSwitch: 1, roomTemp: -1 } as never))
     const check = vi.fn(async () => false)
     L.requireVerify(got.token, check)
     L.settle(got.token, 'unknown')
@@ -541,7 +545,7 @@ describe('下发后第一次回读经写锁提交', () => {
       expect(L.lockOf('screen:Sf5')).toBeNull()
       const got = L.acquire({ id: 'f5', controlScreenId: 'Sf5' }, '新'); if (!got.ok) throw new Error('busy')
       L.claim(got.token)
-      L.markSent(got.token, Promise.reject(new Error('x')), recordOf({ systemSwitch: -1, systemMode: -1, roomSwitch: 1, roomTemp: -1 } as never))
+      L.markSent(got.token, Promise.reject(new Error('x')), recordOf({ systemSwitch: -1, systemMode: 0, roomSwitch: 1, roomTemp: -1 } as never))
       const check = vi.fn(async () => false)
       L.requireVerify(got.token, check)
       L.settle(got.token, 'unknown')
@@ -577,7 +581,7 @@ describe('下发后第一次回读经写锁提交', () => {
     // 补核对的 setTimeout 还没跑：同屏被新的下发占用
     const got = L.acquire({ id: 'f6', controlScreenId: 'Sf6' }, '新'); if (!got.ok) throw new Error('busy')
     L.claim(got.token)
-    L.markSent(got.token, Promise.reject(new Error('x')), recordOf({ systemSwitch: -1, systemMode: -1, roomSwitch: 1, roomTemp: -1 } as never))
+    L.markSent(got.token, Promise.reject(new Error('x')), recordOf({ systemSwitch: -1, systemMode: 0, roomSwitch: 1, roomTemp: -1 } as never))
     await micro()
     const check = vi.fn(async () => false)
     L.requireVerify(got.token, check)

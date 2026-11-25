@@ -92,9 +92,11 @@ describe('其他校验', () => {
   })
   it('模式必须是列出的值', () => {
     expect(validateUnified({ systemMode: 7 as Mode }, ctx())).toMatchObject({ ok: false, errors: [TEXT.badMode] })
-    // -1 = 不变，等同于没选；0 不是可选模式（11/25 事故：0 被当成「不变」发出，现场系统模式变成「关闭」），按无效拒绝
-    expect(validateUnified({ systemMode: 0 as Mode }, ctx())).toMatchObject({ ok: false, errors: [TEXT.badMode] })
-    expect(validateUnified({ systemMode: 0 as Mode, roomSwitch: 1 }, ctx())).toMatchObject({ ok: false, errors: [TEXT.badMode] })
+    // 0 = OPERATION_MODE_NONE = 不变，等同于没选；-1 不在枚举里（#60 传 -1：后端报 unknown enum、504），按无效拒绝
+    expect(MODE_UNCHANGED).toBe(0)
+    expect(validateUnified({ systemMode: -1 as Mode }, ctx())).toMatchObject({ ok: false, errors: [TEXT.badMode] })
+    expect(validateUnified({ systemMode: -1 as Mode, roomSwitch: 1 }, ctx())).toMatchObject({ ok: false, errors: [TEXT.badMode] })
+    expect(validateUnified({ systemMode: 0 as Mode, roomSwitch: 1 }, ctx())).toMatchObject({ ok: true, query: { systemSwitch: -1, systemMode: 0, roomSwitch: 1, roomTemp: -1 } })
     expect(validateUnified({ systemMode: MODE_UNCHANGED }, ctx())).toMatchObject({ ok: false, errors: [TEXT.noChanges] })
     expect(validateUnified({ systemMode: MODE_UNCHANGED as Mode, roomSwitch: 1 }, ctx())).toMatchObject({ ok: true, query: { systemMode: MODE_UNCHANGED, roomSwitch: 1 } })
   })

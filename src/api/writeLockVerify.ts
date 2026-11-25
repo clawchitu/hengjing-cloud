@@ -1,6 +1,6 @@
 // 写锁核对用的纯比对函数（不发请求，读取由调用方注入）：把持久化的核对数据（消息号、设备 id、目标字段与值）与回读结果比对。
 // 按消息类型回读：201 / 206 → 200（房间温控数据）；204 → 210（运行控制数据，matchRunningCtrl）。
-// 下发时「不变」一律传 -1（后端 11/25 答复第 4 条，201 / 204 / 206 所有字段；203 的 system_mode 例外，见 ctrl.ts）。
+// 下发时数值字段「不变」传 -1（后端 11/25 答复第 4 条，201 / 204 / 206 所有字段）；枚举字段用枚举里的不变值（203 的 system_mode = 0，见 ctrl.ts）。
 //
 // 比对口径（11/24 Fable 裁定；与统一控制 src/features/unified/batch.ts 的 summarizeRooms 同一套读数规则）：
 // - 200 的 switch、set_temp、eco 是 proto3 普通标量，值为 0 时线上本来就省略，解码出来的 0 就是真实读数，直接比对。
@@ -25,7 +25,7 @@
 //   registerVerifier(206, async (rec, signal) => matchAllRoomsSwitch(rec, await callCtrl(200, rec.projectId, {}, { signal })))
 import type { CtrlReply } from './ctrl'
 import { roomSwitchReported } from './config'
-import { INVALID_HOURLY, NO_DATA } from './values'
+import { INVALID_HOURLY, MODE_UNCHANGED, NO_DATA } from './values'
 import { isDeviceId, type FieldResult, type MatchDetail, type SentRecord } from './writeLock'
 
 type Rooms = Pick<CtrlReply<200>, 'data'>
@@ -44,10 +44,11 @@ export const VERIFIABLE_FIELDS: Readonly<Record<number, readonly string[]>> = Ob
 /** 某消息号的某个写入字段能不能核对 */
 export const isVerifiableField = (msg: number, field: string) => (VERIFIABLE_FIELDS[msg] ?? []).includes(field)
 /**
- * 按消息类型判断写入字段是否为「不改」（唯一口径，写锁与比对函数都用它）：一律 -1，含 203 的 systemMode 枚举（后端 11/25「不变一律传 -1」）。
- * 0 不是「不改」（203 运行模式为 0 在发送前就被 checkSentRecord 和 guard 拒绝）
+ * 按消息类型判断写入字段是否为「不改」（唯一口径，写锁与比对函数都用它）：数值字段是 -1；
+ * 203 的 systemMode 是枚举，「不改」是 0（OPERATION_MODE_NONE），它的 -1 不算「不改」（-1 在发送前就被 checkSentRecord 和 guard 拒绝）。
+ * 其余字段的 0 不是「不改」
  */
-export const isNoChange = (_msg: number, _field: string, v: unknown) => v === -1
+export const isNoChange = (msg: number, field: string, v: unknown) => (msg === 203 && field === 'systemMode' ? v === MODE_UNCHANGED : v === -1)
 
 /** 混合字段的整体优先级（数字越大越优先）：结果未知 > 未变化 > 无法核对 > 已生效（Fable 裁定 B）。只在这里改 */
 const PRIORITY: Record<FieldResult, number> = { unknown: 3, unchanged: 2, unverifiable: 1, applied: 0 }

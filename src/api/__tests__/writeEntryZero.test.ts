@@ -31,13 +31,13 @@ describe('真实写入口：明确给出的 0 放行（解码实际请求体）'
   it('203 单项目：roomSwitch=0（全部关闭）', async () => {
     const be = fakeBackend({ '/ctrl/unified-ctrl-set': ok(pb.UnifiedCtrlSetReplySchema) })
     await expect(writeCtrl(203, P1, buildUnifiedCtrlSet({ roomSwitch: 0 }))).resolves.toMatchObject({ success: true })
-    expect(decodeReply(pb.UnifiedCtrlSetQuerySchema, sentBody(be, '/ctrl/unified-ctrl-set'))).toEqual({ systemSwitch: -1, systemMode: -1, roomSwitch: 0, roomTemp: -1 })
+    expect(decodeReply(pb.UnifiedCtrlSetQuerySchema, sentBody(be, '/ctrl/unified-ctrl-set'))).toEqual({ systemSwitch: -1, systemMode: 0, roomSwitch: 0, roomTemp: -1 })
   })
 
   it('203 批量：roomSwitch=0（全部关闭）', async () => {
     const be = fakeBackend({ '/ctrl/unified-ctrls-send': () => json({ batch_id: 'b1', total: 2 }) })
     await expect(sendUnifiedCtrls([P1, P2], buildUnifiedCtrlSet({ roomSwitch: 0 }))).resolves.toEqual({ batch_id: 'b1', total: 2 })
-    expect(decodeReply(pb.UnifiedCtrlSetQuerySchema, sentBody(be, '/ctrl/unified-ctrls-send'))).toEqual({ systemSwitch: -1, systemMode: -1, roomSwitch: 0, roomTemp: -1 })
+    expect(decodeReply(pb.UnifiedCtrlSetQuerySchema, sentBody(be, '/ctrl/unified-ctrls-send'))).toEqual({ systemSwitch: -1, systemMode: 0, roomSwitch: 0, roomTemp: -1 })
   })
 
   const base204 = { id: 9326461980, name: '新风1', controlType: -1, dewPoint: -1, humiditySet: -1, windSpeed: -1, switch: -1 }

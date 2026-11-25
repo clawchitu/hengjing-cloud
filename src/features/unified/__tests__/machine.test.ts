@@ -10,7 +10,7 @@ import type { UnifiedContext } from '../rules'
 type Snap = { roomTemp: number; roomSwitch: number }
 const CTX: UnifiedContext = { projectId: '66cfd7959fb60d63c917fd0a', projectCode: '240829001', projectName: '测试项目0829', appCode: 1, online: true }
 const T: UnifiedTarget = { projectId: CTX.projectId, projectCode: '240829001', projectName: '测试项目0829' }
-const Q = { systemSwitch: -1, systemMode: -1, roomSwitch: -1, roomTemp: 24 }
+const Q = { systemSwitch: -1, systemMode: 0, roomSwitch: -1, roomTemp: 24 }
 const BEFORE: Snap = { roomTemp: 22, roomSwitch: 1 }
 const AFTER: Snap = { roomTemp: 24, roomSwitch: 1 }
 
@@ -302,7 +302,7 @@ describe('控制器：abort（页面卸载、切换项目）', () => {
     await p1
     expect((await p2).status).toBe('success')
     expect(send).toHaveBeenCalledTimes(1)
-    expect(send).toHaveBeenCalledWith({ id: CTX.projectId, code: CTX.projectCode }, { systemSwitch: -1, systemMode: -1, roomSwitch: 0, roomTemp: -1 })
+    expect(send).toHaveBeenCalledWith({ id: CTX.projectId, code: CTX.projectCode }, { systemSwitch: -1, systemMode: 0, roomSwitch: 0, roomTemp: -1 })
   })
 
   it('已经发出后 abort 无效：照常走完回读', async () => {
