@@ -1,6 +1,6 @@
 # 使用说明 · 规则草稿（Chitu 负责的部分）
 
-供并入 `docs/使用说明.md`。覆盖登录与会话（S5）、统一控制（S12）、部署与环境三块，S10 新风、S7 天气先留标题。规则一律以代码为准：`src/api/session.ts`、`src/api/http.ts`、`src/api/tokens.ts`、`src/api/writeLock*.ts`、`src/app/redirect.ts`、`src/features/unified/*`、`src/pages/Control.tsx`、`worker/index.js`、`scripts/build-prod.sh`。下发结果口径以 `docs/分工.md` 第 4 节为准。
+供并入 `docs/使用说明.md`。覆盖登录与会话（S5）、统一控制（S12）、部署与环境三块，S10 新风先留标题，S7 天气写了数据层的口径。规则一律以代码为准：`src/api/session.ts`、`src/api/http.ts`、`src/api/tokens.ts`、`src/api/writeLock*.ts`、`src/app/redirect.ts`、`src/features/unified/*`、`src/pages/Control.tsx`、`worker/index.js`、`scripts/build-prod.sh`。下发结果口径以 `docs/分工.md` 第 4 节为准。
 
 标注：**【现场】** 写进正文给现场人员看；**【内部】** 写进附录给内部和后端对口径。
 
@@ -200,6 +200,21 @@
 
 ## 5. S7 天气
 
-待补。
+数据层已做（S7a），首页界面在 S7b 接入。口径按负责人和唐学未 11/25 的最终决定，代码在 `src/features/weather/`。
+
+**【现场】**
+- 首页天气卡右上角可以换城市，省 → 市两级，只到地级市（S7b 上线后可用）
+- 选过的城市记在本机浏览器里，按登录账号分开记：下次打开还是这个城市；换一个账号登录不会带过去；换一台电脑或清浏览器数据后回到默认
+- 没选过城市时默认显示无锡
+- 不做浏览器定位、IP 定位，也不按项目所在城市自动切换
+- 天气查不到（接口报错、该城市没有数据）时显示「暂无天气数据」，页面其他部分照常；账号没有天气接口权限时显示「当前账号未开通天气功能」，不发天气请求
+
+**【内部】**
+- 城市列表是本地文件 `src/features/weather/cities.data.ts`，由 `scripts/gen-weather-cities.mjs` 用 modood/Administrative-divisions-of-China（commit c49d495）生成，共 31 个省级单位、337 个城市，可重新生成；不调 `/wx/city-list`
+- 请求 `/weather`、`/weather24` 的 `city` 传 6 位行政区划码；直辖市只有一条，用省级码（110000 能查到，110100 是 500，见 `docs/api/实测记录-1125-新风天气.md` 补充一节）；城市文件里标了 `queryBy: 'name'` 的按名称查，目前只有大理白族自治州（532900，按码查是 500）。标记来自 `scripts/weather-cities.overrides.json`，代码里没有特例
+- 337 个城市都实测能查到（`docs/api/实测记录-1124-天气城市覆盖.md`、`docs/api/weather-coverage-1124.json`）
+- 存储键 `hjc-weather-city:<账号键>`（真实接口为 `user:<用户 id>`，演示数据为 `mock:<用户名>`），值 `{"code":"320200"}`；读到损坏的值、编码不在城市文件里都回退无锡；未登录不读不写
+- 实时 + 7 天（`/weather`）和 24 小时（`/weather24`）是两个独立查询，一个失败不影响另一个；缓存 30 分钟（服务端也按 city 缓存 30 分钟）；服务器错误、网络错误自动重试 1 次；回包 `ret_code` 非 0 或没有数据按「暂无天气数据」处理，不重试
+- 露点由温度和相对湿度按 Magnus 公式算（`src/features/weather/dew.ts`）
 
 Made by [Tomo](https://github.com/shuaiyuan17/tomo)
