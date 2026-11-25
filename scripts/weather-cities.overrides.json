@@ -1,0 +1,4 @@
+{
+  "$comment": "生成城市文件时的实测修正（scripts/gen-weather-cities.mjs 读取）。queryByName：用行政区划码查 /weather 失败、按名称能查到的城市，依据 docs/api/weather-coverage-1124.json。",
+  "queryByName": ["532900"]
+}
