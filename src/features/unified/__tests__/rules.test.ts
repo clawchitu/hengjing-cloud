@@ -2,7 +2,7 @@ import { MODE_UNCHANGED } from '@/api/ctrl'
 import { describe, expect, it } from 'vitest'
 import { UnifiedCtrlSetQuery_OperatingMode as Mode } from '@/api/gen/ctrl200_pb.js'
 import { DEFAULT_TEMP_RANGE, MODE_OPTIONS, TEMP_MAX, TEMP_MIN, TEMP_STEP, TEXT } from '../constants'
-import { changedFields, checkTemp, clampTemp, describeQuery, echoMismatches, echoVerdict, resolveTempRange, tempAvailability, validateUnified, type UnifiedContext } from '../rules'
+import { changedFields, isStoredQuery203, checkTemp, clampTemp, describeQuery, echoMismatches, echoVerdict, resolveTempRange, tempAvailability, validateUnified, type UnifiedContext } from '../rules'
 
 const ctx = (p: Partial<UnifiedContext> = {}): UnifiedContext => ({ projectId: 'p-0000000000000001', projectCode: '240829001', projectName: '测试项目0829', appCode: 1, online: true, ...p })
 
@@ -173,5 +173,18 @@ describe('校验问题带固定代码', () => {
   it('issues 与 errors 一一对应', () => {
     const v = validateUnified({ roomTemp: 24, roomSwitch: 0 }, ctx({ online: false, appCode: 12 }))
     expect(v).toMatchObject({ ok: false, issues: [{ code: 'OFFLINE' }, { code: 'TEMP_DISABLED' }] })
+  })
+})
+
+describe('isStoredQuery203（页面存下的锁引用）', () => {
+  const q = (systemMode: unknown) => ({ systemSwitch: -1, systemMode, roomSwitch: 1, roomTemp: -1 })
+  it('运行模式 0（不变）和可选模式保留；旧版本（#60）存下的 -1、枚举外的值、缺字段、非数值丢掉', () => {
+    expect(isStoredQuery203(q(0))).toBe(true)
+    expect(isStoredQuery203(q(100))).toBe(true)
+    expect(isStoredQuery203(q(-1))).toBe(false)
+    expect(isStoredQuery203(q(7))).toBe(false)
+    expect(isStoredQuery203(q('0'))).toBe(false)
+    expect(isStoredQuery203({ systemSwitch: -1, systemMode: 0, roomSwitch: 1 })).toBe(false)
+    expect(isStoredQuery203(null)).toBe(false)
   })
 })

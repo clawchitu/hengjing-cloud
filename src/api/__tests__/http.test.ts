@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { setConfig } from '../config'
 import { __resetHttpForTests, onSessionExpired, refreshSession, request, requestWrite, WRITE_ACCOUNT_TEXT, WRITE_AUTH_TEXT, WRITE_LOGIN_ABNORMAL_TEXT, WRITE_CANCELLED_TEXT, WRITE_OFFLINE_TEXT, WRITE_RECHECK_TEXT } from '../http'
 import { clearTokens, readTokens, writeTokens } from '../tokens'
-import { fakeBackend, json, text } from './helpers'
+import { fakeBackend, json, sealedBody, text } from './helpers'
 
 const HOUR = 3600_000
 /** 带 sub 的 JWT 形状令牌（写请求要求能解析出 sub） */
@@ -188,7 +188,7 @@ describe('写请求：不重放、发送前同步复核（S12b）', () => {
   ])('%s：不续期重放，写接口只发一次；提示「登录状态已更新，请重新下发」，没有 status（未执行）', async (_n, h) => {
     login(J(1))
     const be = fakeBackend({ [route]: h, '/auth/refresh': rotatingRefresh(5, J) })
-    const e = (await requestWrite('ctrl-206', [P], { body: 'CAE=' }).catch((x: unknown) => x)) as { status?: number }
+    const e = (await requestWrite('ctrl-206', [P], { body: sealedBody('ctrl-206') }).catch((x: unknown) => x)) as { status?: number }
     expect(e).toMatchObject({ kind: 'unauthenticated', message: WRITE_AUTH_TEXT })
     expect(e.status).toBeUndefined()
     await new Promise((r) => setTimeout(r, 30))
@@ -208,7 +208,7 @@ describe('写请求：不重放、发送前同步复核（S12b）', () => {
   it('令牌快过期：先续期再发（用新令牌），只发一次', async () => {
     login(J(1), 'R1', 10_000)
     const be = fakeBackend({ [route]: () => json({ body: '' }), '/auth/refresh': rotatingRefresh(5, J) })
-    await requestWrite('ctrl-206', [P], { body: 'CAE=' })
+    await requestWrite('ctrl-206', [P], { body: sealedBody('ctrl-206') })
     expect(be.callsTo(route)).toHaveLength(1)
     expect(be.callsTo(route)[0].headers.Authorization).toBe(`Bearer ${J(2)}`)
   })
@@ -217,7 +217,7 @@ describe('写请求：不重放、发送前同步复核（S12b）', () => {
     login(J(1))
     const be = fakeBackend({ [route]: () => json({ body: '' }) })
     for (const beforeSend of [() => false, () => { throw new Error('x') }]) {
-      await expect(requestWrite('ctrl-206', [P], { body: 'CAE=' }, { beforeSend })).rejects.toMatchObject({ kind: 'write_blocked', message: WRITE_RECHECK_TEXT })
+      await expect(requestWrite('ctrl-206', [P], { body: sealedBody('ctrl-206') }, { beforeSend })).rejects.toMatchObject({ kind: 'write_blocked', message: WRITE_RECHECK_TEXT })
     }
     expect(be.callsTo(route)).toHaveLength(0)
   })
@@ -232,7 +232,7 @@ describe('写请求：不重放、发送前同步复核（S12b）', () => {
       const be = fakeBackend({ [route]: () => json({ body: '' }), '/auth/refresh': async (c) => { await gate; return refresh(c) } })
       const page = { alive: true, online: true }
       const order: string[] = []
-      const p = requestWrite('ctrl-206', [P], { body: 'CAE=' }, { beforeSend: () => { order.push('check'); return page.alive && page.online } })
+      const p = requestWrite('ctrl-206', [P], { body: sealedBody('ctrl-206') }, { beforeSend: () => { order.push('check'); return page.alive && page.online } })
       await vi.waitFor(() => expect(be.callsTo('/auth/refresh')).toHaveLength(1))
       expect(order).toEqual([]) // 续期还没完，复核还没跑
       if (what === '卸载') page.alive = false
@@ -252,7 +252,7 @@ describe('写请求：不重放、发送前同步复核（S12b）', () => {
     const be = fakeBackend({ [route]: () => json({ body: '' }), '/auth/refresh': async (c) => { await gate; return refresh(c) } })
     const ac = new AbortController()
     const beforeSend = vi.fn(() => true)
-    const p = requestWrite('ctrl-206', [P], { body: 'CAE=' }, { signal: ac.signal, beforeSend })
+    const p = requestWrite('ctrl-206', [P], { body: sealedBody('ctrl-206') }, { signal: ac.signal, beforeSend })
     await vi.waitFor(() => expect(be.callsTo('/auth/refresh')).toHaveLength(1))
     ac.abort()
     release()
@@ -264,7 +264,7 @@ describe('写请求：不重放、发送前同步复核（S12b）', () => {
   it('503 code 14（控制屏未连接）：提示「控制屏未连接，未下发」，带 code 14，只发一次', async () => {
     login(J(1))
     const be = fakeBackend({ [route]: () => json({ code: 14, message: 'no stream' }, 503) })
-    await expect(requestWrite('ctrl-206', [P], { body: 'CAE=' })).rejects.toMatchObject({ kind: 'unavailable', code: 14, message: WRITE_OFFLINE_TEXT })
+    await expect(requestWrite('ctrl-206', [P], { body: sealedBody('ctrl-206') })).rejects.toMatchObject({ kind: 'unavailable', code: 14, message: WRITE_OFFLINE_TEXT })
     expect(be.callsTo(route)).toHaveLength(1)
   })
 
@@ -275,7 +275,7 @@ describe('写请求：不重放、发送前同步复核（S12b）', () => {
     const gate = new Promise<void>((r) => { release = r })
     const be = fakeBackend({ [route]: () => json({ body: '' }), '/auth/refresh': async () => { await gate; return json({ code: 16 }, 401) } })
     const beforeSend = vi.fn(() => true)
-    const p = requestWrite('ctrl-206', [P], { body: 'CAE=' }, { beforeSend })
+    const p = requestWrite('ctrl-206', [P], { body: sealedBody('ctrl-206') }, { beforeSend })
     await vi.waitFor(() => expect(be.callsTo('/auth/refresh')).toHaveLength(1))
     // 另一个标签页登录了别的账号
     writeTokens({ accessToken: tok('u2', 1), refreshToken: 'R9', expiresAt: Date.now() + 2 * HOUR })
@@ -291,7 +291,7 @@ describe('写请求：不重放、发送前同步复核（S12b）', () => {
       writeTokens({ accessToken: start, refreshToken: 'R1', expiresAt: Date.now() + 10_000 })
       const be = fakeBackend({ [route]: () => json({ body: '' }), '/auth/refresh': () => json({ access_token: next, refresh_token: 'R2', expires_in: 7200 }) })
       const beforeSend = vi.fn(() => true)
-      const e = (await requestWrite('ctrl-206', [P], { body: 'CAE=' }, { beforeSend }).catch((x: unknown) => x)) as { kind?: string; message?: string; status?: number }
+      const e = (await requestWrite('ctrl-206', [P], { body: sealedBody('ctrl-206') }, { beforeSend }).catch((x: unknown) => x)) as { kind?: string; message?: string; status?: number }
       expect(e, what).toMatchObject({ kind: 'write_blocked', message: WRITE_LOGIN_ABNORMAL_TEXT })
       expect(e.status).toBeUndefined()
       expect(beforeSend).not.toHaveBeenCalled()
@@ -304,7 +304,7 @@ describe('写请求：不重放、发送前同步复核（S12b）', () => {
     let release!: () => void
     const gate = new Promise<void>((r) => { release = r })
     const be = fakeBackend({ [route]: () => json({ body: '' }), '/auth/refresh': async () => { await gate; return json({ code: 16 }, 401) } })
-    const p = requestWrite('ctrl-206', [P], { body: 'CAE=' })
+    const p = requestWrite('ctrl-206', [P], { body: sealedBody('ctrl-206') })
     await vi.waitFor(() => expect(be.callsTo('/auth/refresh')).toHaveLength(1))
     writeTokens({ accessToken: J(1, 'u2'), refreshToken: 'R9', expiresAt: Date.now() + 2 * HOUR })
     release()
@@ -320,7 +320,7 @@ describe('写请求：不重放、发送前同步复核（S12b）', () => {
     const routes = ['/ctrl/room-temperature-set', '/ctrl/running-ctrl-set', route]
     const be = fakeBackend(Object.fromEntries(routes.map((r) => [r, () => json({ body: '' })])))
     for (const op of ['ctrl-201', 'ctrl-204', 'ctrl-206'] as const) {
-      await expect(requestWrite(op, [P], { body: 'CAE=' }), op).rejects.toMatchObject({ kind: 'write_blocked', message: WRITE_LOGIN_ABNORMAL_TEXT })
+      await expect(requestWrite(op, [P], { body: sealedBody(op) }), op).rejects.toMatchObject({ kind: 'write_blocked', message: WRITE_LOGIN_ABNORMAL_TEXT })
     }
     for (const r of routes) expect(be.callsTo(r), r).toHaveLength(0)
   })
@@ -330,7 +330,7 @@ describe('写请求：不重放、发送前同步复核（S12b）', () => {
     let release!: () => void
     const gate = new Promise<void>((r) => { release = r })
     const be = fakeBackend({ [route]: () => json({ body: '' }), '/auth/refresh': async () => { await gate; return json({ access_token: J(2), refresh_token: 'R2', expires_in: 7200 }) } })
-    const p = requestWrite('ctrl-206', [P], { body: 'CAE=' })
+    const p = requestWrite('ctrl-206', [P], { body: sealedBody('ctrl-206') })
     await vi.waitFor(() => expect(be.callsTo('/auth/refresh')).toHaveLength(1))
     // 续期期间存储被换成没有 sub 的令牌（refreshSession 发现存储已变，直接返回它）
     writeTokens({ accessToken: `h.${btoa(JSON.stringify({ sub: '' }))}.s`, refreshToken: 'R3', expiresAt: Date.now() + 2 * HOUR })

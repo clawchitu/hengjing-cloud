@@ -9,7 +9,7 @@
 //   名单为空则拒绝所有写操作；code 缺失、为空串、不是字符串一律拒绝。请求里用的是后端实体 id。
 // 判断不出环境时 config.ts 按生产处理，所以「不确定」等于「拦截」。
 import { fromBinary, type DescMessage } from '@bufbuild/protobuf'
-import { base64Decode } from '@bufbuild/protobuf/wire'
+import { base64Decode, base64Encode } from '@bufbuild/protobuf/wire'
 import { getConfig, type RuntimeConfig } from './config'
 import { ApiError } from './errors'
 import { isSendableMode } from './values'
@@ -180,18 +180,47 @@ export const WRITE_QUERY_SCHEMAS: Readonly<Record<WriteOp, DescMessage>> = Objec
 })
 
 /**
- * 发送边界的枚举检查（http.ts requestWrite 在发出前调用，绕不过）：把请求体里的 body（Query 的 base64）按该写接口的 schema 解码，
- * 所有枚举字段必须在枚举里；203 / 批量统一控制的运行模式只能是 0（不变）或界面可选的模式。body 缺失、不是字符串、解不出来一律拒发。
- * 「隐式 0」检查需要知道哪些字段是明确给出的，仍在 ctrl.ts encodeWrite 里做
+ * 经 ctrl.ts encodeWrite 校验过的 body（按写接口登记，计数）。proto3 里明确给出的 0 和漏掉的字段在线上一模一样（都不上线），
+ * 发送边界只看 body 分不出来，所以「隐式 0」检查只能在知道明确字段的 encodeWrite 里做；requestWrite 只接受这里登记过的 body，
+ * 直接拿手写的 body（比如空串 = 全部 0 = 关系统、关房间）调 requestWrite 一律拒发。只应由 encodeWrite 调用
  */
-export function assertWriteBodyEnums(op: WriteOp, body: unknown): void {
+const sealedBodies = new Map<string, number>()
+const SEALED_MAX = 256
+const sealKey = (op: WriteOp, body: string) => `${op}\n${body}`
+export function sealWriteBody(op: WriteOp, body: string): void {
+  const k = sealKey(op, body)
+  sealedBodies.set(k, (sealedBodies.get(k) ?? 0) + 1)
+  // 没发出去的（发送前被拦下）不会被取走：超过上限丢最早的，最多让那条要重新组装
+  while (sealedBodies.size > SEALED_MAX) sealedBodies.delete(sealedBodies.keys().next().value as string)
+}
+function takeSealed(op: WriteOp, body: string): boolean {
+  const k = sealKey(op, body)
+  const n = sealedBodies.get(k)
+  if (!n) return false
+  if (n === 1) sealedBodies.delete(k)
+  else sealedBodies.set(k, n - 1)
+  return true
+}
+/** 测试用：清空登记 */
+export const __resetSealedForTests = () => sealedBodies.clear()
+
+/**
+ * 发送边界检查（http.ts requestWrite 在发出前调用，绕不过）：
+ * - body 必须是 encodeWrite 刚校验并登记过的（用一次取走一次），否则拒发——堵住直接调 requestWrite 发手写 body（含隐式 0）；
+ * - 再把 body（Query 的 base64）按该写接口的 schema 解码：所有枚举字段必须在枚举里；203 / 批量统一控制的运行模式只能是 0（不变）或界面可选的模式。
+ * body 缺失、不是字符串、解不出来一律拒发
+ */
+export function assertWriteBody(op: WriteOp, body: unknown): void {
   const schema = WRITE_QUERY_SCHEMAS[op]
   if (!schema) throw new ApiError('write_blocked', `未登记的写操作：${op}`)
   if (typeof body !== 'string') throw new ApiError('write_blocked', '写请求体缺少 body，未下发')
+  if (!takeSealed(op, body)) throw new ApiError('write_blocked', '写请求体没有经过写消息组装校验（encodeWrite），未下发')
   let decoded: Record<string, unknown>
   try {
-    const b64 = body.replace(/\s+/g, '')
-    decoded = fromBinary(schema, b64 ? base64Decode(b64) : new Uint8Array()) as unknown as Record<string, unknown>
+    const bytes = body ? base64Decode(body) : new Uint8Array()
+    // 只认规范 base64（encodeMessage 的输出）：带空白、base64url、中间带填充的拼接串等，本地和后端可能解出不同的字节，一律拒发
+    if (base64Encode(bytes) !== body) throw new Error('不是规范 base64')
+    decoded = fromBinary(schema, bytes) as unknown as Record<string, unknown>
   } catch (e) {
     throw new ApiError('write_blocked', '写请求体无法按 proto 解码，未下发', { cause: e })
   }

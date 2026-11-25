@@ -5,7 +5,7 @@
 //   11/25 真机确认）。运行模式 -1 不在枚举里（传 -1 后端报 unknown enum、504、没执行），传进来按无效拒绝。
 import { buildUnifiedCtrlSet, MODE_UNCHANGED, type WriteQuery } from '@/api/ctrl'
 import { UnifiedCtrlSetQuery_OperatingMode as Mode } from '@/api/gen/ctrl200_pb.js'
-import { OPERATING_MODES, UNCHANGED } from '@/api/values'
+import { isSendableMode, OPERATING_MODES, UNCHANGED } from '@/api/values'
 import {
   DEFAULT_TEMP_RANGE, MODE_OPTIONS, SWITCH_OFF, SWITCH_ON, TEMP_DISABLED_APP_CODES, TEMP_ENABLED_APP_CODES, TEXT,
   type SwitchValue, type TempRange,
@@ -156,6 +156,16 @@ export interface EchoMismatch { field: EchoField; kind: 'missing' | 'differ' | '
 
 /** 203 某个字段是不是「不变」：运行模式是枚举，不变是 0（MODE_UNCHANGED）；开关、温度不变是 -1 */
 export const isUnchanged203 = (k: EchoField, v: number): boolean => v === (k === 'systemMode' ? MODE_UNCHANGED : UNCHANGED)
+
+/**
+ * 本标签页存下的 203 Query（统一控制结果行的锁引用）能不能用：四个字段都是有限数，运行模式只能是 0（不变）或可选模式。
+ * 旧版本（#60）存下的 systemMode = -1 按不合规丢掉
+ */
+export function isStoredQuery203(q: unknown): q is WriteQuery<203> {
+  if (!q || typeof q !== 'object') return false
+  const o = q as Record<string, unknown>
+  return ECHO_FIELDS.every((k) => typeof o[k] === 'number' && Number.isFinite(o[k])) && isSendableMode(o.systemMode)
+}
 
 /** 本次下发改了哪些字段（不变的不算：运行模式 0，其余 -1） */
 export function changedFields(q: WriteQuery<203>): EchoField[] {
