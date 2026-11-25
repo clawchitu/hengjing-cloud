@@ -125,3 +125,27 @@ describe('字段可核对清单', () => {
     expect(isVerifiableField(999, 'switch')).toBe(false)
   })
 })
+
+describe('房间开关未上报（features.roomSwitchReported = false，后端 11/25 答复第 1 条）', () => {
+  it('201：开关一律无法核对（读到 0 不算未变化，读到 1 也不算已生效）；温度、节能照常比对', () => {
+    for (const sw of [0, 1]) {
+      expect(matchRoomSet({ msg: 201, deviceId: D, target: { switch: 1 } }, reply(room({ switch: sw })), { switchReported: false })).toEqual({ verdict: 'unverifiable', fields: { switch: 'unverifiable' } })
+    }
+    expect(matchRoomSet({ msg: 201, deviceId: D, target: { temperature: 24.5, switch: 1 } }, reply(room({ switch: 0 })), { switchReported: false }))
+      .toEqual({ verdict: 'unverifiable', fields: { temperature: 'applied', switch: 'unverifiable' } })
+    // 面板离线照旧算结果未知
+    expect((matchRoomSet({ msg: 201, deviceId: D, target: { switch: 1 } }, reply(room({ isConnected: false })), { switchReported: false }) as { verdict: string }).verdict).toBe('unknown')
+    // 开关可信时恢复原逻辑
+    expect((matchRoomSet({ msg: 201, deviceId: D, target: { switch: 1 } }, reply(room({ switch: 0 })), { switchReported: true }) as { verdict: string }).verdict).toBe('unchanged')
+  })
+  it('206：在线房间一律无法核对；离线照旧结果未知', () => {
+    const rec = { msg: 206, target: { switch: 1 }, roomIds: [D] }
+    expect(matchAllRoomsSwitch(rec, reply(room({ switch: 1 })), { switchReported: false })).toEqual({ verdict: 'unverifiable', fields: { switch: 'unverifiable' } })
+    expect((matchAllRoomsSwitch(rec, reply(room({ isConnected: false })), { switchReported: false }) as { verdict: string }).verdict).toBe('unknown')
+    expect((matchAllRoomsSwitch(rec, reply(room({ switch: 1 })), { switchReported: true }) as { verdict: string }).verdict).toBe('applied')
+  })
+  it('读数 -100（无效数据）无法核对；0 是有效读数，照常比对', () => {
+    expect(set({ temperature: 24.5 }, reply(room({ setTemp: -100 })))).toEqual({ verdict: 'unverifiable', fields: { temperature: 'unverifiable' } })
+    expect((set({ eco: 0 }, wire(room({ eco: 0 }))) as { verdict: string }).verdict).toBe('applied')
+  })
+})

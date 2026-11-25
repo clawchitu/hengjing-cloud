@@ -7,7 +7,10 @@
 //     applied 已生效（读到且一致）/ unchanged 未变化（读到但不一致：指令已下发、设备状态暂未变化，不等于失败）/
 //     unverifiable 无法核对 / unknown 结果未知（读数不可信：目标房间面板离线）。
 //   无法核对用于四种情况：① 整个目标房间条目缺失；② 回包成功但没有任何房间（如 {}）；③ 写入目标在 200 里没有对应字段
-//   （见 VERIFIABLE_FIELDS）；④ 206 没有可信的目标房间集合（roomIds 缺失或为空）。读数无效（-1、65536、非有限数）按设备没回报，也算无法核对（与 summarizeRooms 一致）。
+//   （见 VERIFIABLE_FIELDS）；④ 206 没有可信的目标房间集合（roomIds 缺失或为空）。读数无效（-100 无效数据、65536 未初始化、
+//   -1、非有限数）按设备没回报，也算无法核对（与 summarizeRooms 一致）。0 是有效读数（后端 11/25 答复第 9 条）。
+// - 房间开关（201 / 206 的 switch）：后端 11/25 答复第 1 条，控制屏没上报房间状态，200 读到的是默认值 0。
+//   features.roomSwitchReported 为 false（默认）时，开关一律无法核对——读到的 0 不能当作「未变化」，也不能当作「已生效」。
 // - 整体结论（verdictOf，唯一的优先级函数）：结果未知 > 未变化 > 无法核对 > 已生效（Fable 裁定 B：未变化是回读确认的
 //   不一致，无法核对只是缺证据，取最坏的确定结论；结果未知最前）。整体结论只作标题，逐字段结果给界面逐项列出。
 // - 回读请求本身失败（网络错误、超时、非 2xx）由调用方的读取抛错，写锁归为结果未知，不走这里。
@@ -20,7 +23,8 @@
 //   registerVerifier(201, async (rec, signal) => matchRoomSet(rec, await callCtrl(200, rec.projectId, {}, { signal })))
 //   registerVerifier(206, async (rec, signal) => matchAllRoomsSwitch(rec, await callCtrl(200, rec.projectId, {}, { signal })))
 import type { CtrlReply } from './ctrl'
-import { NO_DATA } from './values'
+import { roomSwitchReported } from './config'
+import { INVALID_HOURLY, NO_DATA } from './values'
 import { isDeviceId, type FieldResult, type MatchDetail, type SentRecord } from './writeLock'
 
 type Rooms = Pick<CtrlReply<200>, 'data'>
@@ -61,8 +65,11 @@ export function describeFields(fields: Readonly<Record<string, FieldResult>>): s
   return parts.join('，')
 }
 
-/** 读数有效：有限数，且不是 -1（「不变」）或 65536（未初始化 / 无数据） */
-const validReading = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v) && v !== -1 && v !== NO_DATA
+/** 读数有效：有限数，且不是 -1（「不变」/ 210 里表示该项不能设置）、65536（未初始化 / 无数据）、-100（无效数据）。0 有效 */
+const validReading = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v) && v !== -1 && v !== NO_DATA && v !== INVALID_HOURLY
+
+/** 比对选项：switchReported 默认取 roomSwitchReported()（演示数据恒为 true） */
+export interface RoomMatchOpts { switchReported?: boolean }
 /** 设定温度是 float，按 0.05 比较 */
 const sameTemp = (a: number, b: number) => Math.abs(a - b) < 0.05
 
@@ -80,8 +87,9 @@ const detail = (fields: Record<string, FieldResult>): MatchDetail => ({ verdict:
  * 不在清单里的字段 → 无法核对；回包没有房间、找不到目标房间 → 全部无法核对；目标房间面板离线 → 能核对的字段结果未知；
  * 读数无效 → 无法核对。没有任何改动的字段、消息号不对、设备 id 为空 → false（核对数据本身不对）
  */
-export function matchRoomSet(rec: Pick<SentRecord, 'msg' | 'deviceId' | 'target'>, reply: Rooms): MatchDetail | false {
+export function matchRoomSet(rec: Pick<SentRecord, 'msg' | 'deviceId' | 'target'>, reply: Rooms, opts: RoomMatchOpts = {}): MatchDetail | false {
   if (rec.msg !== 201 || rec.deviceId === null) return false
+  const switchReported = opts.switchReported ?? roomSwitchReported()
   const changed = Object.entries(rec.target).filter(([k, v]) => !isNoChange(201, k, v))
   if (!changed.length) return false
   const room = (reply.data ?? []).find((r) => r.id === rec.deviceId)
@@ -90,6 +98,7 @@ export function matchRoomSet(rec: Pick<SentRecord, 'msg' | 'deviceId' | 'target'
     if (!isVerifiableField(201, field) || typeof v !== 'number') { fields[field] = 'unverifiable'; continue }
     if (!room) { fields[field] = 'unverifiable'; continue }
     if (room.isConnected !== true) { fields[field] = 'unknown'; continue }
+    if (field === 'switch' && !switchReported) { fields[field] = 'unverifiable'; continue }
     const got = ROOM_READ[field](room)
     if (!validReading(got)) { fields[field] = 'unverifiable'; continue }
     fields[field] = (field === 'temperature' ? sameTemp(got, v) : got === v) ? 'applied' : 'unchanged'
@@ -103,13 +112,15 @@ export function matchRoomSet(rec: Pick<SentRecord, 'msg' | 'deviceId' | 'target'
  * 逐个检查 roomIds（确认后预检读到的目标房间），回包里缺了的按无法核对；回包里多出来的房间不看。
  * 没有可信目标集合（roomIds 缺失或为空，如旧版持久化的记录、漏传集合的接入）→ 无法核对：不能据回包里剩下的房间判一致
  */
-export function matchAllRoomsSwitch(rec: Pick<SentRecord, 'msg' | 'target' | 'roomIds'>, reply: Rooms): MatchDetail | false {
+export function matchAllRoomsSwitch(rec: Pick<SentRecord, 'msg' | 'target' | 'roomIds'>, reply: Rooms, opts: RoomMatchOpts = {}): MatchDetail | false {
   const want = rec.target.switch
   if (rec.msg !== 206 || isNoChange(206, 'switch', want) || (want !== 0 && want !== 1)) return false
   if (!rec.roomIds?.length) return detail({ switch: 'unverifiable' })
+  const switchReported = opts.switchReported ?? roomSwitchReported()
   const rooms = reply.data ?? []
+  // 开关未上报：在线房间一律无法核对（离线照旧算结果未知，缺了照旧无法核对）
   const judge = (r: Room | undefined): FieldResult =>
-    !r ? 'unverifiable' : r.isConnected !== true ? 'unknown' : !validReading(r.switch) ? 'unverifiable' : r.switch === want ? 'applied' : 'unchanged'
+    !r ? 'unverifiable' : r.isConnected !== true ? 'unknown' : !switchReported || !validReading(r.switch) ? 'unverifiable' : r.switch === want ? 'applied' : 'unchanged'
   const perRoom: FieldResult[] = rec.roomIds.map((id) => judge(rooms.find((r) => r.id === id)))
   return detail({ switch: verdictOf(perRoom) })
 }

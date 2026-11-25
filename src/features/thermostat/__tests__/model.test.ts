@@ -3,6 +3,7 @@
 import { describe, expect, it } from 'vitest'
 import { decodeReply, encodeMessage, type CtrlReply } from '@/api/ctrl'
 import * as pb from '@/api/gen/ctrl200_pb.js'
+import { setConfig } from '@/api/config'
 import { summarize, toRoomViews, windLabel, windOf } from '../model'
 
 const room = (o: Record<string, unknown> = {}) => ({
@@ -56,9 +57,29 @@ describe('ctrl 200 → RoomView', () => {
     expect(r).toMatchObject({ temp: null, humidity: null, dew: null, setTemp: null, eco: null })
   })
 
-  it('设定温度 -1、0（proto3 缺省）也按没有设定值处理', () => {
+  it('设定温度 -1、-100、65536 按没有设定值处理；0 是有效读数（后端 11/25 答复第 9 条）', () => {
     expect(toRoomViews(roundTrip([room({ setTemp: -1 })]))[0].setTemp).toBeNull()
-    expect(toRoomViews(roundTrip([room({ setTemp: 0 })]))[0].setTemp).toBeNull()
+    expect(toRoomViews(roundTrip([room({ setTemp: -100 })]))[0].setTemp).toBeNull()
+    expect(toRoomViews(roundTrip([room({ setTemp: 65536 })]))[0].setTemp).toBeNull()
+    expect(toRoomViews(roundTrip([room({ setTemp: 0 })]))[0].setTemp).toBe(0)
+  })
+
+  it('房间开关可信与否：switchReported 显式给出；默认取 features.roomSwitchReported（真实接口默认 false）', () => {
+    expect(toRoomViews(roundTrip([room({ switch: 0 })]), { switchReported: false })[0]).toMatchObject({ on: false, switchKnown: false })
+    expect(toRoomViews(roundTrip([room({ switch: 1 })]), { switchReported: true })[0]).toMatchObject({ on: true, switchKnown: true })
+    try {
+      setConfig({ dataSource: 'real' })
+      expect(toRoomViews(roundTrip([room()]))[0].switchKnown).toBe(false)
+      setConfig({ dataSource: 'real', features: { roomSwitchReported: true } })
+      expect(toRoomViews(roundTrip([room()]))[0].switchKnown).toBe(true)
+    } finally { setConfig(null) }
+  })
+
+  it('KPI：有房间开关未知时「已开启」为 null，平均室温按全部房间算', () => {
+    const list = toRoomViews(roundTrip([room({ id: 1, switch: 0, temperature: 20 }), room({ id: 2, switch: 1, temperature: 24 })]), { switchReported: false })
+    expect(summarize(list)).toMatchObject({ on: null, avgTemp: 22 })
+    const known = toRoomViews(roundTrip([room({ id: 1, switch: 0, temperature: 20 }), room({ id: 2, switch: 1, temperature: 24 })]), { switchReported: true })
+    expect(summarize(known)).toMatchObject({ on: 1, avgTemp: 24 })
   })
 
   it('风速：1–99 档位，100 自动，其他（0 缺省、101、65536、小数）为 --', () => {
