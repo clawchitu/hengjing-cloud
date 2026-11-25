@@ -1497,6 +1497,7 @@ describe('房间开关未上报（features.roomSwitchReported = false，后端 1
     await waitFor(() => expect(writes(be)).toHaveLength(1))
     expect(body201(writes(be)[0])).toMatchObject({ switch: 1, temperature: -1, eco: -1, endModes: [] })
     await waitFor(() => expect(card('主卧').textContent).toContain('该项暂无回读，无法确认'))
+    expect(card('主卧').textContent).toContain('设备暂不回报开关状态，2 分钟后可再次操作')
     expect(card('主卧').textContent).not.toContain('设备状态暂未变化')
     expect(toasts()).not.toContain('已生效')
   })

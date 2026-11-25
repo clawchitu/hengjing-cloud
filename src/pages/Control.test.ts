@@ -615,6 +615,16 @@ describe('房间都关着（后端 11/25 答复第 16 条：温度照样生效�
     expect(screen.queryByText(/房间都关着/)).toBeNull()
     expect(screen.getByTestId('temp-box').hasAttribute('disabled')).toBe(false)
     expect(be.callsTo('/ctrl/room-temperature-data-get')).toHaveLength(0)
+    expect(screen.queryByTestId('switch-unreported-note')).toBeNull()
+    await click(screen.getByRole('button', { name: '全部开启' }))
+    expect(screen.getByTestId('switch-unreported-note').textContent).toContain('设备暂不回报开关状态，2 分钟后可再次操作')
+  })
+
+  it('温度「保持不变」时不给「房间开启后生效」的提示（只关房间不设温度）', async () => {
+    backend()
+    await mount()
+    await click(screen.getByRole('button', { name: '全部关闭' }))
+    expect(screen.queryByTestId('temp-room-note')).toBeNull()
   })
 
   it('房间开着：温度可设', async () => {

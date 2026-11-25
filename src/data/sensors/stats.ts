@@ -82,7 +82,7 @@ export const timeLabel = (ms: number) => new Date(ms + CST_OFFSET_MS).toISOStrin
 /**
  * 设备读数的有效性：65536（无数据，后端 11/24 答复⑪）、-100（无效数据，proto 注释）不进统计的分子也不进分母。
  * 0 是有效数据（后端 11/25 答复第 9 条「0 是有效数据，-100 才是无效数据」），照常参与统计——推翻了 11/24「缺字段解码出的 0
- * 一律无效」的做法。湿度、CO₂ 不可能为负，其他负数也按无效处理（这一条不受答复影响）；温度、露点的负数照常有效。
+ * 一律无效」的做法。湿度、CO₂ 不可能为负，它们的负数也按无效处理（这一条不受答复影响）；温度、露点、PM2.5 的负数（-100 以外）照常按读数处理。
  */
 export function validReading(key: MetricKey, v: number | null): number | null {
   if (v === null) return null

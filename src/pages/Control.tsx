@@ -234,7 +234,7 @@ export default function Control() {
   const onlinePicked = switchReported ? pickedP.filter((p) => p.online) : []
   const roomsOffP = onlinePicked.filter((_, i) => { const d = snaps[i]?.data; return !!d && d.rooms > 0 && d.roomSwitch === 0 })
   const tempLock: string | null = appBlock && !appBlock.enabled ? appBlock.reason : null
-  const roomsNote = tempLock !== null || roomSw === '全部开启' ? null
+  const roomsNote = keep || tempLock !== null || roomSw === '全部开启' ? null
     : roomOff ? `房间将被关闭，设定的温度${TEXT.tempWhenRoomOn}`
     : roomsOffP.length ? `房间都关着（${roomsOffP.map((p) => p.name).join('、')}），设定的温度${TEXT.tempWhenRoomOn}`
     : null
@@ -375,6 +375,7 @@ export default function Control() {
           <div className="pv-row"><span>执行方式</span><b className="w">立即执行</b></div>
           <div className="pv-warn"><Icon icon={faTriangleExclamation} /> 将覆盖所选项目内用户的本地设置，请谨慎操作。</div>
           {lockNote && <div className="cap-note" role="note"><Icon icon={faCircleInfo} />{lockNote}</div>}
+          {!switchReported && roomSw !== '不变' && <div className="cap-note" role="note" data-testid="switch-unreported-note"><Icon icon={faCircleInfo} />{TEXT.switchUnreported}</div>}
           <button className="btn-send" onClick={send} disabled={busy || lockNote !== null}><Icon icon={run.phase === 'running' ? faSpinner : faPaperPlane} spin={run.phase === 'running'} />{run.phase === 'running' ? '下发中…' : TEXT.confirmOk}</button>
         </div>
       </div>

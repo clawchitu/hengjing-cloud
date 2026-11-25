@@ -10,14 +10,14 @@ describe('运行时配置', () => {
     })
   })
   it('功能开关：不写全部取默认值', () => {
-    expect(resolveConfig([]).features).toEqual({ freshAirWrite: 'on', freshAirFilterWarn: true, roomSwitchReported: false, weatherCityFilter: 'auto', weatherNowFallback: true })
+    expect(resolveConfig([]).features).toEqual({ freshAirWrite: 'on', freshAirFilterWarn: false, roomSwitchReported: false, weatherCityFilter: 'auto', weatherNowFallback: true })
   })
   it('功能开关：按键合并，后面的层覆盖前面的；非法值不报错、取默认值', () => {
     const f = resolveConfig([
-      { features: { freshAirWrite: 'off', weatherCityFilter: 'none', freshAirFilterWarn: false } },
+      { features: { freshAirWrite: 'off', weatherCityFilter: 'none', freshAirFilterWarn: true } },
       { features: { weatherCityFilter: 'intersect', freshAirFilterWarn: 'yes', roomSwitchReported: true, bogus: 1, freshAir204Unchanged: 'minus1' } },
     ]).features
-    expect(f).toEqual({ ...FEATURE_DEFAULTS, freshAirWrite: 'off', weatherCityFilter: 'intersect', freshAirFilterWarn: true, roomSwitchReported: true })
+    expect(f).toEqual({ ...FEATURE_DEFAULTS, freshAirWrite: 'off', weatherCityFilter: 'intersect', freshAirFilterWarn: false, roomSwitchReported: true })
     // 已撤掉的开关（204 不变的传法、滤网字段对调）写了也忽略
     expect(f).not.toHaveProperty('freshAir204Unchanged')
     expect(Object.isFrozen(f)).toBe(true)

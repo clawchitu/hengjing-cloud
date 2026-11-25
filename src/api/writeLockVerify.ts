@@ -98,8 +98,9 @@ export function matchRoomSet(rec: Pick<SentRecord, 'msg' | 'deviceId' | 'target'
   for (const [field, v] of changed) {
     if (!isVerifiableField(201, field) || typeof v !== 'number') { fields[field] = 'unverifiable'; continue }
     if (!room) { fields[field] = 'unverifiable'; continue }
-    if (room.isConnected !== true) { fields[field] = 'unknown'; continue }
+    // 开关未上报：开关一律无法核对，先于离线判断（离线与否都拿不到可信的开关读数）
     if (field === 'switch' && !switchReported) { fields[field] = 'unverifiable'; continue }
+    if (room.isConnected !== true) { fields[field] = 'unknown'; continue }
     const got = ROOM_READ[field](room)
     if (!validReading(got)) { fields[field] = 'unverifiable'; continue }
     fields[field] = (field === 'temperature' ? sameTemp(got, v) : got === v) ? 'applied' : 'unchanged'
@@ -119,9 +120,9 @@ export function matchAllRoomsSwitch(rec: Pick<SentRecord, 'msg' | 'target' | 'ro
   if (!rec.roomIds?.length) return detail({ switch: 'unverifiable' })
   const switchReported = opts.switchReported ?? roomSwitchReported()
   const rooms = reply.data ?? []
-  // 开关未上报：在线房间一律无法核对（离线照旧算结果未知，缺了照旧无法核对）
+  // 开关未上报：一律无法核对（先于离线判断）
   const judge = (r: Room | undefined): FieldResult =>
-    !r ? 'unverifiable' : r.isConnected !== true ? 'unknown' : !switchReported || !validReading(r.switch) ? 'unverifiable' : r.switch === want ? 'applied' : 'unchanged'
+    !r || !switchReported ? 'unverifiable' : r.isConnected !== true ? 'unknown' : !validReading(r.switch) ? 'unverifiable' : r.switch === want ? 'applied' : 'unchanged'
   const perRoom: FieldResult[] = rec.roomIds.map((id) => judge(rooms.find((r) => r.id === id)))
   return detail({ switch: verdictOf(perRoom) })
 }

@@ -12,7 +12,7 @@
 //                 构建时也可用 VITE_WRITE_PROJECT_CODES（逗号分隔）。
 // features        功能开关（对象，按键合并；不写或写了非法值都取默认值）。交付包的 config.js 不写这一项。
 //   freshAirWrite          'on'（默认，可下发）| 'off'：写 'off' 时新风运行设置面板只读；写防护照常生效。
-//   freshAirFilterWarn     true（默认）| false：滤网寿命的告警颜色和更换提示。
+//   freshAirFilterWarn     false（默认）| true：滤网寿命的告警颜色和更换提示（阈值按 filter_life_p 的比例）。
 //   roomSwitchReported     false（默认）| true：200 的房间开关是否可信。后端修好房间状态上报后改成 true；
 //                          false 时房间开关显示「未知」、核对开关记无法核对、不拿它禁用温度和节能。
 //   weatherCityFilter      'auto'（默认）| 'intersect' | 'none'：候选城市是否用 /wx/city-list 过滤。

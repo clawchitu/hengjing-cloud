@@ -166,17 +166,19 @@ describe('201 Query：只发改了的标量，其余 -1；end_modes 没改传空
   it('改了末端：该房间全部末端完整回传（有 3 个传 3 个），只换 is_selected；switch 只读，原样带回读到的值', () => {
     const three = [...ENDS, { optionName: '地冷', type: 3, isSelected: false, isChange: true, switch: 0 }]
     const r = room({ wireEndModes: three })
-    const d = editDraft(r, null, { ends: [true, false, true] })
+    const d = editDraft(r, null, { temp: 24, ends: [true, false, true] })
     const x = q(buildRoomSet(r, d, OK, R))
     expect(x.endModes).toEqual([
       { optionName: '风盘', type: 0, isSelected: true, isChange: true, switch: 1 },
       { optionName: '顶辐射', type: 1, isSelected: false, isChange: true, switch: 0 },
       { optionName: '地冷', type: 3, isSelected: true, isChange: true, switch: 0 },
     ])
-    expect(x).toMatchObject({ temperature: -1, eco: -1, switch: -1 })
+    expect(x).toMatchObject({ temperature: 24, eco: -1, switch: -1 })
     expect(x.endModes[0]).not.toBe(three[0])
     expect((wire(x) as { endModes: unknown[] }).endModes).toHaveLength(3)
-    expect(describeChanges(draftChanges(r, d))).toBe('末端选中 2 项 → 2 项')
+    expect(describeChanges(draftChanges(r, d))).toContain('末端选中 2 项 → 2 项')
+    // 只改末端：核对数据里没有末端，无法核对，本期不下发
+    expect(buildRoomSet(r, editDraft(r, null, { ends: [true, false, true] }), OK, R)).toMatchObject({ ok: false, reason: expect.stringMatching(/只改末端/) })
   })
   it('末端选择与读数相同算没改：空列表；末端和温度一起改：两样都带', () => {
     expect(endModesFor(room(), [true, true])).toEqual({ ok: true, endModes: [] })
@@ -187,12 +189,14 @@ describe('201 Query：只发改了的标量，其余 -1；end_modes 没改传空
   it('末端不合法：一个都没选、取消了不允许关闭的末端（is_change = false）、数量和读数对不上 → 不下发', () => {
     expect(endModesFor(room(), [false, false])).toMatchObject({ ok: false, reason: expect.stringMatching(/至少/) })
     const fixed = room({ wireEndModes: [{ optionName: '全空气', type: 4, isSelected: true, isChange: false, switch: 1 }, ENDS[0]] })
-    expect(endModesFor(fixed, [false, true])).toMatchObject({ ok: false, reason: expect.stringMatching(/全空气.*不允许关闭/) })
+    expect(endModesFor(fixed, [false, true])).toMatchObject({ ok: false, reason: expect.stringMatching(/全空气.*不允许修改/) })
+    const fixedOff = room({ wireEndModes: [{ optionName: '全空气', type: 4, isSelected: false, isChange: false, switch: 0 }, ENDS[0]] })
+    expect(endModesFor(fixedOff, [true, true])).toMatchObject({ ok: false, reason: expect.stringMatching(/不允许修改/) })
     expect(endModesFor(room(), [true])).toMatchObject({ ok: false })
-    expect(buildRoomSet(room(), draft({ ends: [false, false] }), OK, R)).toMatchObject({ ok: false, reason: expect.stringMatching(/至少/) })
+    expect(buildRoomSet(room(), draft({ temp: 24, ends: [false, false] }), OK, R)).toMatchObject({ ok: false, reason: expect.stringMatching(/至少/) })
   })
   it('改了末端后读数里的末端选择被外部改了：冲突，不下发', () => {
-    const d = editDraft(room(), null, { ends: [true, false] })
+    const d = editDraft(room(), null, { temp: 24, ends: [true, false] })
     const r = room({ wireEndModes: [{ ...ENDS[0], isSelected: false }, ENDS[1]] })
     expect(reconcileDraft(d, r, OK).conflict).toEqual(['ends'])
     expect(buildRoomSet(r, d, OK, R).ok).toBe(false)

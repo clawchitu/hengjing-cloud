@@ -88,6 +88,8 @@ export const TEXT = {
   /** 温度设定的提示（后端 11/25 答复第 16 条）：房间关着时温度也会生效，房间开启后按此温度运行 */
   tempWhenRoomOn: '房间开启后生效',
   tempOffNote: '设置温度不会开启房间，房间开启后按此温度运行',
+  /** 房间开关未上报（features.roomSwitchReported = false）期间，开关类下发固定判无法核对，写锁要到 2 分钟有效期才放 */
+  switchUnreported: '设备暂不回报开关状态，2 分钟后可再次操作',
   badSwitch: (label: string) => `${label}取值无效`,
   badMode: '运行模式无效',
   projectChanged: '当前项目已变化，请重新确认',

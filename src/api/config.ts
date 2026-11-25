@@ -44,7 +44,8 @@ export interface Features {
 
 export const FEATURE_DEFAULTS: Readonly<Features> = Object.freeze({
   freshAirWrite: 'on',
-  freshAirFilterWarn: true,
+  // 后端 11/25 答复字段没反，但 proto 里 filter_life_p 是 int32（按比例只能是 0 或 1），确认前告警保持关，避免 0.72 截成 0 误报
+  freshAirFilterWarn: false,
   roomSwitchReported: false,
   weatherCityFilter: 'auto',
   weatherNowFallback: true,

@@ -77,8 +77,9 @@ export function endModesFor(room: RoomView, selected?: readonly boolean[]): { ok
   if (!selected || sameSel(selected, cur)) return { ok: true, endModes: [] }
   if (selected.length !== room.wireEndModes.length) return { ok: false, reason: '末端配置已变化，请重新核对' }
   if (!selected.some(Boolean)) return { ok: false, reason: '末端至少要选中一项' }
-  const locked = room.wireEndModes.find((m, i) => m.isChange === false && m.isSelected === true && !selected[i])
-  if (locked) return { ok: false, reason: `「${locked.optionName || '该末端'}」不允许关闭` }
+  // is_change = false：这个末端不能改（目前只有全空气），选中 / 取消两个方向都不允许
+  const locked = room.wireEndModes.find((m, i) => m.isChange === false && (m.isSelected === true) !== selected[i])
+  if (locked) return { ok: false, reason: `「${locked.optionName || '该末端'}」不允许修改` }
   return { ok: true, endModes: room.wireEndModes.map((m, i) => ({ ...m, isSelected: selected[i] })) }
 }
 
@@ -178,6 +179,8 @@ export function buildRoomSet(room: RoomView, draft: RoomDraft | null | undefined
     const bad = checkTemp(c.temp[1], range)
     if (bad) return { ok: false, reason: bad }
   }
+  // 只改末端：写锁核对数据（record201）没有末端字段，无法核对，本期不下发（接入改末端入口时一并补核对）
+  if (c.ends && !c.temp && !c.eco) return { ok: false, reason: '只改末端暂不能下发（无法核对）' }
   const ends = endModesFor(room, c.ends?.[1])
   if (!ends.ok) return { ok: false, reason: ends.reason }
   return {
@@ -200,6 +203,8 @@ export function buildRoomSwitch(room: RoomView, on: boolean, ctx: EditCtx): Buil
 export const ecoLabel = (v: 0 | 1) => (v === 1 ? '节能' : '标准')
 /** 设温度的确认弹窗里加的一句（后端 11/25 答复第 16 条：温度设置会生效，但不会把设备打开） */
 export const TEMP_OFF_NOTE = '设置温度不会开启房间，房间开启后按此温度运行'
+/** 房间开关未上报期间开关类下发的结果条补充（固定判无法核对，写锁 2 分钟到期才放） */
+export const SWITCH_UNREPORTED_NOTE = '设备暂不回报开关状态，2 分钟后可再次操作'
 export const fmtTemp = (v: number) => v.toFixed(1)
 
 /** 草稿条与确认弹窗里的描述：「设定温度 25.5 → 24.5°C，节能模式 标准 → 节能」 */

@@ -133,15 +133,18 @@ describe('房间开关未上报（features.roomSwitchReported = false，后端 1
     }
     expect(matchRoomSet({ msg: 201, deviceId: D, target: { temperature: 24.5, switch: 1 } }, reply(room({ switch: 0 })), { switchReported: false }))
       .toEqual({ verdict: 'unverifiable', fields: { temperature: 'applied', switch: 'unverifiable' } })
-    // 面板离线照旧算结果未知
-    expect((matchRoomSet({ msg: 201, deviceId: D, target: { switch: 1 } }, reply(room({ isConnected: false })), { switchReported: false }) as { verdict: string }).verdict).toBe('unknown')
+    // 面板离线也是无法核对（开关本来就没有可信读数）；同一次改的温度照旧按离线算结果未知
+    expect(matchRoomSet({ msg: 201, deviceId: D, target: { temperature: 24.5, switch: 1 } }, reply(room({ isConnected: false })), { switchReported: false }))
+      .toEqual({ verdict: 'unknown', fields: { temperature: 'unknown', switch: 'unverifiable' } })
+    expect((matchRoomSet({ msg: 201, deviceId: D, target: { switch: 1 } }, reply(room({ isConnected: false })), { switchReported: false }) as { verdict: string }).verdict).toBe('unverifiable')
     // 开关可信时恢复原逻辑
     expect((matchRoomSet({ msg: 201, deviceId: D, target: { switch: 1 } }, reply(room({ switch: 0 })), { switchReported: true }) as { verdict: string }).verdict).toBe('unchanged')
   })
-  it('206：在线房间一律无法核对；离线照旧结果未知', () => {
+  it('206：一律无法核对（离线房间也是）；开关可信时离线照旧结果未知', () => {
     const rec = { msg: 206, target: { switch: 1 }, roomIds: [D] }
     expect(matchAllRoomsSwitch(rec, reply(room({ switch: 1 })), { switchReported: false })).toEqual({ verdict: 'unverifiable', fields: { switch: 'unverifiable' } })
-    expect((matchAllRoomsSwitch(rec, reply(room({ isConnected: false })), { switchReported: false }) as { verdict: string }).verdict).toBe('unknown')
+    expect((matchAllRoomsSwitch(rec, reply(room({ isConnected: false })), { switchReported: false }) as { verdict: string }).verdict).toBe('unverifiable')
+    expect((matchAllRoomsSwitch(rec, reply(room({ isConnected: false })), { switchReported: true }) as { verdict: string }).verdict).toBe('unknown')
     expect((matchAllRoomsSwitch(rec, reply(room({ switch: 1 })), { switchReported: true }) as { verdict: string }).verdict).toBe('applied')
   })
   it('读数 -100（无效数据）无法核对；0 是有效读数，照常比对', () => {

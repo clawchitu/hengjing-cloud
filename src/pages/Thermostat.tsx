@@ -20,11 +20,12 @@ import type { WriteQuery } from '../api/ctrl'
 import { PROGRAMS } from '../data/constants'
 import { lockKeysOf, onForceReread, OTHER_ACCOUNT_TEXT, verify, type FieldResult, type LockInfo } from '../api/writeLock'
 import { describeFields, verdictOf } from '../api/writeLockVerify'
+import { roomSwitchReported } from '../api/config'
 import type { CtrlReply } from '../api/ctrl'
 import {
   ALL, allRoomsTarget, roomTargetIssue, buildRoomSet, buildRoomSwitch, canStep, clearResult, describeChanges, describeDraft, describeResult, draftChanges, ecoLabel,
   editBlock, editDraft, fmtTemp, hasDraftChanges, isLocked, knownOff, match201, match206, noteCurrentProject, reconcileDraft, record201, record206,
-  resolveTempRange, runOp, sameQuery, stepTemp, summarize, switchBlock, tempBlock, TEMP_OFF_NOTE, thermostatSource, useRooms, useRoomsRaw, useRoomStats,
+  resolveTempRange, runOp, sameQuery, stepTemp, summarize, switchBlock, SWITCH_UNREPORTED_NOTE, tempBlock, TEMP_OFF_NOTE, thermostatSource, useRooms, useRoomsRaw, useRoomStats,
   useWrites, useFreshRead, windLabel,
   type ChartData, type FreshRead, type EditCtx, type EndMode, type RoomDraft, type RoomView, type Running, type StatsRange, type TempRange, type WriteResult,
 } from '../features/thermostat'
@@ -73,6 +74,8 @@ function fieldsText(fields: Readonly<Record<string, FieldResult>> | undefined): 
 }
 
 /** 结果条用正常样式（已生效，或已下发正在核对）还是警示样式（失败、未变化、无法核对、结果未知） */
+/** 房间开关未上报期间，开关类下发判无法核对时补一句（写锁 2 分钟到期才放，避免现场以为点了没反应） */
+const switchNote = (r: WriteResult) => (!roomSwitchReported() && r.fields?.switch === 'unverifiable' && !r.ended ? `${SWITCH_UNREPORTED_NOTE}。` : '')
 const isGood = (r: WriteResult) => r.outcome === 'ok' && (r.verdict === undefined ? r.readback === 'pending' : r.verdict === 'applied')
 
 /** 结果条文案：确定失败给原因；已下发 / 结果未知按回读核对的四态（整体作标题，混合时附摘要与逐字段） */
@@ -309,7 +312,7 @@ function RoomCard({ room: r, ctx, range, selected, onSelect, draft, conflict, on
       ) : null}
       {result && !mine && (
         <div className={'te-bar ' + (isGood(result) ? 'pending' : 'fail')} role={isGood(result) ? 'status' : 'alert'} onClick={(e) => e.stopPropagation()}>
-          <span>{resultText(result)}</span>
+          <span>{resultText(result)}{switchNote(result) && <> {switchNote(result)}</>}</span>
           <Button onClick={() => project && clearResult(project.id, r.key)}>知道了</Button>
         </div>
       )}
@@ -561,7 +564,7 @@ export default function Thermostat() {
       {lockBar}
       {allResult && writes.running?.target !== ALL && (
         <div className={'te-bar ' + (isGood(allResult) ? 'pending' : 'fail')} role={isGood(allResult) ? 'status' : 'alert'} style={{ margin: '0 0 16px' }} data-result="all">
-          <span>{resultText(allResult)}</span>
+          <span>{resultText(allResult)}{switchNote(allResult) && <> {switchNote(allResult)}</>}</span>
           <Button onClick={() => clearResult(project.id, ALL)}>知道了</Button>
         </div>
       )}

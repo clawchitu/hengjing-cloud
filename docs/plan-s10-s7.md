@@ -106,7 +106,7 @@
 - 设备汇总（改动 12）：设备、开关、模式、运行时间、滤网运行时间、滤网寿命（%）。
 - 运行设置面板（改动 13）：只在 `app_code == 12` 显示。这一段只显示当前值（开关、控制类型、露点设定、湿度设定、风速 低 / 高 / 自动），没有步进和下发按钮。`dew_point`、`humidity_set` 为 -1 显示 `--`。这个只读形态在 S10c 之后继续保留，用于 `features.freshAirWrite = 'off'` 和没有 204 权限的账号。
 - 状态：加载、失败（可重试）、无设备、无权限、210 `unsupported`（面板位置显示「该项目的控制屏不支持运行设置」）。
-- 滤网告警颜色和「请尽快更换」文案受 `features.freshAirFilterWarn` 控制，默认开（后端 11/25 答复第 10 条确认字段没反）；阈值按 `filter_life_p` 的比例算：低于 0.15 红色、低于 0.5 橙色（`filterOf` 的 `level`）。
+- 滤网告警颜色和「请尽快更换」文案受 `features.freshAirFilterWarn` 控制，默认关（后端 11/25 答复第 10 条确认字段没反，但 proto 里 `filter_life_p` 是 int32，按比例只能是 0 或 1，确认前不开告警）；阈值按 `filter_life_p` 的比例算：低于 0.15 红色、低于 0.5 橙色（`filterOf` 的 `level`）。
 
 验收：
 - 非 12 项目没有设置面板，也没有 210 请求。
@@ -211,7 +211,7 @@
 | `freshAirWrite` | `on` / `off` | `on` | `off` 时设置面板只读。写防护照常生效，这个开关只管界面 |
 | ~~`freshAir204Unchanged`~~ | — | — | 已撤掉：后端 11/25 答复第 4 条，不变一律传 -1 |
 | ~~`freshAirFilterSwapped`~~ | — | — | 已撤掉：后端 11/25 答复第 10 条，两个字段没反 |
-| `freshAirFilterWarn` | 布尔 | `true` | 滤网寿命的红、橙色和更换提示（阈值按比例） |
+| `freshAirFilterWarn` | 布尔 | `false` | 滤网寿命的红、橙色和更换提示（阈值按比例）。字段没反，但 `filter_life_p` 是 int32，确认前保持关 |
 | `roomSwitchReported` | 布尔 | `false` | 200 的房间开关是否可信（后端 11/25 答复第 1 条：控制屏没上报房间状态，后端会修，修好后改 `true`）。`false` 时开关显示「未知」、核对开关记无法核对、不拿它禁用温度和节能。只管真实接口，演示数据按 `true` |
 | `weatherCityFilter` | `auto` / `intersect` / `none` | `auto` | 候选城市是否用 city-list 过滤 |
 | `weatherNowFallback` | 布尔 | `true` | `/weather` 失败时用小时预报顶替实时数据 |
@@ -225,7 +225,7 @@
 | A1 | 204 除 `switch` 外的字段怎么表示不变 | **已答复（11/25 第 4 条）**：所有字段不变一律传 -1 | 已改：`build204` 只用 -1；`freshAir204Unchanged` 撤掉 |
 | A2 | 204 的 `control_type` 能不能传 -1 | **已答复**：同 A1，不改就传 -1 | 同 A1 |
 | A3 | 露点、湿度的设定范围和步长（Q7④） | 露点 8–16°C、步长 0.5；湿度 35–70%、步长 1（演示版的值）。面板上不写「范围」这行字 | `model.ts` 的 `LIMITS` 常量；确认后恢复范围提示 |
-| A4 | `filter_life`、`filter_life_p` 是否反了 | **已答复（11/25 第 10 条）**：没反。`filter_life` 是天数（100 = 100 天），`filter_life_p` 是比例（1 = 100%） | 已改：`filterOf`（显示乘 100，阈值按比例）；告警默认开；`freshAirFilterSwapped` 撤掉。待确认：proto 里 `filter_life_p` 是 int32，按比例只能是 0 或 1 |
+| A4 | `filter_life`、`filter_life_p` 是否反了 | **已答复（11/25 第 10 条）**：没反。`filter_life` 是天数（100 = 100 天），`filter_life_p` 是比例（1 = 100%） | 已改：`filterOf`（显示乘 100，阈值按比例）；告警仍默认关（int32 待确认）；`freshAirFilterSwapped` 撤掉。待确认：proto 里 `filter_life_p` 是 int32，按比例只能是 0 或 1 |
 | A5 | `running_time`、`filter_running` 的单位（Q7③） | 只显示数字，不带单位 | `model.ts` 的单位常量 |
 | A6 | `wind_level`、`dehumidifier_status` 的取值（Q7③） | 风速档位显示原数字；压缩机 0 显示停止、1 显示运行、其他显示原数字 | `model.ts` 的两个映射 |
 | A7 | 设备关着时能不能改设置（201 的答复是界面不允许） | 照 201：关着时只能改开关 | `editBlock` 的一条规则 |
