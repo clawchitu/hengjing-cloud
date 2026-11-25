@@ -18,7 +18,7 @@ import { useCapabilities, useCurrentProject, type Project } from '../data/org'
 import { isApiError } from '../api/errors'
 import type { WriteQuery } from '../api/ctrl'
 import { PROGRAMS } from '../data/constants'
-import { lockKeysOf, onForceReread, OTHER_ACCOUNT_TEXT, verify, type FieldResult, type LockInfo } from '../api/writeLock'
+import { lockKeysOf, lockOf, onForceReread, OTHER_ACCOUNT_TEXT, verify, type FieldResult, type LockInfo } from '../api/writeLock'
 import { describeFields, verdictOf } from '../api/writeLockVerify'
 import { roomSwitchReported } from '../api/config'
 import type { CtrlReply } from '../api/ctrl'
@@ -74,9 +74,9 @@ function fieldsText(fields: Readonly<Record<string, FieldResult>> | undefined): 
 }
 
 /** 房间开关未上报期间，开关类下发判无法核对时补一句（写锁 2 分钟到期才放，避免现场以为点了没反应） */
-const switchNote = (r: WriteResult) => (!roomSwitchReported() && r.fields?.switch === 'unverifiable' && !r.ended ? `${SWITCH_UNREPORTED_NOTE}。` : '')
+const switchNote = (r: WriteResult) => (!roomSwitchReported() && r.fields?.switch === 'unverifiable' && !r.ended && !r.settling ? `${SWITCH_UNREPORTED_NOTE}。` : '')
 /** 结果条用正常样式（已生效，或已下发正在核对）还是警示样式（失败、未变化、无法核对、结果未知） */
-const isGood = (r: WriteResult) => r.outcome === 'ok' && (r.verdict === undefined ? r.readback === 'pending' : r.verdict === 'applied')
+const isGood = (r: WriteResult) => r.outcome === 'ok' && (r.settling === true || (r.verdict === undefined ? r.readback === 'pending' : r.verdict === 'applied'))
 
 /** 结果条文案：确定失败给原因；已下发 / 结果未知按回读核对的四态（整体作标题，混合时附摘要与逐字段） */
 function resultText(res: WriteResult): string {
@@ -86,7 +86,8 @@ function resultText(res: WriteResult): string {
     return `${last}。写锁有效期已到、仍未核对一致，已恢复下发；请以面板读数为准。`
   }
   if (res.readback === 'waiting') return `下发结果未知：${res.text}。等控制屏结束上一条指令后自动核对 …`
-  if (res.readback === 'pending') return res.outcome === 'unknown' ? `下发结果未知：${res.text}。正在核对 …` : '已下发，正在核对 …'
+  // 还在自动核对（首次回读不一致 / 读不到、退避还没用完）：不报结论（赤兔 11/25）
+  if (res.readback === 'pending' || res.settling) return res.outcome === 'unknown' ? `下发结果未知：${res.text}。正在核对 …` : '已下发，正在核对 …'
   if (res.readback === 'fail') return '已下发，结果未知（回读失败）。可在上方点「核对」再试，或等到期后自动恢复。'
   if (!res.verdict) return res.text
   if (res.verdict === 'applied') return res.text.startsWith('已下发') ? VERDICT_TEXT.applied : res.text
@@ -332,8 +333,8 @@ const hhmmss = (t: number) => new Date(t).toTimeString().slice(0, 8)
  * outcome 说「已下发，结果未知」/「结果未知」。只给同账号看（别的账号的锁 lockOf 不带 lastFields，页面也只用泛化提示）
  */
 function lockTitle(lock: LockInfo): { title: string; fields: [string, FieldResult][] } {
-  // 一致但在提交这一刻被否决（读数已被更新的读取取代）：仍按正在核对显示，不列字段
-  if (lock.lastVetoed) return { title: '已下发，正在核对…', fields: [] }
+  // 还在自动核对（settling，含一致但在提交这一刻被否决）：只显示正在核对，不报结论、不列字段；退避用完或到期后才显示四态
+  if (lock.lastVetoed || lock.settling) return { title: lock.outcome === 'unknown' ? '下发结果未知，正在核对…' : '已下发，正在核对…', fields: [] }
   const fields = Object.entries(lock.lastFields ?? {})
   if (!fields.length) return { title: lock.outcome === 'ok' ? '已下发，结果未知' : '结果未知', fields }
   const sum = describeFields(lock.lastFields!)
@@ -354,12 +355,16 @@ function LockBar({ lock, running }: { lock: LockInfo | null; running: Running | 
     : lock.owner === 'other-account' ? OTHER_ACCOUNT_TEXT
     : lock.origin === 'synced' ? '另一个标签页的下发结果未知，本项目暂停下发，等那边结束或到期后自动恢复。'
     : `上次下发${subject}：${t!.title}。为避免重复下发，本项目（同一控制屏）已暂停下发。`
-  const tail = !unknown ? '' : lock.verifying ? '正在核对 …'
+  const tail = !unknown ? '' : lock.verifying ? (t && lock.settling ? '' : '正在核对 …')
     : !lock.sendSettled ? '上一条指令尚未结束，结束后会自动核对。'
     : `可点「核对」重新读取面板，一致即恢复；${lock.expiresAt ? `最迟 ${hhmmss(lock.expiresAt)} ` : ''}到期后自动恢复。`
   const check = async () => {
     const r = await verify(lock.key)
     if (r === 'released') showToast('核对一致，已恢复下发')
+    // 还在自动核对（退避没用完）：不报结论
+    // none = 没发起核对（已有核对在途等），不提示
+    else if (r === 'none') return
+    else if (lockOf(lock.key)?.settling && r !== 'send-pending' && r !== 'not-visible') showToast('暂未核对一致，稍后自动再核对，仍暂停下发', true)
     else if (r === 'send-pending') showToast('上一条指令尚未结束，暂不能核对', true)
     else if (r === 'mismatch') showToast('指令已下发，设备状态暂未变化，仍暂停下发', true)
     else if (r === 'unverifiable') showToast('该项暂无回读，无法确认，仍暂停下发', true)

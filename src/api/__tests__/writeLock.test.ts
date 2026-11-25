@@ -539,6 +539,60 @@ describe('自动重新核对（退避）', () => {
     expect(fn).toHaveBeenCalledTimes(4)
     expect(lockOf(PA)).toBeNull()
   })
+  it('settling（界面口径）：首次不一致起、退避用完之前一直为 true；第 3 次退避核对仍不一致后才为 false（锁照旧保持）', async () => {
+    fake()
+    const fn = vi.fn(async () => false as L.MatchResult)
+    const seen: boolean[] = []
+    subscribe(() => { const l = lockOf(PA); if (l?.lastVerify) seen.push(l.settling) })
+    await sentOk(fn)
+    expect(lockOf(PA)?.lastVerify).toBe('mismatch')
+    expect(lockOf(PA)?.settling).toBe(true)
+    await vi.advanceTimersByTimeAsync(5_000 + 20_000)
+    expect(fn).toHaveBeenCalledTimes(3)
+    expect(lockOf(PA)?.settling).toBe(true)
+    // 结论记下的那一刻（emit 时退避还没排）也已是 true：界面不会闪一下「未变化」
+    expect(seen.length).toBeGreaterThan(0)
+    expect(seen.every(Boolean)).toBe(true)
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(fn).toHaveBeenCalledTimes(4)
+    expect(lockOf(PA)?.settling).toBe(false)
+    expect(seen[seen.length - 1]).toBe(false)
+    expect(lockOf(PA)?.phase).toBe('unknown') // 放锁规则不变：仍锁到到期
+  })
+  it('settling：回读失败（结果未知）同样等退避；下一次退避来不及排进有效期时为 false，到期 endOf 记 expired', async () => {
+    fake()
+    configureWriteLock({ ttlMs: 30_000 })
+    const fn = vi.fn(async (): Promise<L.MatchResult> => { throw new Error('读失败') })
+    const t = await sentOk(fn)
+    expect(lockOf(PA)?.lastVerify).toBe('failed')
+    expect(lockOf(PA)?.settling).toBe(true)
+    await vi.advanceTimersByTimeAsync(5_000 + 20_000) // 第 3 次退避（60 秒）排不进 30 秒有效期
+    expect(fn).toHaveBeenCalledTimes(3)
+    expect(lockOf(PA)?.settling).toBe(false)
+    const exp = lockOf(PA)!.expiresAt!
+    expect(L.endOf(KEY)).toBeNull()
+    await vi.advanceTimersByTimeAsync(30_000)
+    expect(lockOf(PA)).toBeNull()
+    expect(L.endOf(KEY)).toMatchObject({ expiresAt: exp, how: 'expired', lastVerify: 'failed' })
+    void t
+  })
+  it('settling：第二次核对一致即放锁，endOf 记 applied；没有核对方式的锁不算 settling', async () => {
+    fake()
+    let n = 0
+    await sentOk(vi.fn(async (): Promise<L.MatchResult> => ++n >= 2))
+    const exp = lockOf(PA)!.expiresAt!
+    expect(lockOf(PA)?.settling).toBe(true)
+    await vi.advanceTimersByTimeAsync(5_000)
+    expect(lockOf(PA)).toBeNull()
+    expect(L.endOf(KEY)).toMatchObject({ expiresAt: exp, how: 'applied' })
+    const t = take()
+    claim(t)
+    markSent(t, Promise.resolve(), REC)
+    settle(t, 'ok')
+    await vi.advanceTimersByTimeAsync(0)
+    expect(lockOf(PA)?.verifiable).toBe(false)
+    expect(lockOf(PA)?.settling).toBe(false)
+  })
   it('无法核对也退避；某次核对一致即放锁、不再排后续', async () => {
     fake()
     let n = 0

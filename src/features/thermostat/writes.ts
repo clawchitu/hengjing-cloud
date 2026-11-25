@@ -50,6 +50,8 @@ export interface WriteResult {
   fields?: Record<string, FieldResult>
   /** 写锁没等到有效的一致核对就放开了（有效期到期等）：已恢复下发，结果仍未确认 */
   ended?: 'expired'
+  /** 写锁还在自动核对（LockInfo.settling）：界面只显示「正在核对…」，verdict / fields 留着，退避用完或到期后才显示 */
+  settling?: boolean
 }
 
 /** 本标签正在进行的一次下发（只用于界面阶段展示；互斥靠写锁） */
@@ -247,8 +249,8 @@ export async function runOp<P, L>(o: OpSpec<P, L>): Promise<RunResult> {
             // 已下发（success）的这次，或之前核对过不一致、后来才一致：提示成功（在原项目时清结果条，不在时把成功留给原项目）；
             // 结果未知后第一次核对就一致：结果记为一致（与之前相同，不另弹提示）
             if (cur?.outcome === 'ok' || (cur?.verdict && cur.verdict !== 'applied')) {
-              if (visible()) { say(o.okText); clearKey() } else patch({ readback: 'ok', verdict: 'applied', fields: det.fields, text: o.okText })
-            } else patch({ readback: 'ok', verdict: 'applied', fields: det.fields })
+              if (visible()) { say(o.okText); clearKey() } else patch({ readback: 'ok', verdict: 'applied', fields: det.fields, text: o.okText, settling: false })
+            } else patch({ readback: 'ok', verdict: 'applied', fields: det.fields, settling: false })
           }
           try { o.onApplied?.() } catch { /* 页面回调出错不影响锁 */ }
           firstCheck('applied')
@@ -261,13 +263,16 @@ export async function runOp<P, L>(o: OpSpec<P, L>): Promise<RunResult> {
       if (!info || info.key !== token.key) {
         offLock()
         candidate = null
-        if (!applied && !failed && sameSession()) patch({ ended: 'expired' })
+        if (!applied && !failed && sameSession()) patch({ ended: 'expired', settling: false })
         firstCheck(null)
         return
       }
       if (info.lastVerify === seen.v && info.lastFields === seen.f) {
         // 核对结束但没有新的认可结论（中止等）：恢复「正在核对」之前的显示
         if (!info.verifying && before !== null) { const b = before; before = null; if (sameSession()) patch({ readback: b }) }
+        // 结论没变、但自动核对结束了（退避用完 / 来不及再排）：改显示最近一次结论
+        const cur = results.get(key)
+        if (cur && cur.settling && !info.settling && sameSession()) patch({ settling: false })
         return
       }
       before = null
@@ -281,7 +286,8 @@ export async function runOp<P, L>(o: OpSpec<P, L>): Promise<RunResult> {
       const verdict: FieldResult = vals.length ? verdictOf(vals)
         : info.lastVerify === 'mismatch' ? 'unchanged' : info.lastVerify === 'unverifiable' ? 'unverifiable' : 'unknown'
       const threw = lastThrew && (info.lastVerify === 'failed' || info.lastVerify === 'offline')
-      if (sameSession()) patch(threw ? { readback: 'fail', verdict: 'unknown', fields: info.lastFields } : { readback: 'ok', verdict, fields: info.lastFields })
+      // 还在自动核对（settling）时结论先记下、不显示（界面按 settling 显示「正在核对…」）
+      if (sameSession()) patch(threw ? { readback: 'fail', verdict: 'unknown', fields: info.lastFields, settling: info.settling } : { readback: 'ok', verdict, fields: info.lastFields, settling: info.settling })
       firstCheck(verdict)
     })
     let outcome: Outcome

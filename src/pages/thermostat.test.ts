@@ -24,7 +24,7 @@ import { __resetSessionViewForTests } from '../data/session'
 import { __resetWritesForTests, LIMITS, realSource as thermoRealSource } from '../features/thermostat'
 import Layout from '../components/Layout'
 import { OrgGate } from '../app/OrgGate'
-import { __resetWriteLockForTests, configureWriteLock, lockOf as lockOfKey, subscribe as subscribeLock, acquire as acquireLock, release as releaseLock, STORAGE_PREFIX, verify as verifyLock } from '../api/writeLock'
+import { __resetWriteLockForTests, configureWriteLock, lockOf as lockOfKey, subscribe as subscribeLock, acquire as acquireLock, release as releaseLock, STORAGE_PREFIX, verify as verifyLock, RETRY_DELAYS_MS } from '../api/writeLock'
 import Thermostat from './Thermostat'
 
 beforeAll(() => {
@@ -137,6 +137,14 @@ async function poll(next: object[]) {
   await flush()
 }
 const confirmOk = async () => fireEvent.click(within(await dialog()).getByRole('button', { name: '确认下发' }))
+/**
+ * 假时钟（跟着真实时间走，waitFor、假后端照常用），需要时快进。写锁首次回读不是已生效时按 5 / 20 / 60 秒自动再核对，
+ * 退避用完才显示四态结论：断言最终结论的用例先 fakeClock()，再 runRetries() 把退避真跑完
+ */
+const fakeClock = () => vi.useFakeTimers({ shouldAdvanceTime: true, toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'] })
+const advance = (ms: number) => act(async () => { await vi.advanceTimersByTimeAsync(ms) })
+/** 把自动再核对（5 / 20 / 60 秒）跑完：每次退避到点后等那次核对读完 */
+async function runRetries() { for (const d of RETRY_DELAYS_MS) { await advance(d); await flush() } }
 
 async function open(project: { id: string } = P1) {
   localStorage.setItem('hjc-project', project.id)
@@ -164,7 +172,7 @@ beforeEach(() => {
   localStorage.clear(); sessionStorage.clear()
   __resetHttpForTests(); __resetSessionForTests(); __resetSessionViewForTests(); __resetCurrentForTests(); __resetWritesForTests(); __resetWriteLockForTests(); clearTokens()
 })
-afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.restoreAllMocks(); setConfig(null) })
+afterEach(() => { cleanup(); vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks(); setConfig(null) })
 
 describe('读取（ctrl 200）', () => {
   it('房间卡：末端按 end_modes 动态显示（选中蓝 / 未选中灰，开 / 关取 switch），风速档位与自动，65536 隐藏，设定湿度去除', async () => {
@@ -269,9 +277,11 @@ describe('修改设定温度与节能（ctrl 201）', () => {
   })
 
   it('success 但回读设备未变化：只算已下发，不提示成功，卡片显示「指令已下发，设备状态暂未变化」，草稿保留、写锁保持', async () => {
+    fakeClock()
     const be = backend({ '/ctrl/room-temperature-set': ok201NoApply })
     await draftAndSend()
     await confirmOk()
+    await flush(); await runRetries() // 把自动再核对（5 / 20 / 60 秒）跑完，再断言最终显示
     await waitFor(() => expect(within(card('客厅')).getAllByRole('alert').map((a) => a.textContent).join()).toContain('指令已下发，设备状态暂未变化'))
     expect(writes(be)).toHaveLength(1)
     expect(toasts()).not.toContain('已生效')
@@ -548,6 +558,7 @@ describe('结果：失败、结果未知与回读', () => {
   })
 
   it('504：结果未知（不说失败）；写锁自动核对，回读进行中 → 读到与下发值不一致 → 保持暂停下发，草稿保留、没有重试', async () => {
+    fakeClock()
     let wrote = false
     const slowRead = deferred(() => reply200(rooms))
     const be = backend({
@@ -560,6 +571,7 @@ describe('结果：失败、结果未知与回读', () => {
     expect(toasts()).toContain('客厅 下发结果未知')
     expect(toasts()).not.toContain('下发失败')
     await slowRead.release()
+    await flush(); await runRetries() // 把自动再核对（5 / 20 / 60 秒）跑完，再断言最终显示
     await waitFor(() => expect(within(card('客厅')).getAllByRole('alert').map((a) => a.textContent).join()).toContain('指令已下发，设备状态暂未变化'))
     expect(document.querySelector('[data-lock="unknown"]')).toBeTruthy()
     expect(card('客厅').textContent).toContain('设定温度 25.5 → 26.0°C')
@@ -568,6 +580,7 @@ describe('结果：失败、结果未知与回读', () => {
     expect(writes(be)).toHaveLength(1)
   })
   it('504 且回读失败：说明无法核对，不给重试', async () => {
+    fakeClock()
     let fail = false
     backend({
       '/ctrl/room-temperature-set': () => { fail = true; return json({ code: 4, message: 'deadline exceeded' }, 504) },
@@ -575,6 +588,7 @@ describe('结果：失败、结果未知与回读', () => {
     })
     await draftAndSend()
     await confirmOk()
+    await flush(); await runRetries() // 把自动再核对（5 / 20 / 60 秒）跑完，再断言最终显示
     await waitFor(() => expect(within(card('客厅')).getAllByRole('alert').map((a) => a.textContent).join()).toContain('结果未知（回读失败）'))
     expect(within(card('客厅')).queryByRole('button', { name: '重试' })).toBeNull()
   })
@@ -816,6 +830,7 @@ describe('下发状态机：确认后新读、写后新读、会话、期限', (
   })
 
   it('锁定后重新挂载，首次读取 503 / 空列表：空态里也有锁提示和「核对」；503 按屏离线保持锁，读到一致才解锁', async () => {
+    fakeClock()
     let mode: 'normal' | 'down' | 'empty' | 'applied' = 'normal'
     let wrote = false
     backend({
@@ -826,6 +841,7 @@ describe('下发状态机：确认后新读、写后新读、会话、期限', (
     await draftAndSend()
     await confirmOk()
     await waitFor(() => expect(document.querySelector('[data-lock="unknown"]')).toBeTruthy())
+    await flush(); await runRetries() // 把自动再核对（5 / 20 / 60 秒）跑完，再断言最终显示
     const bar = () => document.querySelector('[data-lock="unknown"]') as HTMLElement
     fireEvent.click(rawButton('去首页'))
     await screen.findByText('首页内容')
@@ -849,6 +865,7 @@ describe('下发状态机：确认后新读、写后新读、会话、期限', (
     await waitFor(() => expect(document.querySelector('[data-lock]')).toBeNull())
   })
   it('写的过程中退出登录：旧操作不回读、不提示；同账号重新登录后看不到旧结果，锁仍在（success 只算已下发），核对一致后可以正常下发', async () => {
+    fakeClock()
     const slow = deferred(ok201)
     const be = backend({ '/ctrl/room-temperature-set': slow.handler })
     await draftAndSend()
@@ -860,6 +877,7 @@ describe('下发状态机：确认后新读、写后新读、会话、期限', (
     await flush(80)
     expect(be.callsTo('/ctrl/room-temperature-data-get').length).toBe(readsAtLogout) // 没用（新）凭据回读
     expect(toasts()).not.toContain('已下发')
+    await flush(); await runRetries() // 把自动再核对（5 / 20 / 60 秒）跑完，再断言最终显示
     await act(async () => { await signIn('u', 'pw', true) })
     await screen.findByText('客厅')
     expect(card('客厅').textContent).not.toContain('已下发')
@@ -963,11 +981,13 @@ describe('#35 评审修正', () => {
   })
 
   it('206 全部开启：记录确认后预检的目标房间 id 集合；回读只剩部分房间（其余都一致）→ 无法核对，不提示全部已生效、锁保持，记录带 roomIds', async () => {
+    fakeClock()
     const be = backend({ '/ctrl/project-room-switch-set': (c) => { const r = ok206(c); rooms = rooms.slice(0, 1); return r } })
     await openRooms()
     fireEvent.click(screen.getByRole('button', { name: '全部开启' }))
     await confirmOk()
     await waitFor(() => expect(writes(be)).toHaveLength(1))
+    await flush(); await runRetries() // 把自动再核对（5 / 20 / 60 秒）跑完，再断言最终显示
     const bar = await waitFor(() => { const b = document.querySelector('[data-result="all"]') as HTMLElement; expect(b?.textContent).toContain('该项暂无回读，无法确认'); return b })
     expect(bar.textContent).not.toContain('已生效')
     expect(toasts()).not.toContain('已生效')
@@ -977,6 +997,7 @@ describe('#35 评审修正', () => {
   })
 
   it('草稿冻结：已下发待核对期间，面板离线、目标房间缺失、回读失败、读到部分一致都不整理 / 清除草稿；写锁核对一致后才清，之后不复活', async () => {
+    fakeClock()
     let readFail = false
     backend({
       '/ctrl/room-temperature-set': ok201NoApply,
@@ -984,6 +1005,7 @@ describe('#35 评审修正', () => {
     })
     await draftAndSend()
     await confirmOk()
+    await flush(); await runRetries() // 把自动再核对（5 / 20 / 60 秒）跑完，再断言最终显示
     await waitFor(() => expect(within(card('客厅')).getAllByRole('alert').map((a) => a.textContent).join()).toContain('指令已下发，设备状态暂未变化'))
     const kept = () => expect(card('客厅').textContent).toContain('设定温度 25.5 → 26.0°C')
     kept()
@@ -1057,9 +1079,11 @@ describe('#35 第二轮：206 目标集合、到期后草稿保留', () => {
 
   /** 下发温度 +0.5，设备未生效（锁保持），然后让写锁过期：把时钟拨过有效期再点「核对」（核对前查到期 → 到期放锁 + 强制重读） */
   async function sendThenExpire(during: object[]) {
+    fakeClock()
     const be = backend({ '/ctrl/room-temperature-set': ok201NoApply })
     await draftAndSend()
     await confirmOk()
+    await flush(); await runRetries() // 把自动再核对（5 / 20 / 60 秒）跑完，再断言最终显示
     await waitFor(() => expect(within(card('客厅')).getAllByRole('alert').map((a) => a.textContent).join()).toContain('指令已下发，设备状态暂未变化'))
     await poll(during)
     const t = Date.now() + 3 * 60_000
@@ -1105,19 +1129,23 @@ describe('#35 第二轮：206 目标集合、到期后草稿保留', () => {
 
 describe('#35 第三轮：回读 ID 歧义、重新下发中止、跨项目', () => {
   it('201 写后回读里目标设备 ID 重复（第一条恰好一致）：无法核对，不提示成功、锁保持、草稿保留', async () => {
+    fakeClock()
     backend({ '/ctrl/room-temperature-set': (c) => { ok201(c); rooms = [rooms[0], { ...ROOM }, OFF_ROOM]; return ok201NoApply() } })
     await draftAndSend()
     await confirmOk()
+    await flush(); await runRetries() // 把自动再核对（5 / 20 / 60 秒）跑完，再断言最终显示
     await waitFor(() => expect(within(card('客厅')).getAllByRole('alert').map((a) => a.textContent).join()).toContain('该项暂无回读，无法确认'))
     expect(toasts()).not.toContain('已生效')
     expect(document.querySelector('[data-lock="unknown"]')).toBeTruthy()
     expect(card('客厅').querySelector('[data-pending]')).toBeTruthy()
   })
   it('206 写后回读里多出设备 ID 为 0 的房间（其余都一致）：无法核对，不提示全部已生效、锁保持', async () => {
+    fakeClock()
     backend({ '/ctrl/project-room-switch-set': (c) => { const r = ok206(c); rooms = [...rooms, { ...OFF_ROOM, id: 0, switch: 1 }]; return r } })
     await openRooms()
     fireEvent.click(screen.getByRole('button', { name: '全部开启' }))
     await confirmOk()
+    await flush(); await runRetries() // 把自动再核对（5 / 20 / 60 秒）跑完，再断言最终显示
     await waitFor(() => expect(document.querySelector('[data-result="all"]')?.textContent).toContain('该项暂无回读，无法确认'))
     expect(toasts()).not.toContain('已生效')
     expect(document.querySelector('[data-lock="unknown"]')).toBeTruthy()
@@ -1281,6 +1309,7 @@ describe('#35 第五轮：201 目标 ID 唯一、核对读数写缓存的时机'
     expect(roomTemp()).toBe('25.8°C') // 旧核对的读数没进缓存
   })
   it('核对被写锁认可但读取早于另一次更新的读数：按读取序号不覆盖更新的读数', async () => {
+    fakeClock()
     let wrote = false
     let n = 0
     const verify = deferred(() => reply200([{ ...ROOM, temperature: 30 }, OFF_ROOM]))
@@ -1294,6 +1323,7 @@ describe('#35 第五轮：201 目标 ID 唯一、核对读数写缓存的时机'
     await act(async () => { await client.refetchQueries({ type: 'active' }) }) // 之后发起的轮询先返回更新的读数
     await waitFor(() => expect(roomTemp()).toBe('20.0°C'))
     await verify.release() // 旧核对返回：不一致，写锁认可并记下逐字段
+    await flush(); await runRetries() // 把自动再核对（5 / 20 / 60 秒）跑完，再断言最终显示
     await waitFor(() => expect(within(card('客厅')).getAllByRole('alert').map((a) => a.textContent).join()).toContain('指令已下发，设备状态暂未变化'))
     expect(roomTemp()).toBe('20.0°C')
   })
@@ -1333,6 +1363,7 @@ describe('#35 第五轮：201 目标 ID 唯一、核对读数写缓存的时机'
   })
 
   it('核对被写锁认可（不一致）且是最新读数：认可之后写进缓存，卡片显示核对读到的读数', async () => {
+    fakeClock()
     let wrote = false
     backend({
       '/ctrl/room-temperature-set': () => { wrote = true; return ok201NoApply() },
@@ -1340,6 +1371,7 @@ describe('#35 第五轮：201 目标 ID 唯一、核对读数写缓存的时机'
     })
     await draftAndSend()
     await confirmOk()
+    await flush(); await runRetries() // 把自动再核对（5 / 20 / 60 秒）跑完，再断言最终显示
     await waitFor(() => expect(within(card('客厅')).getAllByRole('alert').map((a) => a.textContent).join()).toContain('指令已下发，设备状态暂未变化'))
     expect(roomTemp()).toBe('30.0°C')
   })
@@ -1347,6 +1379,7 @@ describe('#35 第五轮：201 目标 ID 唯一、核对读数写缓存的时机'
 
 describe('#35 第六轮：较旧的一致读数被更新的不一致读数取代', () => {
   it('核对 A 读到一致但返回晚、之后发起的 B 先返回不一致：不提示成功、不放锁、草稿保留；之后新读重核一致才放', async () => {
+    fakeClock()
     let wrote = false
     let n = 0
     const a = deferred(() => reply200([{ ...ROOM, setTemp: 26 }, OFF_ROOM]))
@@ -1361,6 +1394,7 @@ describe('#35 第六轮：较旧的一致读数被更新的不一致读数取代
     await act(async () => { await client.refetchQueries({ type: 'active' }) }) // B 之后发起、先返回：仍是 25.5（不一致）
     await flush()
     await a.release() // A 这时返回：读到 26（一致），但已被 B 取代
+    await flush(); await runRetries() // 把自动再核对（5 / 20 / 60 秒）跑完，再断言最终显示
     await waitFor(() => expect(within(card('客厅')).getAllByRole('alert').map((x) => x.textContent).join()).toContain('指令已下发，设备状态暂未变化'))
     expect(toasts()).not.toContain('已生效')
     expect(document.querySelector('[data-lock="unknown"]')).toBeTruthy()
@@ -1392,6 +1426,7 @@ describe('#35 第六轮：较旧的一致读数被更新的不一致读数取代
     await waitFor(() => expect(interval()).toContain(15_000)) // 核对结束：恢复
   })
   it('核对 A 读到一致时，之后发起的 B 还在途：A 同样不算已生效', async () => {
+    fakeClock()
     let wrote = false
     let n = 0
     const a = deferred(() => reply200([{ ...ROOM, setTemp: 26 }, OFF_ROOM]))
@@ -1406,6 +1441,7 @@ describe('#35 第六轮：较旧的一致读数被更新的不一致读数取代
     const bDone = act(async () => { await client.refetchQueries({ type: 'active' }) }) // B 发起，卡住
     await waitFor(() => expect(n).toBe(2))
     await a.release()
+    await flush(); await runRetries() // 把自动再核对（5 / 20 / 60 秒）跑完，再断言最终显示
     await waitFor(() => expect(within(card('客厅')).getAllByRole('alert').map((x) => x.textContent).join()).toContain('指令已下发，设备状态暂未变化'))
     expect(toasts()).not.toContain('已生效')
     expect(document.querySelector('[data-lock="unknown"]')).toBeTruthy()
@@ -1487,6 +1523,7 @@ describe('房间开关未上报（features.roomSwitchReported = false，后端 1
   })
 
   it('点「开」：确认后发 201 switch = 1；回读读到 0 也不判「未变化」，记无法核对、锁保持', async () => {
+    fakeClock()
     const be = backend({ '/ctrl/room-temperature-set': ok201NoApply })
     await open()
     await screen.findByText('主卧')
@@ -1496,9 +1533,149 @@ describe('房间开关未上报（features.roomSwitchReported = false，后端 1
     fireEvent.click(within(dlg).getByRole('button', { name: '确认下发' }))
     await waitFor(() => expect(writes(be)).toHaveLength(1))
     expect(body201(writes(be)[0])).toMatchObject({ switch: 1, temperature: -1, eco: -1, endModes: [] })
+    await flush(); await runRetries() // 把自动再核对（5 / 20 / 60 秒）跑完，再断言最终显示
     await waitFor(() => expect(card('主卧').textContent).toContain('该项暂无回读，无法确认'))
     expect(card('主卧').textContent).toContain('设备暂不回报开关状态，2 分钟后可再次操作')
     expect(card('主卧').textContent).not.toContain('设备状态暂未变化')
     expect(toasts()).not.toContain('已生效')
+  })
+})
+
+describe('首次回读不一致：正在核对（赤兔 11/25：退避都用完仍不一致才报结论）', () => {
+  /** 记录过程中结果条与锁提示出现过的所有文案 */
+  function recordTexts() {
+    const seen: string[] = []
+    const grab = () => { for (const el of document.querySelectorAll('.te-bar, [data-lock]')) { const t = el.textContent ?? ''; if (t && seen[seen.length - 1] !== t && !seen.includes(t)) seen.push(t) } }
+    const mo = new MutationObserver(grab)
+    mo.observe(document.body, { subtree: true, childList: true, characterData: true, attributes: true })
+    grab()
+    return { all: () => { grab(); return seen.join('\n') }, stop: () => mo.disconnect() }
+  }
+  /** 写后第 n 次读 200（1 起算）返回什么 */
+  function backendAfterWrite(nth: (n: number) => Response) {
+    let wrote = false
+    let n = 0
+    const be = backend({
+      '/ctrl/room-temperature-set': () => { wrote = true; return ok201NoApply() },
+      '/ctrl/room-temperature-data-get': () => (wrote ? nth(++n) : reply200(rooms)),
+    })
+    return { be, reads: () => n }
+  }
+  const applied = () => reply200([{ ...ROOM, setTemp: 26 }, OFF_ROOM])
+  const old = () => reply200([ROOM, OFF_ROOM])
+
+  const verdictBar = () => within(card('客厅')).queryAllByRole('alert').map((a) => a.textContent).join()
+
+  it('第一次回读旧值、第二次回读新值：整个过程只出现「正在核对」和「已生效」，中间不出现「未变化」', async () => {
+    fakeClock()
+    const { be, reads } = backendAfterWrite((n) => (n === 1 ? old() : applied()))
+    await draftAndSend()
+    const rec = recordTexts()
+    await confirmOk()
+    await waitFor(() => expect(reads()).toBeGreaterThanOrEqual(1))
+    await flush()
+    // 首次回读不一致：仍显示正在核对，锁保持
+    expect(card('客厅').textContent).toContain('已下发，正在核对')
+    expect(document.querySelector('[data-lock="unknown"]')).toBeTruthy()
+    await advance(RETRY_DELAYS_MS[0]) // 第一次退避（5 秒）读到新值
+    await waitFor(() => expect(toasts()).toContain('客厅 已生效'))
+    await waitFor(() => expect(document.querySelector('[data-lock]')).toBeNull())
+    expect(reads()).toBeGreaterThanOrEqual(2)
+    const all = rec.all()
+    rec.stop()
+    expect(all).toContain('正在核对')
+    expect(all).not.toContain('未变化')
+    expect(all).not.toContain('未生效')
+    expect(all).not.toContain('结果未知')
+    expect(toasts()).not.toContain('未变化')
+    expect(writes(be)).toHaveLength(1)
+  })
+
+  it('三次退避都不一致：5 / 20 / 60 秒退避用完前一直是「正在核对」，用完才显示「指令已下发，设备状态暂未变化」，锁保持', async () => {
+    fakeClock()
+    const { reads } = backendAfterWrite(() => old())
+    await draftAndSend()
+    const rec = recordTexts()
+    await confirmOk()
+    await waitFor(() => expect(reads()).toBeGreaterThanOrEqual(1))
+    await flush()
+    for (const d of RETRY_DELAYS_MS.slice(0, -1)) {
+      expect(card('客厅').textContent).toContain('已下发，正在核对')
+      await advance(d)
+      await flush()
+    }
+    expect(verdictBar()).not.toContain('暂未变化') // 第三次退避（60 秒）之前仍不报结论
+    await advance(RETRY_DELAYS_MS[RETRY_DELAYS_MS.length - 1])
+    await waitFor(() => expect(verdictBar()).toContain('指令已下发，设备状态暂未变化'))
+    expect(reads()).toBeGreaterThanOrEqual(1 + RETRY_DELAYS_MS.length) // 首次自动核对 + 三次退避（期间还有页面轮询）
+    const all = rec.all()
+    rec.stop()
+    const before = all.slice(0, all.indexOf('暂未变化'))
+    expect(before).toContain('正在核对')
+    expect(before).not.toContain('结果未知')
+    expect(document.querySelector('[data-lock="unknown"]')!.textContent).toContain('指令已下发，设备状态暂未变化')
+    expect(card('客厅').textContent).toContain('设定温度 25.5 → 26.0°C') // 草稿保留
+  })
+
+  it('读不到（回读失败）：同样等退避跑完才报「结果未知（回读失败）」', async () => {
+    fakeClock()
+    const { reads } = backendAfterWrite(() => json({ code: 14, message: 'x' }, 503))
+    await draftAndSend()
+    const rec = recordTexts()
+    await confirmOk()
+    await waitFor(() => expect(reads()).toBeGreaterThanOrEqual(1))
+    await flush()
+    expect(card('客厅').textContent).toContain('已下发，正在核对')
+    expect(card('客厅').textContent).not.toContain('结果未知')
+    await advance(RETRY_DELAYS_MS[0] + RETRY_DELAYS_MS[1])
+    await flush()
+    expect(card('客厅').textContent).not.toContain('结果未知')
+    await runRetries()
+    await waitFor(() => expect(verdictBar()).toContain('结果未知（回读失败）'))
+    const all = rec.all()
+    rec.stop()
+    expect(all.slice(0, all.indexOf('结果未知'))).toContain('正在核对')
+    expect(all).not.toContain('未变化')
+  })
+
+  it('有效期 30 秒、第三次退避（60 秒）排不进有效期：第二次退避仍不一致就显示「指令已下发，设备状态暂未变化」，锁保持到到期', async () => {
+    fakeClock()
+    const { reads } = backendAfterWrite(() => old())
+    await draftAndSend()
+    configureWriteLock({ ttlMs: 30_000 })
+    await confirmOk()
+    await waitFor(() => expect(reads()).toBeGreaterThanOrEqual(1))
+    await flush()
+    await advance(RETRY_DELAYS_MS[0])
+    await flush()
+    expect(card('客厅').textContent).toContain('已下发，正在核对')
+    await advance(RETRY_DELAYS_MS[1])
+    await waitFor(() => expect(verdictBar()).toContain('指令已下发，设备状态暂未变化'))
+    expect(document.querySelector('[data-lock="unknown"]')).toBeTruthy() // 锁照旧保持到到期
+  })
+
+  it('首次回读已一致：直接「已生效」，不等退避', async () => {
+    backendAfterWrite(() => applied())
+    await draftAndSend()
+    await confirmOk()
+    await waitFor(() => expect(toasts()).toContain('客厅 已生效')) // 真实时钟 1 秒内：没等 5 秒退避
+    expect(document.querySelector('[data-lock]')).toBeNull()
+  })
+
+  it('锁提示：退避期间手动「核对」仍不一致，只说稍后自动再核对，不报未变化', async () => {
+    fakeClock()
+    const { reads } = backendAfterWrite(() => old())
+    await draftAndSend()
+    await confirmOk()
+    await waitFor(() => expect(reads()).toBeGreaterThanOrEqual(1))
+    await flush()
+    const bar = document.querySelector('[data-lock="unknown"]') as HTMLElement
+    expect(bar.textContent).toContain('已下发，正在核对…')
+    expect(bar.textContent).not.toContain('未变化')
+    const n = reads()
+    fireEvent.click(within(bar).getByRole('button', { name: '核对' }))
+    await waitFor(() => expect(reads()).toBe(n + 1))
+    await waitFor(() => expect(toasts()).toContain('暂未核对一致，稍后自动再核对'))
+    expect(toasts()).not.toContain('未变化')
   })
 })
