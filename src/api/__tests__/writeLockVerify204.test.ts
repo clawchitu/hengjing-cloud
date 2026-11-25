@@ -39,6 +39,17 @@ describe('matchRunningCtrl（204 → 210）', () => {
     expect(matchRunningCtrl(rec({ dewPoint: 13.05 }), live, ON)).toMatchObject({ verdict: 'unchanged' })
     expect(matchRunningCtrl(rec({ dewPoint: 12.95 }), live, ON)).toMatchObject({ verdict: 'unchanged' })
   })
+  it('浮点边界不受二进制误差影响：正好差 0.05 一律判未变化；经 32 位 float 编解码后的读数判一致', () => {
+    for (const [got, want] of [[2, 2.05], [2.05, 2], [0.1, 0.15], [35, 35.05], [69.95, 70], [13.5, 13.55]]) {
+      expect(matchRunningCtrl(rec({ humiditySet: want }), { ...live, controlType: 0, humiditySet: got }, ON)).toMatchObject({ verdict: 'unchanged' })
+      expect(matchRunningCtrl(rec({ humiditySet: want }), { ...live, controlType: 0, humiditySet: Math.fround(got) }, ON)).toMatchObject({ verdict: 'unchanged' })
+    }
+    for (const v of [13.05, 12.5, 21.3, 8.1, 15.9, 0.1, 65.7]) {
+      expect(matchRunningCtrl(rec({ dewPoint: v }), { ...live, dewPoint: Math.fround(v) }, ON)).toMatchObject({ verdict: 'applied' })
+      expect(matchRunningCtrl(rec({ dewPoint: v }), { ...live, dewPoint: Math.fround(v + 0.04) }, ON)).toMatchObject({ verdict: 'applied' })
+      expect(matchRunningCtrl(rec({ dewPoint: v }), { ...live, dewPoint: Math.fround(v + 0.06) }, ON)).toMatchObject({ verdict: 'unchanged' })
+    }
+  })
   it('枚举读数 -1 / 65536 → 无法核对（不判未变化）', () => {
     for (const bad of [-1, 65536]) {
       expect(matchRunningCtrl(rec({ windSpeed: 1 }), { ...live, windSpeed: bad }, ON)).toMatchObject({ verdict: 'unverifiable' })

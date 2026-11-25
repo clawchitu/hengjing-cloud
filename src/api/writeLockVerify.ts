@@ -124,6 +124,12 @@ const RUNNING_READ: Record<string, (r: Running) => unknown> = {
   switch: (r) => r.switch ?? 0,
 }
 const SETPOINT = new Set(['dewPoint', 'humiditySet'])
+/**
+ * 204 的设定值比较：先按 0.01 取整成整数再比，差小于 5（即 0.05）判一致，差正好 0.05 判不一致。
+ * 直接用浮点差会在边界上误判（如 2.05 - 2 = 0.04999…）；取整也吸收了 proto float（32 位）编解码的误差（如 13.05 → 13.0500002）。
+ * 201 仍用 sameTemp，不在这里改。
+ */
+const sameSetpoint = (a: number, b: number) => Math.abs(Math.round(a * 100) - Math.round(b * 100)) < 5
 
 /**
  * 204（新风运行设置）→ 210 回读，逐字段四态，整体按 verdictOf。
@@ -132,7 +138,7 @@ const SETPOINT = new Set(['dewPoint', 'humiditySet'])
  * - control_type / switch / wind_speed 是 proto3 标量，0 在线上省略，解码出的 0 是真实读数，直接比对；读到 -1、65536 或非有限数
  *   按设备没回报，记无法核对（同文件头口径，也和 blocked204 把 -1 当未初始化一致）。
  * - dew_point / humidity_set 读数为 -1（界面显示 --）、65536 或非有限数 → 无法核对；读数 control_type = -1（露点与湿度均不可控）时
- *   这两项也无法核对。浮点按 0.05 比较。
+ *   这两项也无法核对。浮点按 0.05 比较（sameSetpoint：取整到 0.01 后比，正好差 0.05 判不一致）。
  * - 210 没有 is_connected：设备在线与否由调用方另读 202 判断并传入。connected 必须明确为 true 才比对，否则（false 或漏传）
  *   可核对字段记结果未知，同 201 的 isConnected !== true。
  * - 设备 id 不是正整数 → false。
@@ -153,7 +159,7 @@ export function matchRunningCtrl(
     if (!validReading(got)) { fields[field] = 'unverifiable'; continue }
     if (SETPOINT.has(field)) {
       if ((r.controlType ?? 0) === -1) { fields[field] = 'unverifiable'; continue }
-      fields[field] = sameTemp(got, v) ? 'applied' : 'unchanged'
+      fields[field] = sameSetpoint(got, v) ? 'applied' : 'unchanged'
     } else fields[field] = got === v ? 'applied' : 'unchanged'
   }
   return detail(fields)

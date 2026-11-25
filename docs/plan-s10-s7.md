@@ -31,9 +31,9 @@
 
 范围：
 - `src/api/config.ts`：`RuntimeConfig` 加 `features`（见 2.1 的开关表），`public/config.js` 补注释。各层按键合并，非法值回退默认值。
-- `src/api/writeLockVerify.ts`：`VERIFIABLE_FIELDS[204] = ['controlType', 'dewPoint', 'humiditySet', 'windSpeed', 'switch']`；新增 `matchRunningCtrl(rec, reply210)`，逐字段四态。文件头里「204 → 210，本文件暂不提供」那句同步改掉。
+- `src/api/writeLockVerify.ts`：`VERIFIABLE_FIELDS[204] = ['controlType', 'dewPoint', 'humiditySet', 'windSpeed', 'switch']`；新增 `matchRunningCtrl(rec, reply210, { connected })`，逐字段四态；`connected` 必填，由核对器另读 202 得到，只有明确为 `true` 才比对。文件头里「204 → 210，本文件暂不提供」那句同步改掉。
 - `src/api/writeLock.ts` 的 `checkSentRecord`：204 的 `deviceId` 为空或不是正整数就拒绝发送；核对目标至少改一项，枚举字段取值合法。
-- `src/api/writeLockVerify.ts` 新增 `blocked204(reading210, changed, policy)`：发送前的读数检查，规则见 2.3 末尾的 Fable 裁定。
+- `src/api/writeLockVerify.ts` 新增 `blocked204(reading210, deviceId, changed, policy)`：读数为空或 `reading210.id` 不等于 `deviceId` 一律拦下；其余发送前的读数检查，规则见 2.3 末尾的 Fable 裁定。
 - 204 核对器不在 P0 注册，S10c 在 `src/app/writeLockSetup.ts` 注册（别处不注册）。
 - `src/features/thermostat/writes.ts` 的 `OpSpec`：加可选的 `noun`（默认「面板」），预检和回读的提示文案用它。S9 不传，行为不变。S10 传「新风设置」。
 
@@ -42,7 +42,8 @@
 - 回包的 `id` 不等于目标设备 id（含空回包、只回了错误文案的回包）：全部字段无法核对。
 - `controlType`、`switch`、`windSpeed` 是 proto3 标量，0 在线上省略，解码出的 0 是真实读数，直接比对。
 - `dewPoint`、`humiditySet` 读数为 -1（界面显示 `--`）或 65536：无法核对。浮点按 0.05 比较。
-- 210 没有 `is_connected`。设备离线由 S10c 的核对器另读 202 判断，离线时可核对字段记结果未知。
+- 210 没有 `is_connected`。设备在线由 S10c 的核对器另读 202 判断并传入 `connected`；不是明确的 `true`（离线或漏传）时，可核对字段记结果未知。
+- `control_type`、`switch`、`wind_speed` 读到 -1、65536 记无法核对。设定值先取整到 0.01 再比，正好差 0.05 判不一致。
 
 验收：
 - `features` 不写时全部取默认值；写了非法值不报错、取默认值。
