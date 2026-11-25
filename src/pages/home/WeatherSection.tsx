@@ -83,8 +83,8 @@ export function CityPicker({ city, onPick }: { city: City; onPick: (code: string
   // 清空后的两帧内（restore 为真），高亮不是默认高亮就设回去；用户按键动了高亮就不再恢复
   const restore = useRef(false)
   useEffect(() => {
-    if (restore.current && hl !== defaultHl) setHl(defaultHl)
-  }, [hl, defaultHl])
+    if (restore.current && !searching && hl !== defaultHl) setHl(defaultHl)
+  }, [hl, defaultHl, searching])
 
   const hlNow = useRef(hl)
   const viewNow = useRef(view)
@@ -186,7 +186,7 @@ export function CityPicker({ city, onPick }: { city: City; onPick: (code: string
               onChange={(e) => {
                 const v = e.target.value
                 setQ(v)
-                if (v.trim()) setHl(searchCities(v)[0]?.city.code ?? '')
+                if (v.trim()) { restore.current = false; setHl(searchCities(v)[0]?.city.code ?? '') }
                 else {
                   restore.current = true
                   setHl(defaultHl)

@@ -358,7 +358,7 @@ describe('城市选择：省 → 市两级', () => {
     fireEvent.change(input(), { target: { value: '' } })
     expect(texts()[0]).toBe('江苏省全部省份')
     expect(selected()).toBe('无锡市')
-    fireEvent.change(input(), { target: { value: '大理' } })
+    fireEvent.change(input(), { target: { value: '大理' } }) // 清空后紧接着再搜：不被「恢复高亮」抢回去
     fireEvent.keyDown(input(), { key: 'Enter' })
     expect(onPick).toHaveBeenCalledExactlyOnceWith('532900')
   })
