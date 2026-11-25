@@ -491,12 +491,14 @@ export default function FreshAir() {
   const writable = writableReason()
 
   // 草稿带上所属项目：切换项目即作废。pending：已交给一次下发、待确认（与写锁分开维护）
-  const [draftState, setDraftState] = useState<{ pid: string; d: FaDraft | null; pending?: boolean }>({ pid: '', d: null })
+  // notice：整理草稿时清除的原因（n 递增，effect 只提示一次）
+  const [draftState, setDraftState] = useState<{ pid: string; d: FaDraft | null; pending?: boolean; notice?: { n: number; text: string } }>({ pid: '', d: null })
+  const noticeSeq = draftState.notice?.n ?? 0
   const pid = project?.id ?? ''
   const rawDraft = draftState.pid === pid ? draftState.d : null
   const frozen = !!rawDraft && draftState.pending === true
-  const setDraft = (d: FaDraft | null) => setDraftState({ pid, d })
-  const discard = () => setDraftState((st) => (st.pid === pid ? { pid, d: null } : st))
+  const setDraft = (d: FaDraft | null) => setDraftState((st) => ({ pid, d, notice: st.notice }))
+  const discard = () => setDraftState((st) => (st.pid === pid ? { pid, d: null, notice: st.notice } : st))
   const markPending = (on: boolean) => setDraftState((st) => (st.pid === pid && st.d ? { ...st, pending: on } : st))
   const s = settings.kind === 'ready' ? settings.settings : null
   const ctx: FaCtx = { online: project?.online === true, fresh: settings.kind === 'ready' && !settings.staleError, connected: u?.connected === true, writable }
@@ -519,19 +521,26 @@ export default function FreshAir() {
     prevLock.current = lockKey
   }, [lockKey, refetch])
 
-  // 草稿生命周期：回读后读不到 / 不能设置 / 已生效的草稿真正清除（只整理当前选中设备的草稿；待确认期间不整理）
+  // 草稿生命周期：回读后读不到 / 不能设置 / 已生效的草稿真正清除（只整理当前选中设备的草稿；待确认期间不整理）。
+  // 读数变化后在渲染时直接写回整理结果（React「随输入调整状态」的做法，有条件、只在草稿确实变化时），清除原因记在状态里，
+  // 由下面的 effect 提示一次（effect 里不改状态）
   const draftOnSelected = !!rawDraft && u?.deviceId === rawDraft.deviceId
-  const settingsSettled = settings.kind !== 'loading'
+  if (rawDraft && !frozen) {
+    let next: FaDraft | null = rawDraft
+    let note = ''
+    if (view.kind === 'ready' && !units.some((x) => x.deviceId === rawDraft.deviceId)) { next = null; note = `新风设备${CLEARED_TEXT.gone}，未下发的修改已清除` }
+    else if (draftOnSelected && settings.kind !== 'loading') {
+      const r = reconcileDraft(rawDraft, s, ctx)
+      next = r.draft
+      if (r.cleared === 'gone' || r.cleared === 'blocked') note = `「${u?.name || '新风设备'}」${CLEARED_TEXT[r.cleared]}，未下发的修改已清除`
+    }
+    if (next !== rawDraft) setDraftState({ pid, d: next, ...(note ? { notice: { n: noticeSeq + 1, text: note } } : {}) })
+  }
+  const notice = draftState.notice
+  const shownNotice = useRef(0)
   useEffect(() => {
-    if (!rawDraft || frozen) return
-    if (view.kind === 'ready' && !units.some((x) => x.deviceId === rawDraft.deviceId)) { setDraftState({ pid, d: null }); showToast(`新风设备${CLEARED_TEXT.gone}，未下发的修改已清除`, true); return }
-    if (!draftOnSelected || !settingsSettled) return
-    const r = reconcileDraft(rawDraft, s, ctx)
-    if (r.draft === rawDraft) return
-    // 回读是外部数据源：读到新状态后同步整理草稿（只在草稿确实变化时）
-    setDraftState({ pid, d: r.draft })
-    if (r.cleared === 'gone' || r.cleared === 'blocked') showToast(`「${u?.name || '新风设备'}」${CLEARED_TEXT[r.cleared]}，未下发的修改已清除`, true)
-  }, [rawDraft, frozen, view.kind, units, draftOnSelected, settingsSettled, s, ctx.online, ctx.fresh, ctx.connected, ctx.writable, pid])
+    if (notice && notice.n > shownNotice.current) { shownNotice.current = notice.n; showToast(notice.text, true) }
+  }, [notice])
 
   /** 编辑一项；另一台设备还有未下发的修改时先确认放弃 */
   const onEdit = async (f: Field204, v: number) => {

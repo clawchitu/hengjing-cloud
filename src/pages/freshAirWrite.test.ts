@@ -257,6 +257,30 @@ describe('可改项', () => {
   })
 })
 
+describe('草稿生命周期', () => {
+  it('回读到改动项变得不能设置（风速 -1）：草稿清除并提示一次；回读已等于草稿：草稿清除、不提示', async () => {
+    backend()
+    await signIn('u', 'pw', true)
+    const client = mount(P12.id)
+    await waitFor(() => expect(within(panel()).queryByRole('group', { name: '风速' })).toBeTruthy())
+    fireEvent.click(opt('风速', '高'))
+    expect(panel().textContent).toContain('待下发：风速 自动 → 高')
+    r210 = S210({ windSpeed: -1 })
+    await act(async () => { await client.refetchQueries({ type: 'active' }) })
+    await waitFor(() => expect(panel().textContent).not.toContain('待下发'))
+    await flush(50)
+    expect(toastLog.filter((t) => t.includes('已不能设置'))).toHaveLength(1)
+    r210 = S210()
+    await act(async () => { await client.refetchQueries({ type: 'active' }) })
+    fireEvent.click(opt('风速', '高'))
+    r210 = S210({ windSpeed: 1 })
+    await act(async () => { await client.refetchQueries({ type: 'active' }) })
+    await waitFor(() => expect(panel().textContent).not.toContain('待下发'))
+    await flush(50)
+    expect(toastLog.filter((t) => t.includes('未下发的修改已清除'))).toHaveLength(1)
+  })
+})
+
 describe('确认：取消 / 离开 / 切项目', () => {
   it('点「取消」：不下发，草稿保留', async () => {
     const be = backend()
