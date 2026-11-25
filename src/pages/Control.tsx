@@ -282,7 +282,7 @@ export default function Control() {
   const shownLast = last?.map(shown) ?? null
   // 界面不显示项目 id（S13 走查）：同名项目用序号区分
   // 序号和项目列表用同一份（按整个集成项目算），确认框、结果表里的「X (2)」就是列表里勾的那个
-  const lastNames = codeNames
+  const lastNames = new Map((shownLast ?? []).map((r) => { const n = codeNames.get(r.code); return [r.code, n && (n === r.name || n.startsWith(r.name + ' (')) ? n : r.name] as const }))
   // 写锁结束了（核对一致放开 / 到期）：把这一行定下来并存进本标签页（刷新后也是最终结论）
   useEffect(() => {
     if (!last?.some((r) => settledRow(r))) return
