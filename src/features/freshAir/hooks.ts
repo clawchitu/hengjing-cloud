@@ -5,14 +5,15 @@
 // - 210 另外要求：项目 app_code == 12（独立空气系统）、设备 id 有效（来自 202，恰好出现一次）、202 里该设备在线。
 // 读数口径：
 // - 202 每 15 秒轮询，210 每 30 秒；上一次返回后才排下一次，标签页不可见时 TanStack 默认暂停；
-// - 最近一次读取是 503（控制屏未连接）时，之前的读数作废，返回 unavailable，不把旧数据当成当前值；
+// - 读取遇到 503（控制屏未连接）后，之前的读数作废：之后有更新的成功读取才显示，之间的 500 / 超时只显示错误；
 // - 210 回「该软件类型不支持此控制」是 unsupported（缓存成结果，不重试、不算故障）；
 // - 每次读取取递增序号，写缓存时缓存里已有更新的读数就不覆盖（putNewer，同 thermostat/hooks.ts）；
 //   useFreshRead 绑定发起时的会话代次，会话变了就丢弃结果。
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { useCallback } from 'react'
+import { useCallback, useEffect } from 'react'
 import { ApiError, isApiError } from '@/api/errors'
 import { queryKeys } from '@/api/query'
+import { isDeviceId } from '@/api/writeLock'
 import { can } from '@/data/session'
 import type { Project } from '@/data/org'
 import { isStandalone } from '@/data/org/capabilities'
@@ -52,9 +53,39 @@ export const putNewer = <T extends Seq>(old: T | undefined, next: T) => (old && 
 type UnitsData = UnitsResult & Seq
 type SettingsData = SettingsResult & Seq
 
-/** 最近一次读取失败且是 503：之前的数据作废 */
-const unavailableNow = (q: { error: unknown; errorUpdatedAt: number; dataUpdatedAt: number }) =>
-  isApiError(q.error) && q.error.kind === 'unavailable' && q.errorUpdatedAt >= q.dataUpdatedAt
+/**
+ * 503 之后旧数据作废（同 src/data/sensors/hooks.ts 的请求序号方案，按项目记）：202、210 的读取遇到 503，记下该项目的失效序号；
+ * 只有序号更大的成功结果才显示。之间遇到 500 / 超时 / ctrl 错误只显示错误，不恢复 503 之前的读数。
+ * 控制屏是项目级的，所以 202 的 503 也让该项目的 210 读数作废，反过来一样
+ */
+const invalid = new Map<string, number>()
+const invalidSeq = (pid: string) => invalid.get(pid) ?? 0
+const valid = (pid: string, d: Seq | undefined): boolean => d !== undefined && d.seq > invalidSeq(pid)
+/** 发起一次读取：取序号；503 时记失效序号 */
+async function runSeq<T>(key: readonly unknown[], pid: string, fn: () => Promise<T>): Promise<T & Seq> {
+  const seq = nextSeq(key)
+  try {
+    return { ...(await fn()), seq }
+  } catch (e) {
+    if (isApiError(e) && e.kind === 'unavailable' && seq > invalidSeq(pid)) invalid.set(pid, seq)
+    throw e
+  }
+}
+/** 仅供测试 */
+export const __resetFreshAirForTests = () => { invalid.clear(); startedSeq.clear() }
+
+/** 不能显示缓存时的状态：503 → unavailable；其他错误 → error；还没有结果 → loading */
+function noData(err: ApiError | null, retry: () => void) {
+  if (err?.kind === 'unavailable') return { kind: 'unavailable', retry } as const
+  return err ? ({ kind: 'error', error: err, retry } as const) : ({ kind: 'loading' } as const)
+}
+
+/** 缓存「新鲜」但已作废时（别的读取遇到 503），staleTime 内 TanStack 不会自己请求，这里主动重取一次（本查询出错时不重取，避免循环） */
+function useRefetchInvalid(active: boolean, pid: string, q: { data: Seq | undefined; isFetching: boolean; isError: boolean; refetch: () => unknown }) {
+  const stale = active && q.data !== undefined && !valid(pid, q.data) && !q.isFetching && !q.isError
+  const { refetch } = q
+  useEffect(() => { if (stale) void refetch() }, [stale, refetch])
+}
 
 // ---------------------------------------------------------------------------
 // 202
@@ -82,19 +113,19 @@ export function useUnits(project: FreshProject | null): UnitsView {
   const key = unitsKey(src.kind, pid)
   const q = useQuery({
     queryKey: key,
-    queryFn: async ({ signal }): Promise<UnitsData> => { const seq = nextSeq(key); return { ...(await src.units(pid, signal)), seq } },
+    queryFn: ({ signal }): Promise<UnitsData> => runSeq(key, pid, () => src.units(pid, signal)),
     enabled: canRead(project, src.kind) && permitted,
     staleTime: src.kind === 'real' ? 10_000 : Infinity,
     refetchInterval: src.kind === 'real' ? UNITS_POLL_MS : false,
   })
   const qRefetch = q.refetch
   const retry = useCallback(() => { void qRefetch() }, [qRefetch])
+  useRefetchInvalid(canRead(project, src.kind) && permitted, pid, q)
   if (!project || !pid) return { kind: 'no-project' }
   if (!canRead(project, src.kind)) return { kind: 'offline' }
   if (!permitted) return { kind: 'forbidden' }
-  if (unavailableNow(q)) return { kind: 'unavailable', retry }
   const err = q.error ? toApiError(q.error) : null
-  if (!q.data) return err ? { kind: 'error', error: err, retry } : { kind: 'loading' }
+  if (!q.data || !valid(pid, q.data)) return noData(err, retry)
   if (q.data.list.length === 0) return { kind: 'empty', updatedAt: q.dataUpdatedAt }
   return { kind: 'ready', units: q.data.list, updatedAt: q.dataUpdatedAt, staleError: err, retry }
 }
@@ -129,22 +160,22 @@ export function useSettings(project: FreshProject | null, unit: Pick<UnitView, '
   const key = settingsKey(src.kind, pid, deviceId ?? 0)
   const q = useQuery({
     queryKey: key,
-    queryFn: async ({ signal }): Promise<SettingsData> => { const seq = nextSeq(key); return { ...(await src.settings(pid, deviceId!, signal)), seq } },
+    queryFn: ({ signal }): Promise<SettingsData> => runSeq(key, pid, () => src.settings(pid, deviceId!, signal)),
     enabled: active && permitted,
     staleTime: src.kind === 'real' ? 10_000 : Infinity,
     refetchInterval: (query) => (src.kind === 'real' && query.state.data?.kind !== 'unsupported' ? SETTINGS_POLL_MS : false),
   })
   const qRefetch = q.refetch
   const retry = useCallback(() => { void qRefetch() }, [qRefetch])
+  useRefetchInvalid(active && permitted, pid, q)
   if (!project || !pid) return { kind: 'no-project' }
   if (!canRead(project, src.kind)) return { kind: 'offline' }
   if (!hasSettings(project)) return { kind: 'not-applicable' }
   if (deviceId === null) return { kind: 'no-device' }
   if (unit?.connected !== true) return { kind: 'device-offline' }
   if (!permitted) return { kind: 'forbidden' }
-  if (unavailableNow(q)) return { kind: 'unavailable', retry }
   const err = q.error ? toApiError(q.error) : null
-  if (!q.data) return err ? { kind: 'error', error: err, retry } : { kind: 'loading' }
+  if (!q.data || !valid(pid, q.data)) return noData(err, retry)
   if (q.data.kind === 'unsupported') return { kind: 'unsupported', message: q.data.message, detail: q.data.detail }
   return { kind: 'ready', settings: q.data.view, updatedAt: q.dataUpdatedAt, staleError: err, retry }
 }
@@ -165,13 +196,12 @@ export function useFreshRead(project: Pick<Project, 'id'> | null) {
   const pid = project?.id ?? ''
   return useCallback(async (deviceId: number | null, signal?: AbortSignal, opts: { defer?: boolean } = {}): Promise<FreshRead> => {
     if (!pid) throw new Error('没有当前项目')
-    if (deviceId === null || !Number.isSafeInteger(deviceId) || deviceId <= 0) throw new Error('没有有效的新风设备 id')
+    if (!isDeviceId(deviceId)) throw new Error('没有有效的新风设备 id')
     const session = currentSessionKey()
     const src = freshAirSource()
     const key = settingsKey(src.kind, pid, deviceId)
     await qc.cancelQueries({ queryKey: key, exact: true })
-    const seq = nextSeq(key)
-    const r = await src.settings(pid, deviceId, signal)
+    const { seq, ...r } = await runSeq(key, pid, () => src.settings(pid, deviceId, signal))
     if (signal?.aborted) throw new Error('读取已中止，结果已丢弃')
     if (currentSessionKey() !== session) throw new Error('读取期间登录状态已变化，结果已丢弃')
     const apply = () => {

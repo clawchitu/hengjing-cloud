@@ -209,12 +209,14 @@
 **【内部】**
 - 代码在 `src/features/freshAir/`：`model.ts`（202 → `UnitView`、210 → `SettingsView`）、`source.ts`（real / mock）、`hooks.ts`（`useUnits`、`useSettings`、`useFreshRead`）。这一段没有写函数，不发 204。
 - 设备 id 只从 202 取；202 里 id 不是正整数、或同一 id 出现多次的设备，`deviceId` 为 `null`，不读 210。
+- 202 里 `is_connected` 不是 true 的设备，`UnitView` 仍带着读数，`connected = false`；S10b 显示时要按 `connected` 隐藏这些读数或标明未连接，不能当成当前值。
 - 210 每一项标注三类：`settable`（可设置，0 是有效读数）、`unsettable`（读到 -1；`control_type = -1` 时露点、湿度连带不可设置，和 `settable204` 一致）、`invalid`（-100、65536、非有限数、枚举外的值）。
+- `invalid` 的项界面也禁用（`fieldBlock`，没有有效读数就不让改）；`settable204` 对 65536、非有限数不禁用，发送前兜底的 `blocked204` 因此比界面宽，这是有意的：界面更严，不会多发。
 - `control_type` 为 -1（或无效）时，`SettingsView.writeBlock` 非空，整个写入口禁用（S10a 任务要求）。**注意**：这比上面「风速、开关照常」和 `docs/plan-s10-s7.md` 2.3 更严；`blocked204` 发送前兜底仍按 2.3。两者取哪一个，待负责人确认，确认前界面按更严的 `writeBlock`。
 - 210 回包 id 与请求的设备 id 不符（含空回包）算读取失败，不当成读数。
 - 「不支持」的识别：回包只有 #2 文案且含「不支持此控制」（11/25 实测 240829001，app_code 1）。其他 ctrl 文案照常算错误。
 - 不发请求：没有项目、项目离线、没有 `/v1/ctrl/fresh-dehumidifier-get` 或 `/v1/ctrl/running-ctrl-get` 权限（返回 `forbidden`）；210 另外要求 app_code 12、设备 id 有效、202 里该设备已连接。
-- 最近一次读取是 503 时返回 `unavailable`，之前的读数作废。读取带递增序号，旧读数不覆盖新读数；`useFreshRead` 绑定会话代次。
+- 读取遇到 503 后返回 `unavailable`，该项目 202、210 之前的读数都作废；之后有序号更大的成功读取才再显示，中间遇到 500、超时只显示错误，不恢复旧读数（同 `src/data/sensors/hooks.ts`）。读取带递增序号，旧读数不覆盖新读数；`useFreshRead` 绑定会话代次。
 
 ## 5. S7 天气
 

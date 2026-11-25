@@ -95,6 +95,13 @@ describe('210 真实回包解码 → SettingsView（三类标注）', () => {
       for (const f of FIELDS_204) expect(v.fields[f].state === 'unsettable').toBe(s[f] !== null)
     }
   })
+  it('已知差异：-100 / 65536 这里记 invalid 并禁用（更严），settable204 不因此禁用（规则草稿 4.1 已写明）', () => {
+    const raw = { id: 3, controlType: 1, dewPoint: 65536, humiditySet: -100 }
+    const v = toSettingsView(raw, 3)
+    expect([v.fields.dewPoint.state, v.fields.humiditySet.state]).toEqual(['invalid', 'invalid'])
+    expect(fieldBlock(v, 'dewPoint')).not.toBeNull()
+    expect(settable204(raw).dewPoint).toBeNull()
+  })
   it('240829001 的「不支持」回包：decodeReply 抛 ctrl 错误，文案原样', () => {
     expect(() => d210(R210_240829001)).toThrow(ApiError)
     expect(() => d210(R210_240829001)).toThrow('该软件类型不支持此控制')

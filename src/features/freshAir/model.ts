@@ -126,7 +126,7 @@ export function fieldOf(f: Field204, v: unknown): SettingField {
   return { state: 'settable', value: n }
 }
 
-/** 字段被禁用时的原因（null = 可设置）。文案沿用 writeLockVerify.ts，S10b / S10c 共用 */
+/** 字段被禁用时的原因（null = 可设置）。S10b / S10c 共用；-1 的文案沿用 writeLockVerify.ts */
 export function fieldBlock(s: SettingsView, f: Field204): string | null {
   if (s.writeBlock) return s.writeBlock
   const x = s.fields[f]

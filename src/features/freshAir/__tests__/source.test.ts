@@ -8,7 +8,7 @@ import { __resetHttpForTests } from '@/api/http'
 import { clearTokens, writeTokens } from '@/api/tokens'
 import { fakeBackend, json, text } from '@/api/__tests__/helpers'
 import { TEXT_UNSUPPORTED } from '../model'
-import { mock210, realFreshAirSource } from '../source'
+import { freshAirSource, mock202, mock210, realFreshAirSource } from '../source'
 import { ID_240829001, ID_260911001, Q210_240829001, Q210_260911001, R202_260911001, R210_240829001, R210_260911001 } from './fixtures'
 
 const PID = '6aa3a0ade8f3372b86b15b05'
@@ -75,5 +75,27 @@ describe('mock210', () => {
   it('演示数据的「中」在 210 里没有对应值 → 无效', () => {
     const f = { name: 'x', control: 'dew', dewSet: 12, humSet: 50, fan: '中', on: true, mode: 2 } as Parameters<typeof mock210>[0]
     expect(mock210(f, 1)).toMatchObject({ controlType: 1, windSpeed: -100, switch: 1, canChange: true })
+  })
+})
+
+describe('演示数据源（mock）', () => {
+  it('202 形状：设备 id 按序号、比例 0–1、开关；210 能按 id 读到，越界 → ctrl 错误；不发任何请求', async () => {
+    setConfig({ apiBase: '/api', apiEnv: 'test', dataSource: 'mock' })
+    const be = fakeBackend({})
+    const src = freshAirSource()
+    expect(src.kind).toBe('mock')
+    const { list, raw } = await src.units('PRJ-10241')
+    expect(list.length).toBeGreaterThan(0)
+    expect(list.map((u) => u.deviceId)).toEqual(list.map((_, i) => i + 1))
+    for (const u of raw.data) expect(u.filterLifeP).toBeGreaterThanOrEqual(0)
+    for (const u of raw.data) expect(u.filterLifeP).toBeLessThanOrEqual(1)
+    const s = await src.settings('PRJ-10241', 1)
+    expect(s).toMatchObject({ kind: 'ok', view: { deviceId: 1 } })
+    await expect(src.settings('PRJ-10241', list.length + 1)).rejects.toMatchObject({ kind: 'ctrl' })
+    expect(be.calls).toHaveLength(0)
+  })
+  it('mock202 字段对应', () => {
+    const f = { name: 'x', supplyTemp: 18, returnTemp: 25, fan: '高', rpm: 900, compressor: true, hz: 40, filterDays: 30, filter: 45, filterHours: 100, on: false } as Parameters<typeof mock202>[0][number]
+    expect(mock202([f]).data[0]).toMatchObject({ id: 1, windLevel: 3, windSpeed: 900, dehumidifierStatus: 1, dehumidifierFreq: 40, filterLife: 30, filterLifeP: 0.45, switch: 0, isConnected: true })
   })
 })

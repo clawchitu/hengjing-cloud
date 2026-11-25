@@ -10,7 +10,8 @@ import { __resetHttpForTests } from '@/api/http'
 import { createQueryClient } from '@/api/query'
 import { clearTokens, writeTokens } from '@/api/tokens'
 import { fakeBackend, json } from '@/api/__tests__/helpers'
-import { putNewer, useFreshRead, useSettings, useUnits } from '../hooks'
+import { __resetWriteLockForTests } from '@/api/writeLock'
+import { __resetFreshAirForTests, putNewer, useFreshRead, useSettings, useUnits } from '../hooks'
 import { TEXT_UNSUPPORTED } from '../model'
 import { ID_240829001, ID_260911001, R202_240829001, R202_260911001, R210_240829001, R210_260911001 } from './fixtures'
 
@@ -23,6 +24,7 @@ const R202 = '/ctrl/fresh-dehumidifier-get'
 const R210 = '/ctrl/running-ctrl-get'
 
 let qc: QueryClient
+let acct = { user: 'u1', gen: 1 }
 const wrapper = ({ children }: { children: ReactNode }) => createElement(StrictMode, null, createElement(QueryClientProvider, { client: qc }, children))
 const flush = () => act(async () => { await new Promise((r) => setTimeout(r, 20)) })
 
@@ -32,9 +34,12 @@ beforeEach(() => {
   setCurrentUserId('u1')
   setConfig({ apiBase: '/api', apiEnv: 'test', dataSource: 'real' })
   qc = createQueryClient()
+  __resetFreshAirForTests()
+  __resetWriteLockForTests(() => acct)
+  acct = { user: 'u1', gen: 1 }
   perm.allowed = new Set(['/v1/ctrl/fresh-dehumidifier-get', '/v1/ctrl/running-ctrl-get'])
 })
-afterEach(() => { qc.clear(); vi.unstubAllGlobals(); setConfig(null); clearTokens() })
+afterEach(() => { qc.clear(); vi.unstubAllGlobals(); setConfig(null); clearTokens(); __resetWriteLockForTests() })
 
 describe('useUnits（202）', () => {
   it('没有项目、项目离线：不发请求', async () => {
@@ -70,6 +75,21 @@ describe('useUnits（202）', () => {
     await waitFor(() => expect(result.current.kind).toBe('unavailable'))
     mode = 'ok'
     await act(async () => { if (result.current.kind === 'unavailable') result.current.retry() })
+    await waitFor(() => expect(result.current.kind).toBe('ready'))
+  })
+  it('503 之后又遇到 500：不恢复 503 之前的读数（显示错误）；之后成功才回到 ready', async () => {
+    let mode = 'ok'
+    fakeBackend({ [R202]: () => (mode === 'ok' ? json({ body: R202_260911001 }) : mode === '503' ? json({ code: 14, message: '控制屏消息发送失败' }, 503) : json({ code: 13, message: 'x' }, 500)) })
+    const { result } = renderHook(() => useUnits(P12), { wrapper })
+    await waitFor(() => expect(result.current.kind).toBe('ready'))
+    mode = '503'
+    await act(async () => { if (result.current.kind === 'ready') result.current.retry() })
+    await waitFor(() => expect(result.current.kind).toBe('unavailable'))
+    mode = '500'
+    await act(async () => { if (result.current.kind === 'unavailable') result.current.retry() })
+    await waitFor(() => expect(result.current.kind).toBe('error'), { timeout: 3000 })
+    mode = 'ok'
+    await act(async () => { if (result.current.kind === 'error') result.current.retry() })
     await waitFor(() => expect(result.current.kind).toBe('ready'))
   })
   it('首次 500（重试 1 次仍失败）→ error；空列表 → empty', async () => {
@@ -117,6 +137,20 @@ describe('useSettings（210）', () => {
     await flush()
     expect(be.callsTo(R210)).toHaveLength(1)
   })
+  it('同项目的 202 遇到 503：210 之前的读数也作废，不当成当前值', async () => {
+    let r202 = 'ok'
+    fakeBackend({
+      [R202]: () => (r202 === 'ok' ? json({ body: R202_260911001 }) : json({ code: 14, message: '控制屏消息发送失败' }, 503)),
+      [R210]: () => (r202 === 'ok' ? json({ body: R210_260911001 }) : json({ code: 13, message: 'x' }, 500)),
+    })
+    const { result } = renderHook(() => ({ u: useUnits(P12), s: useSettings(P12, unit) }), { wrapper })
+    await waitFor(() => expect(result.current.s.kind).toBe('ready'))
+    r202 = '503'
+    await act(async () => { if (result.current.u.kind === 'ready') result.current.u.retry() })
+    await waitFor(() => expect(result.current.u.kind).toBe('unavailable'))
+    await waitFor(() => expect(result.current.s.kind).not.toBe('ready'), { timeout: 3000 })
+    await waitFor(() => expect(['loading', 'error']).toContain(result.current.s.kind), { timeout: 3000 })
+  })
   it('503 → unavailable；回包设备不符 → error', async () => {
     fakeBackend({ [R210]: () => json({ code: 14, message: '控制屏消息发送失败' }, 503) })
     const a = renderHook(() => useSettings(P12, unit), { wrapper })
@@ -149,6 +183,22 @@ describe('useFreshRead（210 新读）', () => {
     await expect(result.current(null)).rejects.toThrow('没有有效的新风设备 id')
     await expect(result.current(0)).rejects.toThrow()
     expect(be.calls).toHaveLength(0)
+  })
+  it('读取期间会话变了、或已中止：抛错丢弃，不写缓存', async () => {
+    let release!: () => void
+    const gate = new Promise<void>((r) => { release = r })
+    fakeBackend({ [R210]: async () => { await gate; return json({ body: R210_260911001 }) } })
+    const { result } = renderHook(() => useFreshRead(P12), { wrapper })
+    const p = result.current(ID_260911001)
+    await flush()
+    acct = { user: 'u2', gen: 2 }
+    release()
+    await expect(p).rejects.toThrow('登录状态已变化')
+    expect(qc.getQueryData(['ctrl', 210, P12.id, { deviceId: ID_260911001 }])).toBeUndefined()
+    const ac = new AbortController()
+    fakeBackend({ [R210]: () => { ac.abort(); return json({ body: R210_260911001 }) } })
+    await expect(result.current(ID_260911001, ac.signal)).rejects.toThrow()
+    expect(qc.getQueryData(['ctrl', 210, P12.id, { deviceId: ID_260911001 }])).toBeUndefined()
   })
   it('putNewer', () => {
     expect(putNewer({ seq: 5 }, { seq: 3 })).toEqual({ seq: 5 })
