@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { BLOCK_204_CONTROL_TYPE, BLOCK_204_INVALID, BLOCK_204_NO_READING, BLOCK_204_UNINITIALIZED, blocked204, matchRunningCtrl, VERIFIABLE_FIELDS } from '../writeLockVerify'
+import { BLOCK_204_CONTROL_TYPE, BLOCK_204_NO_READING, BLOCK_204_NOT_SETTABLE, blocked204, matchRunningCtrl, settable204, VERIFIABLE_FIELDS } from '../writeLockVerify'
 import { checkSentRecord } from '../writeLock'
 
 const ID = 1514027092
@@ -78,7 +78,23 @@ describe('matchRunningCtrl（204 → 210）', () => {
   })
 })
 
-describe('blocked204（Fable 11/25 裁定）', () => {
+describe('settable204：210 读到 -1 的那一项不能设置（后端 11/25 答复第 5 条）', () => {
+  it('实测读数（humidity_set = -1）：只禁用湿度设定，其余照常', () => {
+    expect(settable204(live)).toEqual({ controlType: null, dewPoint: null, humiditySet: BLOCK_204_NOT_SETTABLE, windSpeed: null, switch: null })
+  })
+  it('control_type = -1：控制类型、露点、湿度三项禁用；风速、开关照常', () => {
+    expect(settable204({ ...live, controlType: -1, humiditySet: 50 })).toEqual({
+      controlType: BLOCK_204_CONTROL_TYPE, dewPoint: BLOCK_204_CONTROL_TYPE, humiditySet: BLOCK_204_CONTROL_TYPE, windSpeed: null, switch: null,
+    })
+  })
+  it('风速、开关读到 -1 也禁用；缺省 0、65536 不禁用', () => {
+    expect(settable204({ ...live, windSpeed: -1, switch: -1 })).toMatchObject({ windSpeed: BLOCK_204_NOT_SETTABLE, switch: BLOCK_204_NOT_SETTABLE })
+    expect(settable204({ id: ID })).toEqual({ controlType: null, dewPoint: null, humiditySet: null, windSpeed: null, switch: null })
+    expect(settable204({ ...live, humiditySet: 65536 }).humiditySet).toBeNull()
+  })
+})
+
+describe('blocked204（按后端 11/25 答复：不再整次拦截，只拦改了不能设置的项）', () => {
   it('读数为空、id 不符、解码后 {id:0}、设备 id 不合法 → 一律拦下', () => {
     const ok = { ...live, humiditySet: 50 }
     expect(blocked204(null, ID, ['switch'])).toBe(BLOCK_204_NO_READING)
@@ -86,32 +102,20 @@ describe('blocked204（Fable 11/25 裁定）', () => {
     expect(blocked204({ id: 0, controlType: 0, dewPoint: 0, humiditySet: 0, windSpeed: 0 }, ID, ['switch'])).toBe(BLOCK_204_NO_READING)
     expect(blocked204({ ...ok, id: 9326461980 }, ID, ['switch'])).toBe(BLOCK_204_NO_READING)
     expect(blocked204({ ...ok, id: 0 }, 0, ['switch'])).toBe(BLOCK_204_NO_READING)
-    expect(blocked204(ok, null, ['switch'], 'minus1')).toBe(BLOCK_204_NO_READING)
+    expect(blocked204(ok, null, ['switch'])).toBe(BLOCK_204_NO_READING)
   })
-  it('读数 control_type = -1：写入口整体禁用', () => {
-    expect(blocked204({ ...live, controlType: -1, humiditySet: 50 }, ID, ['windSpeed'])).toBe(BLOCK_204_CONTROL_TYPE)
-    expect(blocked204({ ...live, controlType: -1 }, ID, ['controlType'], 'minus1')).toBe(BLOCK_204_CONTROL_TYPE)
+  it('没改的项读到 -1 不影响下发（不变一律传 -1）：实测 humidity_set = -1 时改风速照发', () => {
+    expect(blocked204(live, ID, ['windSpeed'])).toBeNull()
+    expect(blocked204({ ...live, dewPoint: -1, windSpeed: -1 }, ID, ['switch'])).toBeNull()
   })
-  it('echo：没改的设定项读到 -1 / 65536 → 整条不发；改了它就不拦', () => {
-    expect(blocked204(live, ID, ['windSpeed'])).toBe(BLOCK_204_UNINITIALIZED) // 实测 humidity_set = -1
-    expect(blocked204(live, ID, ['windSpeed', 'humiditySet'])).toBeNull()
-    expect(blocked204({ ...live, humiditySet: 50, dewPoint: 65536 }, ID, ['windSpeed'])).toBe(BLOCK_204_UNINITIALIZED)
-    expect(blocked204({ ...live, humiditySet: 50, windSpeed: -1 }, ID, ['switch'])).toBe(BLOCK_204_UNINITIALIZED)
+  it('control_type = -1：改风速、开关照发；改控制类型、露点、湿度拦下并说明是哪一项', () => {
+    const ct = { ...live, controlType: -1, humiditySet: 50 }
+    expect(blocked204(ct, ID, ['windSpeed', 'switch'])).toBeNull()
+    expect(blocked204(ct, ID, ['controlType'])).toMatch(/「控制类型」不能设置/)
+    expect(blocked204(ct, ID, ['dewPoint'])).toMatch(/「露点设定」不能设置/)
   })
-  it('echo：缺省 0 是真实读数，不算未初始化；switch 不参与', () => {
-    expect(blocked204({ id: ID, dewPoint: 13, humiditySet: 50 }, ID, ['switch'])).toBeNull()
-    expect(blocked204({ ...live, humiditySet: 50, switch: -1 }, ID, ['windSpeed'])).toBeNull()
-  })
-  it('echo：没改的枚举读数越界、设定值非有限数 → 整条不发', () => {
-    const ok = { ...live, humiditySet: 50 }
-    expect(blocked204(ok, ID, ['switch'])).toBeNull()
-    expect(blocked204({ ...ok, windSpeed: 3 }, ID, ['switch'])).toBe(BLOCK_204_INVALID)
-    expect(blocked204({ ...ok, controlType: 2 }, ID, ['switch'])).toBe(BLOCK_204_INVALID)
-    expect(blocked204({ ...ok, windSpeed: 3 }, ID, ['windSpeed'])).toBeNull() // 改了的字段由 checkSentRecord 管
-    for (const bad of [NaN, Infinity]) expect(blocked204({ ...ok, dewPoint: bad }, ID, ['switch'])).toBe(BLOCK_204_UNINITIALIZED)
-  })
-  it('minus1：没改的字段本来就传 -1，不拦', () => {
-    expect(blocked204(live, ID, ['windSpeed'], 'minus1')).toBeNull()
+  it('改了读到 -1 的那一项：拦下', () => {
+    expect(blocked204(live, ID, ['humiditySet'])).toMatch(/「湿度设定」不能设置，未下发/)
   })
 })
 

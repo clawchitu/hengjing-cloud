@@ -1,5 +1,6 @@
 // 写锁核对用的纯比对函数（不发请求，读取由调用方注入）：把持久化的核对数据（消息号、设备 id、目标字段与值）与回读结果比对。
 // 按消息类型回读：201 / 206 → 200（房间温控数据）；204 → 210（运行控制数据，matchRunningCtrl）。
+// 下发时「不变」一律传 -1（后端 11/25 答复第 4 条，201 / 204 / 206 所有字段；203 的 system_mode 例外，见 ctrl.ts）。
 //
 // 比对口径（11/24 Fable 裁定；与统一控制 src/features/unified/batch.ts 的 summarizeRooms 同一套读数规则）：
 // - 200 的 switch、set_temp、eco 是 proto3 普通标量，值为 0 时线上本来就省略，解码出来的 0 就是真实读数，直接比对。
@@ -147,7 +148,7 @@ const sameSetpoint = (a: number, b: number) => Math.abs(Math.round(a * 100) - Ma
  * - 只判 target 里不是 -1 的字段；没有改动、消息号不对、设备 id 为空 → false。
  * - 回包 id 不等于目标设备 id（含空回包、只回了 #2 错误文案的回包）→ 全部无法核对。
  * - control_type / switch / wind_speed 是 proto3 标量，0 在线上省略，解码出的 0 是真实读数，直接比对；读到 -1、65536 或非有限数
- *   按设备没回报，记无法核对（同文件头口径，也和 blocked204 把 -1 当未初始化一致）。
+ *   按设备没回报，记无法核对（同文件头口径；210 读到 -1 表示这一项不能设置，本来也不会下发它）。
  * - dew_point / humidity_set 读数为 -1（界面显示 --）、65536 或非有限数 → 无法核对；读数 control_type = -1（露点与湿度均不可控）时
  *   这两项也无法核对。浮点按 0.05 比较（sameSetpoint：取整到 0.01 后比，正好差 0.05 判不一致）。
  * - 210 没有 is_connected：设备在线与否由调用方另读 202 判断并传入。connected 必须明确为 true 才比对，否则（false 或漏传）
@@ -176,35 +177,42 @@ export function matchRunningCtrl(
   return detail(fields)
 }
 
-/** 204 里「没改的字段」按读数带回（echo）的四个设定项；switch 没改时按 proto 传 -1，不在此列 */
-export const ECHO_FIELDS_204 = Object.freeze(['controlType', 'dewPoint', 'humiditySet', 'windSpeed'] as const)
-export const BLOCK_204_CONTROL_TYPE = '该设备当前露点与湿度均不可控，不能下发运行设置'
-export const BLOCK_204_UNINITIALIZED = '有未初始化的设定项，未下发'
-export const BLOCK_204_INVALID = '有设定项的读数不在合法范围内，未下发'
+/** 204 的五个可写字段在界面上的叫法（禁用原因、拦截原因里用） */
+export const LABEL_204: Readonly<Record<string, string>> = Object.freeze({ controlType: '控制类型', dewPoint: '露点设定', humiditySet: '湿度设定', windSpeed: '风速', switch: '开关' })
+export const FIELDS_204 = Object.freeze(['controlType', 'dewPoint', 'humiditySet', 'windSpeed', 'switch'] as const)
+export type Field204 = (typeof FIELDS_204)[number]
+export const BLOCK_204_CONTROL_TYPE = '该设备当前露点与湿度均不可控，不能设置'
+export const BLOCK_204_NOT_SETTABLE = '该设备的这一项不能设置'
 export const BLOCK_204_NO_READING = '没有读到这台新风设备的运行设置，未下发'
-/** 没改、要带回的枚举读数的合法取值（control_type = -1 已在前一条整体禁用） */
-const ECHO_ENUM_204: Record<string, readonly number[]> = { controlType: [0, 1], windSpeed: [0, 1, 2] }
+export const block204Field = (f: string) => `「${LABEL_204[f] ?? f}」不能设置，未下发`
 
 /**
- * 204 发送前的读数检查（Fable 11/25 裁定，A1 后端答复前）：
- * - 读数为空、或 reading.id 不等于 deviceId（空回包、错误文案回包解码后全是 0）：一律拦下。
- * - 读数 control_type = -1：写入口整体禁用（不管改了什么）。
- * - policy = 'echo' 时，用户没改的设定项在 210 里读到 -1（或 65536、非有限数、缺失以外的无效值）：整条不发，提示「有未初始化的设定项」。
- *   不能只跳过那一个字段：跳过后 proto3 编码出来是 0，等于把它设成湿度控制、低档或 0°C。
- * - echo 时没改的枚举读数（control_type、wind_speed）不在合法取值内：整条不发（带回去就是一个非法值）。
- * changed 是用户改了的字段名。返回 null 表示可以发。'minus1' 下没改的字段本来就传 -1，只做第一条检查。
+ * 210 读数 → 每一项能不能设置（后端 11/25 答复第 5 条：210 读到 -1 表示这一项不能设置，前端把这一项限制成不能设置）：
+ * - 某一项读到 -1：这一项不能设置（返回原因），其余项照常；
+ * - control_type = -1（露点与湿度均不可控）：控制类型、露点设定、湿度设定三项都不能设置，风速和开关照常（方案 A11）；
+ * - 缺省 0 是真实读数，可以设置；65536、非有限数按没有读数显示 --，不因此禁用。
+ * 返回 null 表示可以设置。界面（S10c 的 editBlock）按这个禁用对应控件；发送前 blocked204 再查一次
  */
-export function blocked204(
-  reading: Running | null | undefined, deviceId: number | null, changed: readonly string[], policy: 'echo' | 'minus1' = 'echo',
-): string | null {
-  if (!reading || !isDeviceId(deviceId) || reading.id !== deviceId) return BLOCK_204_NO_READING
-  if ((reading.controlType ?? 0) === -1) return BLOCK_204_CONTROL_TYPE
-  if (policy !== 'echo') return null
-  for (const f of ECHO_FIELDS_204) {
-    if (changed.includes(f)) continue
-    const v = RUNNING_READ[f](reading)
-    if (typeof v !== 'number' || !Number.isFinite(v) || v === -1 || v === NO_DATA) return BLOCK_204_UNINITIALIZED
-    if (ECHO_ENUM_204[f] && !ECHO_ENUM_204[f].includes(v)) return BLOCK_204_INVALID
+export function settable204(reading: Running | null | undefined): Record<Field204, string | null> {
+  const r = reading ?? {}
+  const ct = r.controlType ?? 0
+  const one = (f: Field204): string | null => {
+    if (ct === -1 && (f === 'controlType' || f === 'dewPoint' || f === 'humiditySet')) return BLOCK_204_CONTROL_TYPE
+    return RUNNING_READ[f](r) === -1 ? BLOCK_204_NOT_SETTABLE : null
   }
-  return null
+  return Object.fromEntries(FIELDS_204.map((f) => [f, one(f)])) as Record<Field204, string | null>
+}
+
+/**
+ * 204 发送前的读数检查（后端 11/25 答复第 4、5 条；推翻了 Fable 11/25 的「读到 -1 就整次不下发」和 echo 带回读数的做法）：
+ * - 读数为空、或 reading.id 不等于 deviceId（空回包、错误文案回包解码后全是 0）：一律拦下；
+ * - 用户改了的字段在 settable204 里不能设置：拦下，提示是哪一项（界面已禁用，这里是兜底）；
+ * - 没改的字段一律传 -1（不变），不看它们的读数，所以没改的项读到 -1 不影响下发。
+ * changed 是用户改了的字段名。返回 null 表示可以发
+ */
+export function blocked204(reading: Running | null | undefined, deviceId: number | null, changed: readonly string[]): string | null {
+  if (!reading || !isDeviceId(deviceId) || reading.id !== deviceId) return BLOCK_204_NO_READING
+  const ok = settable204(reading)
+  const bad = changed.find((f) => (ok as Record<string, string | null>)[f] !== null)
+  return bad ? block204Field(bad) : null
 }

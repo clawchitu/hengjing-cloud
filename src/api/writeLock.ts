@@ -297,7 +297,7 @@ const copyRecord = (r: SentRecord): SentRecord => ({ msg: r.msg, deviceId: r.dev
 
 /**
  * 204 的核对目标（只放用户改了的字段，其余 -1）：只认 5 个字段名，每个值都是有限数；至少改一项；枚举字段只能是合法取值。
- * 核对数据里的 -1 表示「没改」；读数 control_type = -1 时写入口整体禁用（见 writeLockVerify.ts 的 blocked204）
+ * 核对数据里的 -1 表示「没改」（不变一律传 -1）；210 读到 -1 的那一项不能设置，由 writeLockVerify.ts 的 settable204 / blocked204 判断
  */
 /** 正整数设备 id（204 的下发、核对、读数检查共用这一个判断） */
 export const isDeviceId = (v: unknown): v is number => typeof v === 'number' && Number.isSafeInteger(v) && v > 0
