@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 // 首页天气（S7b）：真实接口模式 + 假后端（/weather、/weather24 用演示回包，即 11/24 苏州实测原文），不连任何真实服务。
 // 覆盖：默认无锡、六格（改动 1）、三块各自的失败态互不影响、/weather 失败时用小时预报顶替、ret_code 非 0、无权限不发请求、
-// 选过的城市按账号恢复（损坏回退无锡）、城市选择写缓存并按新城市请求、按名称查的城市（大理）。
+// 选过的城市按账号恢复（损坏回退无锡）、城市选择写缓存并按新城市请求、按名称查的城市（大理）；
+// 城市选择省 → 市两级（打开定位到当前省、返回、直辖市直接选中、搜索平铺带省名、高度上限）。
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { QueryClientProvider } from '@tanstack/react-query'
 import { createElement } from 'react'
@@ -19,7 +20,9 @@ import { __resetCurrentForTests } from '../../data/org/current'
 import { __resetSessionViewForTests } from '../../data/session'
 import { weather24Raw, weatherRaw } from '../../mock/weather'
 import Home from '../Home'
-import { iconOf, matchCity, nearestHour } from './weatherUi'
+import { CityPicker } from './WeatherSection'
+import { iconOf, isSingleCity, matchCity, nearestHour, searchCities } from './weatherUi'
+import { findCity, PROVINCES, type City } from '../../features/weather'
 
 vi.mock('../../components/legacy', async (orig) => {
   const m = await orig<typeof import('../../components/legacy')>()
@@ -277,7 +280,113 @@ describe('首页天气（续）', () => {
   })
 })
 
+describe('城市选择：省 → 市两级', () => {
+  const items = () => [...document.querySelectorAll('[cmdk-item]')]
+  const texts = () => items().map((e) => e.textContent)
+  const selected = () => document.querySelector('[cmdk-item][aria-selected="true"]')?.textContent
+  const input = () => screen.getByRole('combobox', { name: '搜索城市' })
+  const back = () => screen.getByRole('option', { name: /^返回省份列表/ })
+  function open(city: City = findCity('320200')!) {
+    const onPick = vi.fn()
+    render(createElement(CityPicker, { city, onPick }))
+    fireEvent.click(screen.getByRole('button', { name: /^天气城市：/ }))
+    return onPick
+  }
+  const jiangsu = PROVINCES.find((p) => p.name === '江苏省')!
+
+  it('打开时定位到当前城市所在省的城市列表：顶部是返回，高亮当前城市；弹层高度上限 360px', () => {
+    open()
+    expect(texts()).toEqual(['江苏省全部省份', ...jiangsu.cities.map((c) => c.name)])
+    expect(back().getAttribute('aria-label')).toBe('返回省份列表（当前：江苏省）')
+    expect(document.querySelector('[cmdk-item][data-current]')?.textContent).toBe('无锡市')
+    expect(selected()).toBe('无锡市')
+    expect(screen.getByRole('listbox').getAttribute('aria-label')).toBe('江苏省')
+    expect(screen.getByRole('dialog', { name: '选择天气城市' }).className).toContain('max-h-[min(360px,')
+    expect(document.activeElement).toBe(input())
+  })
+
+  it('点返回 → 省份列表（31 个），高亮刚才的省，当前城市所在省有标记；焦点留在搜索框', () => {
+    open()
+    fireEvent.click(back())
+    expect(texts()).toEqual(PROVINCES.map((p) => p.name))
+    expect(selected()).toBe('江苏省')
+    expect(document.querySelector('[cmdk-item][data-current-province]')?.textContent).toBe('江苏省')
+    expect(screen.getByRole('listbox').getAttribute('aria-label')).toBe('省份')
+    expect(document.activeElement).toBe(input())
+  })
+
+  it('点省份进入它的城市列表，高亮第一个市；空搜索框按退格返回省份列表', () => {
+    open()
+    fireEvent.click(back())
+    fireEvent.click(screen.getByRole('option', { name: '浙江省' }))
+    const zj = PROVINCES.find((p) => p.name === '浙江省')!
+    expect(texts()).toEqual(['浙江省全部省份', ...zj.cities.map((c) => c.name)])
+    expect(selected()).toBe('杭州市')
+    fireEvent.keyDown(input(), { key: 'Backspace' })
+    expect(texts()).toEqual(PROVINCES.map((p) => p.name))
+    expect(selected()).toBe('浙江省')
+  })
+
+  it.each(['北京市', '天津市', '上海市', '重庆市'])('直辖市 %s：省份列表里点了直接选中，弹层关闭', (name) => {
+    const onPick = open()
+    fireEvent.click(back())
+    fireEvent.click(screen.getByRole('option', { name }))
+    expect(onPick).toHaveBeenCalledExactlyOnceWith(PROVINCES.find((p) => p.name === name)!.code)
+    expect(screen.queryByRole('combobox', { name: '搜索城市' })).toBeNull()
+  })
+
+  it('选中城市：点城市列表里的市 → onPick 这个市；点当前城市不重复回调', () => {
+    let onPick = open()
+    fireEvent.click(screen.getByRole('option', { name: '苏州市' }))
+    expect(onPick).toHaveBeenCalledExactlyOnceWith('320500')
+    cleanup()
+    onPick = open()
+    fireEvent.click(screen.getByRole('option', { name: '无锡市' }))
+    expect(onPick).not.toHaveBeenCalled()
+  })
+
+  it('搜索：平铺显示匹配的城市并带省份名（直辖市不重复）；回车选第一个；清空回到原来的视图', () => {
+    const onPick = open()
+    fireEvent.change(input(), { target: { value: '苏州' } })
+    expect(texts()).toEqual(['苏州市 · 江苏省'])
+    expect(screen.queryByRole('option', { name: /^返回省份列表/ })).toBeNull()
+    fireEvent.change(input(), { target: { value: '北京' } })
+    expect(texts()).toEqual(['北京市'])
+    fireEvent.change(input(), { target: { value: '江苏' } })
+    expect(texts()).toEqual(jiangsu.cities.map((c) => `${c.name} · 江苏省`))
+    expect(selected()).toBe('南京市 · 江苏省')
+    fireEvent.change(input(), { target: { value: '' } })
+    expect(texts()[0]).toBe('江苏省全部省份')
+    expect(selected()).toBe('无锡市')
+    fireEvent.change(input(), { target: { value: '大理' } })
+    fireEvent.keyDown(input(), { key: 'Enter' })
+    expect(onPick).toHaveBeenCalledExactlyOnceWith('532900')
+  })
+
+  it('关掉再打开：重新定位到当前城市所在省（不沿用上次浏览的省、不保留搜索词）', () => {
+    open(findCity('530100')!)
+    expect(texts()[0]).toBe('云南省全部省份')
+    fireEvent.click(back())
+    fireEvent.click(screen.getByRole('option', { name: '浙江省' }))
+    fireEvent.keyDown(input(), { key: 'Escape' })
+    expect(screen.queryByRole('combobox', { name: '搜索城市' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: /^天气城市：/ }))
+    expect(texts()[0]).toBe('云南省全部省份')
+    expect(selected()).toBe('昆明市')
+    expect((input() as HTMLInputElement).value).toBe('')
+  })
+})
+
 describe('weatherUi 纯函数', () => {
+  it('isSingleCity：只有北京、天津、上海、重庆四个直辖市是一个市', () => {
+    expect(PROVINCES.filter(isSingleCity).map((p) => p.name)).toEqual(['北京市', '天津市', '上海市', '重庆市'])
+  })
+  it('searchCities：空关键字返回空；按城市名或省名匹配，带所在省', () => {
+    expect(searchCities('  ')).toEqual([])
+    expect(searchCities('苏州').map((h) => `${h.city.name}/${h.province.name}`)).toEqual(['苏州市/江苏省'])
+    expect(searchCities('大理').map((h) => h.city.code)).toEqual(['532900'])
+    expect(searchCities('江苏')).toHaveLength(13)
+  })
   it('nearestHour 取离现在最近的一小时；没有可用时间返回 null', () => {
     const hs = [{ time: '2026-11-24 11:00' }, { time: '2026-11-24 12:00' }, { time: null }].map((h) => ({ text: null, code: null, temp: 1, windDirection: null, windPower: null, ...h }))
     expect(nearestHour(hs, Date.parse('2026-11-24T12:20:00+08:00'))?.time).toBe('2026-11-24 12:00')

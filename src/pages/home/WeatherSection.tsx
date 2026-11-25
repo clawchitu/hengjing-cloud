@@ -8,7 +8,7 @@
 // - 演示数据模式走同一个组件（数据源由 weatherSource() 选择）。
 import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import {
-  faLocationDot, faChevronDown, faRotateRight, faDroplet, faWind, faTemperatureLow, faGauge, faSun, faUmbrella, faMagnifyingGlass, faCompass, type IconDefinition,
+  faLocationDot, faChevronDown, faChevronLeft, faChevronRight, faRotateRight, faDroplet, faWind, faTemperatureLow, faGauge, faSun, faUmbrella, faMagnifyingGlass, faCompass, type IconDefinition,
 } from '@fortawesome/free-solid-svg-icons'
 import { Chart, Icon, axis, tooltip } from '../../components/legacy'
 import { Button } from '@/components/ui/button'
@@ -21,39 +21,71 @@ import { cn } from '@/lib/utils'
 import { getConfig } from '../../api/config'
 import { useApp } from '../../app/store'
 import {
-  findCity, NO_WEATHER_TEXT, PROVINCES, useWeather24, useWeatherCity, useWeatherNow,
-  type City, type Weather24View, type WeatherLoad, type WeatherNowView,
+  findCity, NO_WEATHER_TEXT, PROVINCES, provinceOf, useWeather24, useWeatherCity, useWeatherNow,
+  type City, type Province, type Weather24View, type WeatherLoad, type WeatherNowView,
 } from '../../features/weather'
-import { deg, hourLabel, iconOf, matchCity, nearestHour, WEEKDAYS } from './weatherUi'
+import { deg, hourLabel, iconOf, isSingleCity, nearestHour, searchCities, WEEKDAYS } from './weatherUi'
 
 // ---------------------------------------------------------------------------
-// 城市选择（Popover + Command，可搜索；按省分组）
+// 城市选择（Popover + Command）：省 → 市两级，可搜索（强哥 11/25 18:20：原来的单列下拉太长、太大）
+// - 不搜索时：省份列表 → 点省份进入它的城市列表（顶部固定一行「返回省份列表」，空搜索框按退格也返回）；
+//   直辖市（只有一个市的省）点了直接选中；
+// - 打开时定位到当前城市所在省的城市列表，高亮当前城市；
+// - 搜索框有关键字时：平铺显示匹配的城市，带省份名（「苏州市 · 江苏省」）；
+// - 列表高度不超过 360px（含搜索框，再受可用高度限制）。
+
+/** cmdk 选项值：省份加前缀，避免和直辖市的城市码（同为省级码）撞 */
+const PROV = 'p:'
+const BACK = 'back'
 
 export function CityPicker({ city, onPick }: { city: City; onPick: (code: string) => void }) {
   const [open, setOpen] = useState(false)
   const [q, setQ] = useState('')
+  const [prov, setProv] = useState<Province | null>(null)
   const [hl, setHl] = useState('')
   const [listId, setListId] = useState<string>()
   const [itemId, setItemId] = useState<string>()
   const inputRef = useRef<HTMLInputElement>(null)
   const contentId = useId()
-  const scrolled = useRef('')
-  const groups = PROVINCES.map((p) => ({ p, cities: p.cities.filter((c) => matchCity(c, p.name, q)) })).filter((g) => g.cities.length > 0)
-  const first = groups[0]?.cities[0]
+  const hits = searchCities(q)
+  const searching = q.trim() !== ''
+  /** 当前视图：搜索结果 / 某省的城市 / 省份列表。视图一变，新视图里的高亮按「从列表顶端出发」直接滚到位 */
+  const view = searching ? 'search' : prov ? prov.code : 'provinces'
 
-  const opened = useRef('')
-  const show = () => { scrolled.current = ''; opened.current = city.code; setQ(''); setHl(city.code); setOpen(true) }
+  const show = () => {
+    const p = provinceOf(city.code)
+    lastView.current = ''; scrolled.current = ''; anchor.current = ''
+    setQ(''); setProv(p); setHl(p ? city.code : ''); setOpen(true)
+  }
   const pick = (c: City) => { setOpen(false); if (c.code !== city.code) onPick(c.code) }
+  const enter = (p: Province) => {
+    if (isSingleCity(p)) { pick(p.cities[0]); return }
+    setProv(p)
+    setHl(p.cities.some((c) => c.code === city.code) ? city.code : p.cities[0].code)
+    inputRef.current?.focus()
+  }
+  const back = () => {
+    const from = prov
+    setProv(null)
+    setHl(from ? PROV + from.code : '')
+    inputRef.current?.focus()
+  }
+
   const hlNow = useRef(hl)
-  // layout effect：早于 AfterRender 的 useEffect 和 rAF / ResizeObserver 回调，reveal 读到的总是本次渲染的高亮
-  useLayoutEffect(() => { hlNow.current = hl }, [hl])
+  const viewNow = useRef(view)
+  // layout effect：早于 AfterRender 的 useEffect 和 rAF / ResizeObserver 回调，reveal 读到的总是本次渲染的高亮和视图
+  useLayoutEffect(() => { hlNow.current = hl; viewNow.current = view }, [hl, view])
+  /** 视图切换时的那个高亮（`视图|值`）：按绝对位置滚；高亮离开过它，之后都按 nearest 滚 */
+  const anchor = useRef('')
+  const lastView = useRef('')
+  const scrolled = useRef('')
   const watched = useRef<{ list: Element; ro: ResizeObserver } | null>(null)
   useEffect(() => () => watched.current?.ro.disconnect(), [])
   /**
    * 把当前高亮项滚进列表可见区（贴最近的一边，同 block: 'nearest'）。只改列表自己的 scrollTop：立即到位、没有平滑滚动，
-   * 也不会带动页面或弹层。
-   * 打开时的那个高亮（当前城市）按「从列表顶端出发」算出绝对位置，不看此刻已经滚到哪：弹层定位期间列表高度会变，
-   * 相对滚动的结果取决于先滚还是先定高（CI 上偶发偏移的根因）。列表尺寸每变一次重算（见 sync 里的 ResizeObserver）
+   * 也不会带动页面或弹层。顶部固定的「返回」行挡住的部分不算可见区。
+   * 视图切换（含打开）时的那个高亮按「从列表顶端出发」算出绝对位置，不看此刻已经滚到哪：弹层定位期间列表高度会变，
+   * 相对滚动的结果取决于先滚还是先定高（CI 上截图偶发偏移的根因，#72）。列表尺寸每变一次重算（见 sync 里的 ResizeObserver）
    */
   const reveal = () => {
     const root = document.getElementById(contentId)
@@ -61,12 +93,13 @@ export function CityPicker({ city, onPick }: { city: City; onPick: (code: string
     const item = hlNow.current ? itemById(root, hlNow.current) : null
     if (!list || !item) return
     const r = item.getBoundingClientRect()
+    const head = hlNow.current === BACK ? 0 : (itemById(root, BACK)?.offsetHeight ?? 0)
     const top = list.getBoundingClientRect().top + list.clientTop
-    if (hlNow.current === opened.current) {
+    if (anchor.current === `${viewNow.current}|${hlNow.current}`) {
       list.scrollTop = Math.max(0, r.bottom - top + list.scrollTop - list.clientHeight)
       return
     }
-    if (r.top < top) list.scrollTop += r.top - top
+    if (r.top < top + head) list.scrollTop += r.top - top - head
     else if (r.bottom > top + list.clientHeight) list.scrollTop += r.bottom - (top + list.clientHeight)
   }
   const sync = () => {
@@ -74,12 +107,13 @@ export function CityPicker({ city, onPick }: { city: City; onPick: (code: string
     const list = el?.querySelector('[cmdk-list]')
     setListId(list?.id)
     setItemId(hl ? itemById(el, hl)?.id : undefined)
-    // 绝对定位只用于打开时的那个高亮；高亮离开过当前城市，之后都按 nearest 滚
-    if (hl !== opened.current) opened.current = ''
+    const key = `${view}|${hl}`
+    if (view !== lastView.current) { lastView.current = view; anchor.current = key; if (list) list.scrollTop = 0 }
+    else if (key !== anchor.current) anchor.current = ''
     // 弹层刚挂载时还在定位、列表高度（取决于可用高度）还没定，当场滚的位置不可靠：
-    // 下一帧滚一次（每个高亮只滚一次），之后列表尺寸每变一次再按当时的高度重算，最终位置与定位完成的先后无关
-    if (hl && scrolled.current !== hl) {
-      scrolled.current = hl
+    // 下一帧滚一次（每个视图里的每个高亮只滚一次），之后列表尺寸每变一次再按当时的高度重算，最终位置与定位完成的先后无关
+    if (hl && scrolled.current !== key) {
+      scrolled.current = key
       requestAnimationFrame(reveal)
     }
     if (list && watched.current?.list !== list) {
@@ -93,6 +127,8 @@ export function CityPicker({ city, onPick }: { city: City; onPick: (code: string
     }
   }
 
+  const cur = 'bg-primary-soft font-semibold text-primary'
+  const idle = 'text-foreground hover:bg-background'
   return (
     <Popover open={open} onOpenChange={(o) => (o ? show() : setOpen(false))}>
       <PopoverTrigger asChild>
@@ -106,7 +142,7 @@ export function CityPicker({ city, onPick }: { city: City; onPick: (code: string
         align="end"
         aria-label="选择天气城市"
         onOpenAutoFocus={(e) => { e.preventDefault(); inputRef.current?.focus() }}
-        className="flex max-h-[min(400px,var(--radix-popover-content-available-height))] w-[280px] flex-col rounded-lg border border-border p-1.5 text-[13px] shadow-pop"
+        className="flex max-h-[min(360px,var(--radix-popover-content-available-height))] w-[280px] flex-col rounded-lg border border-border p-1.5 text-[13px] shadow-pop"
       >
         <Command
           shouldFilter={false}
@@ -115,7 +151,7 @@ export function CityPicker({ city, onPick }: { city: City; onPick: (code: string
           className="flex min-h-0 flex-col"
           onKeyDown={(e) => {
             if (e.nativeEvent.isComposing || e.keyCode === 229) return
-            if (e.key === 'Enter' && !hl) { e.preventDefault(); if (first) pick(first) }
+            if (e.key === 'Enter' && !hl) { e.preventDefault(); if (searching && hits[0]) pick(hits[0].city) }
             if (e.key === 'Tab') { e.preventDefault(); setOpen(false) }
           }}
         >
@@ -135,29 +171,44 @@ export function CityPicker({ city, onPick }: { city: City; onPick: (code: string
               onChange={(e) => {
                 const v = e.target.value
                 setQ(v)
-                const hit = PROVINCES.flatMap((p) => p.cities.filter((c) => matchCity(c, p.name, v)))[0]
-                setHl(hit?.code ?? '')
+                if (v.trim()) setHl(searchCities(v)[0]?.city.code ?? '')
+                else setHl(prov ? (prov.cities.some((c) => c.code === city.code) ? city.code : prov.cities[0].code) : '')
               }}
-              onKeyDown={(e) => { if (e.key === 'Home' || e.key === 'End') e.stopPropagation() }}
+              onKeyDown={(e) => {
+                if (e.key === 'Home' || e.key === 'End') e.stopPropagation()
+                if (e.key === 'Backspace' && !q && prov) { e.preventDefault(); back() }
+              }}
             />
           </InputGroup>
-          <CommandList label="城市" className="min-h-0 overflow-y-auto">
-            {groups.map(({ p, cities }) => (
-              <div key={p.code} role="group" aria-label={p.name}>
-                <div aria-hidden="true" className="px-2.5 pt-2 pb-1 text-[11.5px] text-faint">{p.name}</div>
-                {cities.map((c) => (
-                  <CommandItem
-                    key={c.code}
-                    value={c.code}
-                    onSelect={() => pick(c)}
-                    data-current={c.code === city.code || undefined}
-                    className={cn('rounded-[7px]', c.code === city.code ? 'bg-primary-soft font-semibold text-primary' : 'text-foreground hover:bg-background')}
-                  >
+          <CommandList label={searching ? '城市' : prov ? prov.name : '省份'} className="min-h-0 overflow-y-auto">
+            {searching ? hits.map(({ city: c, province: p }) => (
+              <CommandItem key={c.code} value={c.code} onSelect={() => pick(c)} data-current={c.code === city.code || undefined}
+                className={cn('justify-start rounded-[7px]', c.code === city.code ? cur : idle)}>
+                <span className="min-w-0 truncate">{c.name}{p.name !== c.name && <span className="font-normal text-faint"> · {p.name}</span>}</span>
+              </CommandItem>
+            )) : prov ? (
+              <>
+                <CommandItem value={BACK} onSelect={back} aria-label={`返回省份列表（当前：${prov.name}）`}
+                  className="sticky top-0 z-10 justify-start gap-2 rounded-[7px] border-b border-border bg-popover text-muted-foreground hover:bg-background">
+                  <Icon icon={faChevronLeft} size="xs" /><span className="min-w-0 flex-1 truncate">{prov.name}</span><span className="shrink-0 text-[12px] text-faint">全部省份</span>
+                </CommandItem>
+                {prov.cities.map((c) => (
+                  <CommandItem key={c.code} value={c.code} onSelect={() => pick(c)} data-current={c.code === city.code || undefined}
+                    className={cn('rounded-[7px]', c.code === city.code ? cur : idle)}>
                     <span className="min-w-0 truncate">{c.name}</span>
                   </CommandItem>
                 ))}
-              </div>
-            ))}
+              </>
+            ) : PROVINCES.map((p) => {
+              const here = p.cities.some((c) => c.code === city.code)
+              return (
+                <CommandItem key={p.code} value={PROV + p.code} onSelect={() => enter(p)} data-current-province={here || undefined}
+                  className={cn('rounded-[7px]', here ? cur : idle)}>
+                  <span className="min-w-0 truncate">{p.name}</span>
+                  {!isSingleCity(p) && <Icon icon={faChevronRight} size="xs" className="faint" />}
+                </CommandItem>
+              )
+            })}
             <CommandEmpty className="px-2.5 py-3 text-[12.5px] text-muted-foreground">未找到匹配的城市</CommandEmpty>
             <AfterRender run={sync} />
           </CommandList>
