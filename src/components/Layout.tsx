@@ -1,7 +1,7 @@
 import { Fragment, useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
 import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import {
-  faCloudSun, faLayerGroup, faSliders, faLeaf, faTemperatureHalf, faFan, faSitemap, faGear, faRightFromBracket,
+  faCloudSun, faLayerGroup, faSliders, faLeaf, faTemperatureHalf, faFan, faSitemap, faRightFromBracket,
   faChevronDown, faChevronRight, faMagnifyingGlass, faHouse, faPlugCircleXmark,
 } from '@fortawesome/free-solid-svg-icons'
 import { Avatar, Icon, LogoMark } from './legacy'
@@ -31,7 +31,7 @@ export const NAV_PROJECT = [
   { to: '/fresh-air', label: '新风除湿机', icon: faFan },
   { to: '/connections', label: '设备连接状态', icon: faSitemap },
 ]
-const ALL = [...NAV_MAIN, ...NAV_PROJECT, { to: '/settings', label: '系统设置', icon: faGear }]
+const ALL = [...NAV_MAIN, ...NAV_PROJECT]
 
 /** 组织数据后台刷新失败（有旧数据）、经销商列表失败时，弹层顶部的提示；可重试 */
 function OrgHint({ text, onRetry }: { text: string; onRetry: () => void }) {
@@ -439,7 +439,6 @@ export default function Layout() {
           ))}
         </div>
         <div className="sb-foot">
-          <NavLink to="/settings" className="nav-item"><Icon className="ico" icon={faGear} />系统设置</NavLink>
           <a className="nav-item" onClick={onLogout} style={{ cursor: 'pointer' }}><Icon className="ico" icon={faRightFromBracket} />退出登录</a>
         </div>
       </aside>

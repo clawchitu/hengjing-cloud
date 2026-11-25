@@ -1,6 +1,6 @@
 import { expect, shot, test } from './fixtures'
 
-const PAGES = ['home', 'groups', 'control', 'sensors', 'thermostat', 'fresh-air', 'connections', 'settings']
+const PAGES = ['home', 'groups', 'control', 'sensors', 'thermostat', 'fresh-air', 'connections']
 
 // 登录页（经销商和管理员共用同一个页面）
 test('login', async ({ page }) => {
@@ -49,3 +49,16 @@ test('已移除的旧路径回到首页', async ({ page, login }) => {
     await expect(page).toHaveURL(/\/home$/)
   }
 })
+
+// 系统设置没有接口支撑（Q12），入口与路由都已去掉：直接访问 /settings 回到首页，侧栏不再有该入口
+for (const role of ['dealer', 'admin'] as const) {
+  test(`${role} 访问 /settings 回到首页，侧栏无「系统设置」`, async ({ page, login }) => {
+    await login(role)
+    await page.goto('/settings')
+    await page.clock.runFor(500)
+    await expect(page).toHaveURL(/\/home$/)
+    await expect(page.locator('.sidebar .nav-item', { hasText: '欢迎首页' })).toBeVisible()
+    await expect(page.locator('.sidebar')).not.toContainText('系统设置')
+    await expect(page.locator('.sidebar a[href="/settings"]')).toHaveCount(0)
+  })
+}

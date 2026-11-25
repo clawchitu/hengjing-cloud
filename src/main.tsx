@@ -24,7 +24,6 @@ import Sensors from './pages/Sensors'
 import Thermostat from './pages/Thermostat'
 import FreshAir from './pages/FreshAir'
 import Connections from './pages/Connections'
-import Settings from './pages/Settings'
 import type { ReactNode } from 'react'
 
 /**
@@ -64,7 +63,6 @@ createRoot(document.getElementById('root')!).render(
             <Route path="/thermostat" element={<Thermostat />} />
             <Route path="/fresh-air" element={<FreshAir />} />
             <Route path="/connections" element={<Connections />} />
-            <Route path="/settings" element={<Settings />} />
           </Route>
           <Route path="*" element={<Navigate to="/home" replace />} />
         </Routes>
