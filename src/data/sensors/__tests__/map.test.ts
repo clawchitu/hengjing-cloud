@@ -18,9 +18,9 @@ describe('toAirSensors', () => {
     expect(t.temp).toBeNull()
   })
 
-  it('缺字段解码出的 0 一律无效（含温度）；湿度、CO₂ 负数无效；温度、露点负数有效', () => {
+  it('0 是有效读数（后端 11/25 答复第 9 条，含温度）；湿度、CO₂ 负数无效；温度、露点负数有效', () => {
     const [s] = toAirSensors([{ ...KC2, humidity: 0, co2: 0, temperature: 0, pm25: 0, dewPoint: 0 }])
-    expect(s).toMatchObject({ hum: null, co2: null, temp: null, pm25: null, dew: null })
+    expect(s).toMatchObject({ hum: 0, co2: 0, temp: 0, pm25: 0, dew: 0 })
     const [t] = toAirSensors([{ ...KC2, humidity: -1, co2: -5, temperature: -3, dewPoint: -8 }])
     expect(t).toMatchObject({ hum: null, co2: null, temp: -3, dew: -8 })
   })

@@ -15,6 +15,7 @@
 //   一致的字段也记为结束，全部结束即放；未变化 / 无法核对 / 结果未知都不提前放锁。应答结果未知 → unknown。
 //   批次截止时间只影响界面上的标注，不放锁。
 import { callCtrl, writeCtrl, type CtrlReply, type WriteQuery } from '@/api/ctrl'
+import { INVALID_HOURLY, NO_DATA } from '@/api/values'
 import { ApiError } from '@/api/errors'
 import type { WriteProject } from '@/api/guard'
 import { TEXT } from './constants'
@@ -54,8 +55,8 @@ export function contextOf(p: BatchProject | undefined, mock = false): UnifiedCon
   return { projectId: p.id, projectCode: p.code, projectName: p.name, appCode: unifiedAppCode(p.programCode, mock), online: p.online }
 }
 
-const INVALID = 65536
-const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) && v !== INVALID && v !== -1 ? v : null)
+// 读数无效：65536（未初始化）、-100（无效数据，后端 11/25 答复第 9 条）、-1；0 是有效读数
+const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) && v !== NO_DATA && v !== INVALID_HOURLY && v !== -1 ? v : null)
 const same = (xs: Array<number | null>): number | null => (xs.length && xs.every((x) => x !== null && x === xs[0]) ? xs[0] : null)
 
 /**

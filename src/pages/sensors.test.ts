@@ -186,8 +186,8 @@ describe('数据与统计', () => {
     backend({
       // 207：PM2.5 无探头（65536）；CO₂ 有探头
       '/ctrl/air-sensor-get': () => body207([{ ...KC2, pm25: 65536 }]),
-      // 208：13 个有效小时（过半）；CO₂ 全部无效（缺省 0）；PM2.5 也全无效
-      '/ctrl/air-sensor-data-hour-get': () => body208(Array.from({ length: 13 }, (_, i) => at(i, { temperature: i < 3 ? 27 : 25, co2: 0, pm25: 65536 }))),
+      // 208：13 个有效小时（过半）；CO₂ 全部无效（-100）；PM2.5 也全无效（65536）
+      '/ctrl/air-sensor-data-hour-get': () => body208(Array.from({ length: 13 }, (_, i) => at(i, { temperature: i < 3 ? 27 : 25, co2: -100, pm25: 65536 }))),
     })
     await signIn('u', 'pw', true)
     mount()

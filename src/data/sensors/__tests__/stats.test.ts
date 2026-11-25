@@ -62,20 +62,20 @@ describe('无效值', () => {
     expect(readingsOf({ temperature: -5.5, dewPoint: -2, humidity: 65535 })).toMatchObject({ temp: -5.5, dew: -2, hum: 65535 })
   })
 
-  it('缺字段解码出的 0 一律无效（所有指标，含温度）；湿度、CO₂ 的负数也无效', () => {
-    expect(readingsOf({ temperature: 0, humidity: 0, dewPoint: 0, co2: 0, pm25: 0 })).toEqual({ temp: null, hum: null, dew: null, co2: null, pm25: null })
+  it('0 是有效读数（所有指标，含温度；后端 11/25 答复第 9 条）；湿度、CO₂ 的负数无效', () => {
+    expect(readingsOf({ temperature: 0, humidity: 0, dewPoint: 0, co2: 0, pm25: 0 })).toEqual({ temp: 0, hum: 0, dew: 0, co2: 0, pm25: 0 })
     expect(readingsOf({ humidity: -3, co2: -1 })).toMatchObject({ hum: null, co2: null })
     expect(readingsOf({ humidity: 1, co2: 1, pm25: 1, temperature: 0.1 })).toMatchObject({ hum: 1, co2: 1, pm25: 1, temp: 0.1 })
   })
 
-  it('真实 protobuf：缺省的 co2 / humidity 解码成 0，按无效处理，不拉低均值', () => {
+  it('真实 protobuf：缺省的 co2 / humidity 解码成 0，0 是有效读数，参与均值和最值', () => {
     const date = cst('2026-11-24T05:00:00')
     const body = encodeMessage(pb.TPAirSensorDataHourGetReplySchema, { data: [{ id: 9, date, hour: 5, temperature: 25, dewPoint: 14, pm25: 10 }, { id: 9, date: date + HOUR_MS, hour: 6, temperature: 25, humidity: 50, co2: 600, dewPoint: 14, pm25: 10 }] })
     const r = decodeReply(pb.TPAirSensorDataHourGetReplySchema, body) as { data: Partial<HourRecord>[] }
     expect(r.data[0].co2).toBe(0)
     const pts = toHourPoints(r.data, 9, windowOf('24小时', NOW))
-    expect(summarize(pts, 'co2', M.co2)).toMatchObject({ avg: 600, min: 600, n: 1 })
-    expect(summarize(pts, 'hum', { lo: 40, hi: 60 })).toMatchObject({ avg: 50, n: 1 })
+    expect(summarize(pts, 'co2', M.co2)).toMatchObject({ avg: 300, min: 0, n: 2 })
+    expect(summarize(pts, 'hum', { lo: 40, hi: 60 })).toMatchObject({ avg: 25, n: 2 })
   })
 
   it('无效值不参与平均 / 最值', () => {
@@ -112,13 +112,13 @@ describe('toHourPoints：208 记录 → 窗口内的小时点', () => {
     expect(pts[0]).toMatchObject({ ts: t, temp: 23 })
   })
 
-  it('同一小时多条：无效值（65536 / -100 / 缺省 0）不覆盖有效值，按字段合并；与记录顺序无关', () => {
+  it('同一小时多条：无效值（65536 / -100）不覆盖有效值，按字段合并（0 是有效值，参与平均）；与记录顺序无关', () => {
     const t = cst('2026-11-24T05:00:00')
     const a = rec(t, { temperature: 25, humidity: 65536, co2: 600, pm25: 65536 })
     const b = rec(t, { temperature: -100, humidity: 55, co2: 0, pm25: 12 })
     const ab = toHourPoints([a, b], 9, w)
     const ba = toHourPoints([b, a], 9, w)
-    expect(ab).toEqual([{ ts: t, temp: 25, hum: 55, dew: 14, co2: 600, pm25: 12 }])
+    expect(ab).toEqual([{ ts: t, temp: 25, hum: 55, dew: 14, co2: 300, pm25: 12 }])
     expect(ba).toEqual(ab)
     // 有效值冲突也与顺序无关（取平均）
     const c = rec(t, { temperature: 21 })
