@@ -44,7 +44,7 @@
 | `npm run e2e:update` | 同上，并重写截图基线 |
 | `npm run gen:proto` | 由 `proto/ctrl200.proto` 重新生成 ctrl 编解码（`src/api/gen/`） |
 | `npm run e2e:live` | 测试服只读 e2e（H1，手动；跑前先在群里说一声，见 `docs/H1-测试服只读e2e.md`）；`npm run e2e:live:dry` 用假后端演练 |
-| `npm run test:live` | 手动联调：连测试环境跑只读冒烟（login → me → 项目 → ctrl 读 → 刷新），账号从 macOS 钥匙串 `hengjing-admin` / `hengjing-dealer` 读取；CI 不跑 |
+| `npm run test:live` | 手动联调：连测试环境跑只读冒烟（login → me → 项目 → ctrl 读 → 刷新），账号从 macOS 钥匙串 `hengjing-admin` / `hengjing-dealer` 读取；CI 不跑。脚本结束只清本地令牌，不调 `/auth/invalidate`（会作废同账号在别处的登录）；测完也不要点页面「退出登录」 |
 
 ## 接口层与运行时配置
 

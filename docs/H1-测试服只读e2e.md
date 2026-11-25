@@ -60,7 +60,7 @@ GitHub Actions：`.github/workflows/e2e-live.yml`，只能在 Actions 页面手�
 
 新风用例只证明「打开不白屏、页面上没有 65536」：S10b（#62）起 `src/pages/FreshAir.tsx` 已走 S10a 的新风数据源（`src/features/freshAir`，ctrl 202 / 210，都在白名单），但这里还不核对 202 / 210 回包，通过不代表新风读数正确。读数核对以后再补。
 
-不覆盖：新风的读数核对和任何设置、天气、统一控制、退出登录、续期（F4）。S7b 起首页会发 `POST /weather`、`/weather24`（只读，已加入 `e2e-live/policy.ts` 白名单，不算违规），但不核对天气内容。测试服上没有在线项目或离线项目时，相应用例标为跳过（环境不可用，不算失败）。
+不覆盖：新风的读数核对和任何设置、天气、统一控制、退出登录、续期（F4）。测完（包括手动在测试服上看页面、`npm run test:live` 联调）不要点页面上的「退出登录」：它调 `/auth/invalidate`，会让同一账号在别的浏览器、设备和脚本里的登录一起失效；只清本地令牌（localStorage / sessionStorage、`e2e-live/.auth/` 的 storageState，脚本里 `clearTokens()`）。S7b 起首页会发 `POST /weather`、`/weather24`（只读，已加入 `e2e-live/policy.ts` 白名单，不算违规），但不核对天气内容。测试服上没有在线项目或离线项目时，相应用例标为跳过（环境不可用，不算失败）。
 
 ## 5. 结果怎么看
 
