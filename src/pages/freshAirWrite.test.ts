@@ -79,6 +79,8 @@ function backend(routes: Record<string, Handler> = {}, opts: { perms?: string[] 
     '/auth/login': () => json({ access_token: jwt('admin-1'), refresh_token: 'R1', expires_in: 7200 }),
     '/me': () => json({ user_entity: { id: 'admin-1', name: '测试' }, permission_paths: opts.perms ?? PERMS }),
     '/ctrl/projects': () => json({ project_entities: [P1, P12, P12B] }),
+    // 下发前的控制屏实时预检（ctrl 205）：默认在线
+    '/ctrl/device-summary-get': () => json({ body: '' }),
     '/integrated-projects': () => json({ entities: GROUPS }),
     '/distributors': () => json({ distributor_entities: [{ id: 'D1', name: '科希家研发苏州main' }] }),
     '/auth/invalidate': () => json({}),
@@ -644,4 +646,56 @@ describe('没有下发入口 / 只读', () => {
       expect(within(panel()).getByText(text)).toBeTruthy()
     })
   }
+})
+
+describe('下发前控制屏实时预检（ctrl 205，赤兔 11/25）', () => {
+  const offline205 = () => json({ code: 14, message: '控制屏消息发送失败' }, 503)
+  const result = () => panel().querySelector('[data-result]') as HTMLElement | null
+  it('205 返回 503 → 0 个写请求、未下发、不占锁，结果条给「重试」；重试时现查 205，在线就照常下发', async () => {
+    let down = true
+    const be = backend({ '/ctrl/device-summary-get': () => (down ? offline205() : json({ body: '' })) })
+    await draftWindAndSend()
+    await confirmOk()
+    await waitFor(() => expect(toasts()).toContain('TXFS500：控制屏未连接，暂不能下发'))
+    await flush(50)
+    expect(writes(be)).toHaveLength(0)
+    expect(be.callsTo('/ctrl/device-summary-get')).toHaveLength(1)
+    expect(lockOf(P12 as never)).toBeNull()
+    expect(result()?.textContent).toContain('未下发：控制屏未连接，暂不能下发')
+    expect(panel().textContent).toContain('待下发：风速 自动 → 高') // 草稿保留
+    down = false
+    fireEvent.click(within(result()!).getByRole('button', { name: '重试' }))
+    await confirmOk()
+    await waitFor(() => expect(toasts()).toContain('TXFS500 已生效：风速 高'))
+    expect(be.callsTo('/ctrl/device-summary-get')).toHaveLength(2)
+    expect(writes(be)).toHaveLength(1)
+  })
+  it('205 超过 5 秒没返回 → 同样拦下：0 个写请求、不占锁、有重试', async () => {
+    const be = backend({ '/ctrl/device-summary-get': () => new Promise<Response>(() => {}) })
+    await draftWindAndSend()
+    fakeClock()
+    await confirmOk()
+    await flush()
+    await advance(4_900)
+    expect(toasts()).not.toContain('控制屏未连接')
+    await advance(200)
+    await waitFor(() => expect(toasts()).toContain('TXFS500：控制屏未连接，暂不能下发'))
+    expect(writes(be)).toHaveLength(0)
+    expect(lockOf(P12 as never)).toBeNull()
+    expect(within(result()!).getByRole('button', { name: '重试' })).toBeTruthy()
+  })
+  it('205 正常 → 照常下发（先 205、后 204）', async () => {
+    const be = backend()
+    await draftWindAndSend()
+    await confirmOk()
+    await waitFor(() => expect(writes(be)).toHaveLength(1))
+    const order = be.calls.map(pathOf).filter((p) => p === '/ctrl/device-summary-get' || p === R204)
+    expect(order).toEqual(['/ctrl/device-summary-get', R204])
+  })
+  it('写请求收到网关纯文本 504：结果说明补「控制屏 10 秒内没有应答，可能离线」', async () => {
+    backend({ [R204]: () => new Response('upstream request timeout', { status: 504, headers: { 'content-type': 'text/plain' } }) })
+    await draftWindAndSend()
+    await confirmOk()
+    await waitFor(() => expect(toasts()).toContain('控制屏 10 秒内没有应答，可能离线'))
+  })
 })

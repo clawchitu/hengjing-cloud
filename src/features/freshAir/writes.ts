@@ -2,6 +2,8 @@
 // 共用写锁按控制屏加，和 201、203、206 互斥）。各环节（docs/plan-s10-s7.md S10c 的对照表、docs/HANDOFF.md 第 1 节）：
 //   确认      页面（FreshAir.tsx 的设置面板，真正发起下发的组件）里 useConfirm()；确认后同步复核项目、锁、草稿
 //   加锁      runOp 里 acquire(project)：用户点了确认之后才加；target `fa:<设备 id>` 只是结果条的标签，锁仍按控制屏
+//   205 预检  加锁后先现查一次 ctrl 205（runOp → src/api/screenPreflight.ts，5 秒超时）：没通过 →「控制屏未连接，暂不能下发」，
+//             不发、放锁，结果条给「重试」
 //   预检      新读 202 + 210（useFreshPair）：202 原始回包里目标设备 id 恰好一次、设备在线；210 的 id 相符；用这份新读的 210 调
 //             build204 重新组装，与确认时的 Query 相同，且 210 原始解码读数（全部字段，含没改的项、can_change、名称；
 //             不经视图折叠、不取整）与确认时逐字段严格相同（sameRaw210），否则不发
@@ -20,7 +22,7 @@ import type { LockTarget } from '@/api/writeLock'
 import type { FieldResult } from '@/api/writeLock'
 import { describeFields } from '@/api/writeLockVerify'
 import { can } from '@/data/session'
-import { runOp, type RunResult, type WriteResult } from '@/features/thermostat/writes'
+import { runOp, type OpSpec, type RunResult, type WriteResult } from '@/features/thermostat/writes'
 import { build204, sameQuery, sameRaw210, TEXT_WRITE_FORBIDDEN, TEXT_WRITE_OFF, type FaDraft } from './edit'
 import { FRESH_ROUTES, type FreshPair } from './hooks'
 import { match204, reading210, record204, unitCount, type Verify204Read } from './lockVerify'
@@ -55,6 +57,8 @@ export interface FreshAirOp {
   present: () => boolean
   toast: (text: string, err?: boolean) => void
   onApplied?: () => void
+  /** 控制屏实时预检（默认现查 ctrl 205，见 runOp）；测试注入 */
+  screen?: OpSpec<WriteQuery<204>, Verify204Read>['screen']
 }
 
 /**
@@ -84,7 +88,7 @@ export function runFreshAirSet(o: FreshAirOp): Promise<RunResult> {
   const p = o.project
   return runOp<WriteQuery<204>, Verify204Read>({
     project: p, target: faTarget(o.deviceId), subject: o.subject, noun: NOUN, okText: o.okText, toast: o.toast, onApplied: o.onApplied,
-    present: o.present,
+    present: o.present, retry: 'set', screen: o.screen,
     preflight: async (signal) => {
       const r = await o.read(signal)
       const issue = unitIssue(r, o.deviceId)

@@ -4,6 +4,9 @@
 //   （用户已确认）
 //        │ acquire(project)：同屏已被锁 → 'busy'
 //        ▼
+//   screen     现查一次 ctrl 205（src/api/screenPreflight.ts，单独 5 秒超时，不缓存）：503 / 超时 / 失败 →
+//        │     「控制屏未连接，暂不能下发」，不发写请求、放锁，结果条给「重试」（'not-sent'）；205 只提前拦截，四态判法不变
+//        ▼
 //   preflight  新发一次 200（hooks.ts 的 useFreshRead：先取消在途 200，绑定会话），用新读数重新校验并组装，与确认时比对
 //        │     读取失败 / 不一致 / 期间离开、切项目、会话变化 → 不写，放锁（'aborted'）
 //        │     核对数据发送前检查（写锁 checkSentRecord：206 必须带目标房间集合、不超上限）不过 → 不写，放锁并提示（'aborted'）
@@ -25,6 +28,7 @@ import {
   type FieldResult, type LockInfo, type LockTarget, type MatchDetail, type MatchResult, type SentRecord,
 } from '@/api/writeLock'
 import { getStoredProjectId } from '@/data/org/current'
+import { preflightScreen, SCREEN_OFFLINE_TEXT, withNoReplyNote, type ScreenState } from '@/api/screenPreflight'
 import { verdictOf } from '@/api/writeLockVerify'
 import { outcomeOf } from '@/features/unified/machine'
 
@@ -52,6 +56,8 @@ export interface WriteResult {
   ended?: 'expired'
   /** 写锁还在自动核对（LockInfo.settling）：界面只显示「正在核对…」，verdict / fields 留着，退避用完或到期后才显示 */
   settling?: boolean
+  /** 控制屏实时预检（205）没通过、未下发：结果条给「重试」，值是页面传的 OpSpec.retry（页面据此重新发起同一操作） */
+  retry?: string
 }
 
 /** 本标签正在进行的一次下发（只用于界面阶段展示；互斥靠写锁） */
@@ -100,6 +106,7 @@ export function clearResult(projectId: string, target: string) {
  * 后端）——这时锁保持，由写锁核对或到期。sent = 请求可能到过后端（确定失败后据此决定要不要回读刷新界面）
  */
 export function classify(e: unknown): { outcome: 'fail' | 'unknown'; text: string; sent: boolean } {
+  e = withNoReplyNote(e) // 网关纯文本 504：说明里补「控制屏 10 秒内没有应答，可能离线」（分类不变）
   const err = isApiError(e) ? e : null
   const msg = err?.message || (e instanceof Error ? e.message : '') || '未知错误'
   const o = outcomeOf(e)
@@ -148,6 +155,10 @@ export interface OpSpec<P, L> {
   onApplied?: () => void
   /** 发起的页面还在（没卸载） */
   present: () => boolean
+  /** 205 预检没通过时结果条「重试」带回给页面的标记（页面据此重新发起同一操作，如 'set' / 'on' / 'off'），默认 'retry' */
+  retry?: string
+  /** 控制屏实时预检，默认现查 ctrl 205（screenPreflight.ts）；测试注入 */
+  screen?: (projectId: string, signal: AbortSignal) => Promise<ScreenState>
   toast: (text: string, err?: boolean) => void
 }
 
@@ -174,6 +185,17 @@ export async function runOp<P, L>(o: OpSpec<P, L>): Promise<RunResult> {
   let claimed = false
 
   try {
+    // ---- 控制屏实时预检（205，每次现查）：没通过 → 不发写请求；锁在 finally 里放（还没认领）
+    const sac = new AbortController()
+    let screen: ScreenState
+    try { screen = await (o.screen ?? preflightScreen)(projectId, sac.signal) } catch { screen = 'offline' }
+    if (!sameSession() || !sameProject() || !o.present()) return 'aborted'
+    if (screen !== 'online') {
+      say(`${o.subject}：${SCREEN_OFFLINE_TEXT}`, true)
+      record({ outcome: 'fail', text: `未下发：${SCREEN_OFFLINE_TEXT}`, readback: 'ok', retry: o.retry ?? 'retry' })
+      return 'not-sent'
+    }
+
     // ---- preflight
     const pac = new AbortController()
     let pre: Preflight<P>

@@ -14,6 +14,8 @@
 //   下发后回读里一致的字段先记为结束（这次读数只是候选，经写锁 commitRead 提交：读取途中换号、锁换了 / 取消 / 过期就丢弃）；还有没结束的 → unknown，交给写锁核对（本次登记的核对函数，见 fieldVerifier），之后复核读到
 //   一致的字段也记为结束，全部结束即放；未变化 / 无法核对 / 结果未知都不提前放锁。应答结果未知 → unknown。
 //   批次截止时间只影响界面上的标注，不放锁。
+// - 控制屏实时预检（赤兔 11/25，src/api/screenPreflight.ts）：轮到某个项目时先现查一次 ctrl 205（单独 5 秒超时），没通过
+//   （503 / 超时 / 失败）→ 这一项标「未下发（控制屏未连接）」、不取锁、不发写请求，接着下一个；在线的照常发，整批不受影响
 import { callCtrl, writeCtrl, type CtrlReply, type WriteQuery } from '@/api/ctrl'
 import { INVALID_HOURLY, NO_DATA } from '@/api/values'
 import { roomSwitchReported } from '@/api/config'
@@ -25,6 +27,7 @@ import { createUnifiedController, isDone, outcomeOf, type UnifiedController, typ
 import { changedFields, describeQuery, fieldResults, type EchoField, type UnifiedContext, type UnifiedDraft, type UnifiedEcho } from './rules'
 import { acquire, beginRead, checkSentRecord, claim, commitRead, currentAccount, holds, lockOf, markOverdue, markSent, OTHER_ACCOUNT_TEXT, requireVerify, sameAccount, settle, verify, type LockToken } from '@/api/writeLock'
 import { LOCK_BUSY_TEXT, lockTargetOf, recordOf } from './lock'
+import { preflightScreen, SCREEN_OFFLINE_ROW, withNoReplyNote, type ScreenState } from '@/api/screenPreflight'
 
 /** 页面传进来的项目（S6a 的 Project 直接可用） */
 export interface BatchProject {
@@ -114,6 +117,8 @@ export interface BatchRow {
   notExecuted?: boolean
   /** 控制屏已应答 success=true（进度里据此显示「已下发，正在核对…」） */
   replyOk?: boolean
+  /** 控制屏实时预检（205）没通过、未下发：可重试 */
+  retry?: boolean
   state: UnifiedState<UnifiedSnapshot>
 }
 export type BatchPhase = 'idle' | 'confirming' | 'running' | 'done'
@@ -142,6 +147,8 @@ export interface BatchDeps {
   refreshProjects?: (signal: AbortSignal) => Promise<readonly BatchProject[]>
   /** 当前登录账号（user id，没有就用令牌 sub；演示模式为演示账号名）。确认时记下，beforeSend 核对 */
   getAccount?: () => string | null
+  /** 控制屏实时预检（默认现查 ctrl 205；演示数据不查）；测试注入 */
+  screen?: (projectId: string, signal: AbortSignal) => Promise<ScreenState>
 }
 
 export const REFRESH_FAILED_TEXT = '确认后刷新项目在线状态失败，整批未下发'
@@ -185,6 +192,7 @@ export function createUnifiedBatch(deps: BatchDeps) {
   const send = deps.send ?? defaultBatchSender
   const now = deps.now ?? (() => new Date())
   const mock = deps.mock ?? false
+  const screen = deps.screen ?? ((pid: string, signal: AbortSignal) => (mock ? Promise.resolve<ScreenState>('online') : preflightScreen(pid, signal)))
   type Entry = {
     p: BatchProject; ctl: UnifiedController<UnifiedSnapshot>; started: boolean; at?: string; unsub: () => void
     /** beforeSend 放行过（写请求确实发出了） */
@@ -200,8 +208,8 @@ export function createUnifiedBatch(deps: BatchDeps) {
     open?: Set<EchoField>
     /** 正在进行的核对（锁的 verify 同一时刻只跑一个，正在跑时再调会直接返回） */
     checking?: Promise<unknown>
-    /** 截止时冻结的结果 */
-    final?: { status: 'not-sent' | 'unknown' | 'failure'; note: string; notExecuted?: boolean }
+    /** 截止时冻结的结果（含 205 预检没通过的未下发） */
+    final?: { status: 'not-sent' | 'unknown' | 'failure'; note: string; notExecuted?: boolean; retry?: boolean }
   }
   let entries: Entry[] = []
   let state: BatchState = { phase: 'idle', rows: [], errors: [], items: [] }
@@ -224,6 +232,7 @@ export function createUnifiedBatch(deps: BatchDeps) {
     const rows = entries.map((e): BatchRow => ({
       id: e.p.id, code: e.p.code, name: e.p.name, at: e.at, state: e.ctl.getState(),
       status: e.final?.status ?? rowStatus(e.ctl.getState(), e.started), note: e.final?.note, notExecuted: e.final?.notExecuted, replyOk: e.reply === 'ok',
+      ...(e.final?.retry ? { retry: true } : {}),
     }))
     state = { ...state, rows, ...patch }
     for (const fn of subs) fn()
@@ -267,6 +276,8 @@ export function createUnifiedBatch(deps: BatchDeps) {
     }
     let out: Promise<CtrlReply<203>>
     try { out = send(p, q, { beforeSend, signal: ac.signal }) } catch (x) { settle(token, 'fail'); return Promise.reject(x) }
+    // 网关纯文本 504：错误说明补「控制屏 10 秒内没有应答，可能离线」（kind / status 不变，分类照旧）
+    out = out.catch((x) => { throw withNoReplyNote(x) })
     markSent(token, out, record)
     e.query = q
     e.open = new Set(changedFields(q))
@@ -469,6 +480,18 @@ export function createUnifiedBatch(deps: BatchDeps) {
           if (stopped || expired) break
           e.started = true
           emit({})
+          // 控制屏实时预检（205，每个项目现查）：没通过 → 这一项未下发（不取锁、不发），接着下一个
+          const scr = await Promise.race([screen(e.p.id, ac.signal).catch((): ScreenState => 'offline'), deadline])
+          if (scr === 'deadline') break
+          if (scr !== 'online' || stopped || expired) {
+            if (!e.final && !stopped && !expired) {
+              e.final = { status: 'not-sent', note: SCREEN_OFFLINE_ROW, retry: true }
+              e.at ??= stamp(now())
+              e.ctl.abort()
+              emit({})
+            }
+            continue
+          }
           // 截止时不再等在途的项目
           if (await Promise.race([e.ctl.confirm().then(() => 'done' as const), deadline]) === 'deadline') break
           if (!e.at) e.at = stamp(now())
