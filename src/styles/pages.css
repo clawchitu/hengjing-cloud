@@ -52,8 +52,8 @@
 .end-tag { appearance: none; display: inline-flex; align-items: center; gap: 4px; height: 24px; padding: 0 10px; border: 1px solid #cbd5e1; border-radius: 9999px; background: #fff; color: #64748b; font: inherit; font-size: 11.5px; font-weight: 500; white-space: nowrap; cursor: pointer; transition: background-color .15s, box-shadow .15s; }
 .end-tag[data-selected=true] { background: var(--primary); border-color: var(--primary); color: #fff; }
 .end-tag:not(:disabled):not([data-selected=true]):hover { background: #f8fafc; box-shadow: 0 0 0 2px rgba(8, 145, 178, .18); }
-.end-tag:not(:disabled)[data-selected=true]:hover { background: #0e7490; border-color: #0e7490; box-shadow: 0 0 0 2px rgba(8, 145, 178, .18); }
-.end-tag:focus-visible { outline: none; box-shadow: 0 0 0 2px #fff, 0 0 0 4px var(--primary); }
+.end-tag:not(:disabled)[data-selected=true]:hover { background: color-mix(in srgb, var(--primary), #000 15%); border-color: transparent; box-shadow: 0 0 0 2px rgba(8, 145, 178, .18); }
+.end-tag:focus-visible, .end-tag:not(:disabled):not([data-selected=true]):hover:focus-visible, .end-tag:not(:disabled)[data-selected=true]:hover:focus-visible { outline: none; box-shadow: 0 0 0 2px #fff, 0 0 0 4px var(--primary); }
 .end-tag.dirty { outline: 1.5px dashed var(--amber, #d97706); outline-offset: 2px; }
 .end-tag.dim { opacity: .8; }
 .end-tag.locked { cursor: not-allowed; }

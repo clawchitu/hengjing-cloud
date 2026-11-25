@@ -177,7 +177,7 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks(); setConfig(null) })
 
 describe('读取（ctrl 200）', () => {
-  it('房间卡：末端按 end_modes 动态显示（选中蓝 / 未选中灰，开 / 关取 switch），风速档位与自动，65536 隐藏，设定湿度去除', async () => {
+  it('房间卡：末端按 end_modes 动态显示（选中实心 / 未选中白底，开 / 关取 switch），风速档位与自动，65536 隐藏，设定湿度去除', async () => {
     const be = backend()
     const c = await openRooms()
     const ends = [...c.querySelectorAll('.modes-row .end-tag')].map((b) => [b.textContent, b.getAttribute('data-selected')])
@@ -230,6 +230,8 @@ describe('读取（ctrl 200）', () => {
     }
     expect(tags.map((t) => t.textContent)).toEqual(['风盘·开', '顶辐射·关', '地冷·关'])
     expect(tags.map((t) => t.getAttribute('data-selected'))).toEqual(['true', 'true', 'false'])
+    expect(tags.map((t) => t.querySelector('.end-dot')!.getAttribute('data-on'))).toEqual(['true', 'false', 'false'])
+    expect(c.querySelector('.end-lock')).toBeNull()
   })
 
   it('S13：app_code 12 的页头和说明只写程序名称，不写程序编码', async () => {
@@ -2075,6 +2077,7 @@ describe('末端选择下发（201 end_modes）', () => {
     const c = await openRooms()
     const air = endTag(c, '全空气')
     expect(air.textContent).toContain('不可取消')
+    expect(air.querySelector('.end-lock svg[data-icon=lock]')).not.toBeNull()
     expect(air.getAttribute('aria-disabled')).toBe('true')
     fireEvent.click(air)
     expect(toasts()).toContain('客厅：「全空气」不可取消')

@@ -116,7 +116,7 @@
 | 设定温度 | `set_temp` | 新增调节控件（改动文档） |
 | 设定湿度 | `set_humi` | 按改动文档移除 |
 | 风速 | `wind_speed`（100 为自动） | 档位数字与 低/中/高 的对应待确认 Q7 |
-| 末端标签（顶辐射/地冷/风盘…） | `end_modes[]` · `option_name`、`is_selected`（蓝/灰）、`switch`（开/关） | 数量动态；演示版写死三个 |
+| 末端标签（顶辐射/地冷/风盘…） | `end_modes[]` · `option_name`、`is_selected`（实心/白底）、`switch`（开/关） | 数量动态；演示版写死三个 |
 | 面板在线 | `is_connected` | KPI「全部在线」改为实际统计 |
 | 单房间开关、调温 | ctrl 201 · `equipment_id / temperature / switch / end_modes…` | 所有不修改的字段一律传 -1（后端答复） |
 | 全部开启 / 全部关闭 | ctrl 206 · `switch` | |
