@@ -59,6 +59,7 @@ export function CityPicker({ city, onPick }: { city: City; onPick: (code: string
   const defaultHl = prov ? (prov.cities.some((c) => c.code === city.code) ? city.code : prov.cities[0].code) : provinceHl
 
   // 程序化换了视图后的高亮：被高亮的那项卸载时，cmdk 会把高亮改成新列表的第一项（本次提交的 layout 阶段，晚于 setHl）。
+  // 注意：cmdk 只在「最后一个卸载的项」恰好是高亮项时才回退（凉山是四川省最后一个市、新疆是最后一个省，e2e 依赖这一点）。
   // 换视图后的两帧内（want 非空），高亮不是目标值就设回去；用户按键（含退格返回）、再输入搜索词、进入 / 返回都会重新设定或终止
   const want = useRef<string | null>(null)
   const wantGen = useRef(0)
@@ -68,11 +69,14 @@ export function CityPicker({ city, onPick }: { city: City; onPick: (code: string
     const gen = ++wantGen.current
     requestAnimationFrame(() => requestAnimationFrame(() => { if (wantGen.current === gen) want.current = null }))
   }
-  useEffect(() => {
+  const disarm = () => { want.current = null; wantGen.current++ }
+  // layout effect：在绘制前修正，不闪一帧返回行 / 第一项
+  useLayoutEffect(() => {
     if (want.current !== null && !searching && hl !== want.current) setHl(want.current)
   }, [hl, searching])
 
   const show = () => {
+    disarm() // 快速关了又开：上一次的恢复目标作废
     const p = provinceOf(city.code)
     lastView.current = ''; scrolled.current = ''; anchor.current = ''
     // 当前城市是直辖市（省里只有它一个市）：直接显示省份列表并高亮这个直辖市，不进只有一项的城市列表
@@ -152,7 +156,7 @@ export function CityPicker({ city, onPick }: { city: City; onPick: (code: string
   const cur = 'bg-primary-soft font-semibold text-primary'
   const idle = 'text-foreground hover:bg-background'
   return (
-    <Popover open={open} onOpenChange={(o) => (o ? show() : setOpen(false))}>
+    <Popover open={open} onOpenChange={(o) => { if (o) show(); else { disarm(); setOpen(false) } }}>
       <PopoverTrigger asChild>
         <Button size="lg" aria-label={`天气城市：${city.name}，点击更换`} style={{ fontWeight: 500, color: 'var(--text)' }}
           onKeyDown={(e) => { if (e.key === 'ArrowDown') { e.preventDefault(); if (!open) show() } }}>
@@ -171,6 +175,7 @@ export function CityPicker({ city, onPick }: { city: City; onPick: (code: string
           value={hl}
           onValueChange={setHl}
           className="flex min-h-0 flex-col"
+          onPointerMove={(e) => { if (e.movementX || e.movementY) disarm() }} // 真实的鼠标移动：cmdk 按悬停改高亮，不再抢回
           onKeyDown={(e) => {
             if (e.nativeEvent.isComposing || e.keyCode === 229) return
             if (e.key === 'Enter' && !hl) { e.preventDefault(); if (searching && hits[0]) pick(hits[0].city) }
@@ -193,11 +198,11 @@ export function CityPicker({ city, onPick }: { city: City; onPick: (code: string
               onChange={(e) => {
                 const v = e.target.value
                 setQ(v)
-                if (v.trim()) { want.current = null; setHl(searchCities(v)[0]?.city.code ?? '') }
+                if (v.trim()) { disarm(); setHl(searchCities(v)[0]?.city.code ?? '') }
                 else arm(defaultHl)
               }}
               onKeyDown={(e) => {
-                want.current = null // 用户自己动了高亮，不再恢复
+                disarm() // 用户自己动了高亮，不再恢复
                 if (e.key === 'Home' || e.key === 'End') e.stopPropagation()
                 if (e.key === 'Backspace' && !q && prov) { e.preventDefault(); back() }
               }}
