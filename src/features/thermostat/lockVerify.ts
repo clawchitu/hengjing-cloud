@@ -2,13 +2,19 @@
 // （src/api/writeLockVerify.ts 的 matchRoomSet / matchAllRoomsSwitch）。读取走当前数据源（真实接口为 ctrl 200，演示数据为内存）。
 import type { CtrlReply, WriteQuery } from '@/api/ctrl'
 import type { FieldResult, MatchDetail, SentRecord, StoredLock } from '@/api/writeLock'
-import { isNoChange, matchAllRoomsSwitch, matchRoomSet, verdictOf } from '@/api/writeLockVerify'
+import { encodeEnds, isNoChange, matchAllRoomsSwitch, matchRoomSet, verdictOf } from '@/api/writeLockVerify'
 import { validRoomId } from './model'
 import { roomsAsReply } from './model'
 import { thermostatSource } from './source'
 
-/** 201 的核对数据：设备 id 与温度、节能、开关三个可改字段（-1 = 不改，比对时跳过） */
-export const record201 = (q: WriteQuery<201>): SentRecord => ({ msg: 201, deviceId: q.equipmentId, target: { temperature: q.temperature, eco: q.eco, switch: q.switch } })
+/**
+ * 201 的核对数据：设备 id 与温度、节能、开关三个可改字段（-1 = 不改，比对时跳过）；改了末端（end_modes 非空）时再加 ends
+ * （按顺序的「type:选中」，见 writeLockVerify.ts 的 encodeEnds；switch 不核对）
+ */
+export const record201 = (q: WriteQuery<201>): SentRecord => ({
+  msg: 201, deviceId: q.equipmentId,
+  target: { temperature: q.temperature, eco: q.eco, switch: q.switch, ...(q.endModes?.length ? { ends: encodeEnds(q.endModes) } : {}) },
+})
 /** 206（全部开关）要下发的内容：开 / 关，以及确认后预检读到的目标房间 id 集合（核对时逐个检查，回读缺了的按无法核对） */
 export interface AllSwitch { on: boolean; roomIds: number[] }
 /** 206 的核对数据（带目标房间 id 集合，随记录落盘，刷新恢复后同样逐个检查） */

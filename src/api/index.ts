@@ -103,10 +103,13 @@ export async function setRoomPower(projectId: string, ids: string[], on: boolean
  * 演示用的单房间设置：按 201 Query 的语义改演示数据（-1 = 不变）。交付包里直接拒绝，不能出现假成功
  * （真实下发走 src/features/thermostat/source.ts → src/api/ctrl.ts 的 writeCtrl）
  */
-export async function applyRoomSet(projectId: string, roomId: string, q: { temperature: number; eco: number; switch: number }) {
+export async function applyRoomSet(projectId: string, roomId: string, q: { temperature: number; eco: number; switch: number; endModes?: readonly { type: number; isSelected: boolean }[] }) {
   if (!__HJC_MOCK__) return Promise.reject(new Error('演示数据已剔除，未下发'))
+  // 末端（end_modes 非空 = 改了末端，完整回传）：演示数据的三个末端按 type 对应（1 顶辐射、3 地冷、0 风盘）
+  const sel = (t: number) => q.endModes?.find((m) => m.type === t)?.isSelected
   roomState[projectId] = roomsOf(projectId).map((r) => (r.id !== roomId ? r : {
     ...r,
+    ...(q.endModes?.length ? { radiant: sel(1) ?? r.radiant, floorHeat: sel(3) ?? r.floorHeat, fanCoil: sel(0) ?? r.fanCoil } : {}),
     ...(q.temperature !== -1 ? { setTemp: q.temperature } : {}),
     ...(q.eco !== -1 ? { mode: q.eco === 1 ? '节能' as const : '标准' as const } : {}),
     ...(q.switch !== -1 ? { on: q.switch === 1 } : {}),

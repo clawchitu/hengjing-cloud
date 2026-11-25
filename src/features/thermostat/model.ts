@@ -208,6 +208,7 @@ export function roomsAsReply(list: readonly RoomView[]): Pick<CtrlReply<200>, 'd
   return {
     data: list.map((r) => ({
       id: r.equipmentId, setTemp: r.setTemp ?? Number.NaN, eco: r.eco ?? Number.NaN, switch: r.on ? 1 : 0, isConnected: r.connected,
+      endModes: r.wireEndModes.map((m) => ({ ...m })),
     })) as unknown as CtrlReply<200>['data'],
   }
 }

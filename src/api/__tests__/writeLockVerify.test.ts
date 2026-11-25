@@ -115,8 +115,8 @@ describe('「不改」判定（isNoChange）', () => {
 })
 
 describe('字段可核对清单', () => {
-  it('201 / 206 的 switch、set_temp、eco 可核对；203 只有房间开关、房间温度可核对，系统开关、运行模式没有回读', () => {
-    expect(VERIFIABLE_FIELDS[201]).toEqual(['temperature', 'eco', 'switch'])
+  it('201 / 206 的 switch、set_temp、eco 可核对（201 另有末端选择 ends）；203 只有房间开关、房间温度可核对，系统开关、运行模式没有回读', () => {
+    expect(VERIFIABLE_FIELDS[201]).toEqual(['temperature', 'eco', 'switch', 'ends'])
     expect(VERIFIABLE_FIELDS[206]).toEqual(['switch'])
     expect(isVerifiableField(203, 'roomSwitch')).toBe(true)
     expect(isVerifiableField(203, 'roomTemp')).toBe(true)

@@ -8,17 +8,20 @@
 //   从节能切回标准只发 eco=0，温度用面板回读值；
 // - 201 只发改了的标量，其余一律 -1（11/25 第 4 条）。end_modes：没改末端传空列表；改了末端就把该房间全部末端完整传回
 //   （11/25 第 3 条）。末端 switch 是状态显示、不能改，完整回传时原样带回读到的值（见 endModesFor）。
+// - 末端选择（点末端标签切换「选中」）：可以只改末端，也可以和温度 / 节能一起改，都走 201；至少选中一个；is_change = false 的末端
+//   （目前只有全空气，proto WorkModeData「该末端是否支持关闭」）不能改。房间关着时规则草稿和后端答复都没有说不能改末端，
+//   按「房间关着也可以改」处理（endBlock 只看面板 / 项目 / 读数，不看房间开关）。
 import { buildRoomTemperatureSet, type WriteQuery } from '@/api/ctrl'
 import { checkTemp, clampTemp, resolveTempRange } from '@/features/unified/rules'
 import type { TempRange } from '@/features/unified/constants'
-import { knownOff, type RoomView, type WireEndMode } from './model'
+import { END_MODE_TYPES, knownOff, type RoomView, type WireEndMode } from './model'
 
 export type { TempRange }
 export { resolveTempRange }
 
 /**
  * 一个房间的草稿：只记用户动过的项；base 是开始编辑时的面板值（用于发现外部修改）。
- * ends 是各末端的 is_selected（与 room.wireEndModes 一一对应）。本期界面没有改末端的入口，只有组装和校验
+ * ends 是各末端的 is_selected（与 room.wireEndModes 一一对应），由点末端标签（toggleEnd）改
  */
 export interface RoomDraft {
   key: string
@@ -60,9 +63,30 @@ export function writeBlock(room: RoomView, ctx: EditCtx): string | null {
   return null
 }
 
+/** 末端选择不能改的原因：只看面板 / 项目 / 读数，房间关着也可以改（规则草稿和后端答复都没有不允许的说法） */
+export const endBlock = writeBlock
+
 /** 温度 / 节能不能设置的原因（房间确定关着也不行；开关未知时不拦）；可以设置为 null */
 export function editBlock(room: RoomView, ctx: EditCtx): string | null {
   return writeBlock(room, ctx) ?? (knownOff(room) ? '房间已关闭，请先开启再设置' : null)
+}
+
+/** 末端一个都没选：禁用下发的提示 */
+export const END_MIN_TEXT = '至少选择一个末端'
+/** 确认后（或确认返回时）读到的末端个数 / 顺序 / 名称 / 类型 / 选中与确认时不一致 */
+export const END_CHANGED_TEXT = '末端已在外部变化'
+/** 末端的开 / 关只读的说明（标签 tooltip） */
+export const END_SWITCH_TIP = '开/关由控制屏自动控制'
+const endName = (m: Pick<WireEndMode, 'optionName' | 'type'>) => m.optionName || END_MODE_TYPES[m.type] || '该末端'
+/** is_change = false 的末端：已选中的「不可取消」，未选中的「不允许修改」 */
+export const lockedEndText = (m: WireEndMode) => (m.isSelected === true ? `「${endName(m)}」不可取消` : `「${endName(m)}」不允许修改`)
+
+/**
+ * 末端读数是否完全一致（个数、顺序、名称、类型、is_change、is_selected；switch 是状态显示，不比）。
+ * WorkModeData 没有 id，末端的身份按「位置 + type + option_name」认
+ */
+export function sameEnds(a: readonly WireEndMode[], b: readonly WireEndMode[]): boolean {
+  return a.length === b.length && a.every((m, i) => m.type === b[i].type && m.optionName === b[i].optionName && m.isChange === b[i].isChange && (m.isSelected === true) === (b[i].isSelected === true))
 }
 
 const selOf = (room: RoomView) => room.wireEndModes.map((m) => m.isSelected === true)
@@ -79,10 +103,10 @@ export function endModesFor(room: RoomView, selected?: readonly boolean[]): { ok
   const cur = selOf(room)
   if (!selected || sameSel(selected, cur)) return { ok: true, endModes: [] }
   if (selected.length !== room.wireEndModes.length) return { ok: false, reason: '末端配置已变化，请重新核对' }
-  if (!selected.some(Boolean)) return { ok: false, reason: '末端至少要选中一项' }
-  // is_change = false：这个末端不能改（目前只有全空气），选中 / 取消两个方向都不允许
+  if (!selected.some(Boolean)) return { ok: false, reason: END_MIN_TEXT }
+  // is_change = false：这个末端不能改（目前只有全空气，「该末端是否支持关闭」），选中 / 取消两个方向都不允许（界面也不给点）
   const locked = room.wireEndModes.find((m, i) => m.isChange === false && (m.isSelected === true) !== selected[i])
-  if (locked) return { ok: false, reason: `「${locked.optionName || '该末端'}」不允许修改` }
+  if (locked) return { ok: false, reason: lockedEndText(locked) }
   return { ok: true, endModes: room.wireEndModes.map((m, i) => ({ ...m, isSelected: selected[i] })) }
 }
 
@@ -115,6 +139,24 @@ export function editDraft(room: RoomView, draft: RoomDraft | null, patch: { temp
   return d
 }
 
+/**
+ * 点第 i 个末端标签：在草稿里切换它的「选中」（基于草稿当前的末端选择，没有就用读数）。
+ * 不能改时返回原因（面板 / 项目离线、读数过期、is_change = false）。全不选也进草稿，由 buildRoomSet 和界面禁用下发
+ */
+export function toggleEnd(room: RoomView, draft: RoomDraft | null | undefined, i: number, ctx: EditCtx): { ok: true; ends: boolean[] } | { ok: false; reason: string } {
+  const block = endBlock(room, ctx)
+  if (block) return { ok: false, reason: block }
+  const m = room.wireEndModes[i]
+  if (!m) return { ok: false, reason: END_CHANGED_TEXT }
+  if (m.isChange === false) return { ok: false, reason: lockedEndText(m) }
+  const cur = draft?.key === room.key && draft.ends && draft.ends.length === room.wireEndModes.length ? draft.ends : selOf(room)
+  return { ok: true, ends: cur.map((x, j) => (j === i ? !x : x)) }
+}
+
+/** 草稿里的末端选择（缺省为读数）；界面显示用 */
+export const shownEnds = (room: RoomView, draft: RoomDraft | null | undefined): boolean[] =>
+  draft?.key === room.key && draft.ends && draft.ends.length === room.wireEndModes.length ? draft.ends : selOf(room)
+
 export interface Reconciled {
   /** 整理后的草稿；null = 清除 */
   draft: RoomDraft | null
@@ -133,7 +175,9 @@ export interface Reconciled {
 export function reconcileDraft(draft: RoomDraft | null, room: RoomView | undefined, ctx: EditCtx): Reconciled {
   if (!draft) return { draft: null, conflict: [] }
   if (!room) return { draft: null, cleared: 'gone', conflict: [] }
-  if (editBlock(room, { ...ctx, fresh: true })) return { draft: null, cleared: 'blocked', conflict: [] }
+  // 只改末端的草稿：房间关着也可以改（endBlock），不因房间关着清掉
+  const onlyEnds = draft.temp === undefined && draft.eco === undefined
+  if ((onlyEnds ? endBlock : editBlock)(room, { ...ctx, fresh: true })) return { draft: null, cleared: 'blocked', conflict: [] }
   const d: RoomDraft = { ...draft }
   if (d.temp !== undefined && room.setTemp !== null && same(d.temp, room.setTemp)) delete d.temp
   if (d.eco !== undefined && d.eco === room.eco) delete d.eco
@@ -173,9 +217,10 @@ export type BuildResult = { ok: true; query: WriteQuery<201> } | { ok: false; re
  * 不能设置、没有改动、有冲突、温度不合法、节能下改温度时不给 Query（不下发）
  */
 export function buildRoomSet(room: RoomView, draft: RoomDraft | null | undefined, ctx: EditCtx, range: TempRange): BuildResult {
-  const block = editBlock(room, ctx)
-  if (block) return { ok: false, reason: block }
   const c = draftChanges(room, draft)
+  // 只改末端：房间关着也可以发（endBlock）；改了温度 / 节能照旧（editBlock，房间关着不行）
+  const block = (c.ends && !c.temp && !c.eco ? endBlock : editBlock)(room, ctx)
+  if (block) return { ok: false, reason: block }
   if (!hasDraftChanges(c)) return { ok: false, reason: '没有需要下发的修改' }
   const rec = reconcileDraft(draft ?? null, room, ctx)
   if (rec.conflict.length) return { ok: false, reason: '面板设定值已在外部变化，请重新核对' }
@@ -184,9 +229,7 @@ export function buildRoomSet(room: RoomView, draft: RoomDraft | null | undefined
     const bad = checkTemp(c.temp[1], range)
     if (bad) return { ok: false, reason: bad }
   }
-  // 只改末端：写锁核对数据（record201）没有末端字段，无法核对，本期不下发。末端和温度 / 节能一起改时末端同样不核对——
-  // 接入改末端的界面入口之前，必须先在 record201 / matchRoomSet 补上末端核对（见 docs/HANDOFF.md 1.1）
-  if (c.ends && !c.temp && !c.eco) return { ok: false, reason: '只改末端暂不能下发（无法核对）' }
+  // 末端：record201 带 ends（按顺序的 type:选中），matchRoomSet 逐个比对 is_selected（switch 不比）
   const ends = endModesFor(room, c.ends?.[1])
   if (!ends.ok) return { ok: false, reason: ends.reason }
   return {
@@ -214,31 +257,40 @@ export const SWITCH_UNREPORTED_NOTE = '设备暂不回报开关状态，2 分钟
 export const fmtTemp = (v: number) => v.toFixed(1)
 
 /** 草稿条与确认弹窗里的描述：「设定温度 25.5 → 24.5°C，节能模式 标准 → 节能」 */
-export function describeChanges(c: DraftChanges): string {
+export function describeChanges(c: DraftChanges, endNames?: readonly string[]): string {
   const parts: string[] = []
   if (c.temp) parts.push(`设定温度 ${fmtTemp(c.temp[0])} → ${fmtTemp(c.temp[1])}°C`)
   if (c.eco) parts.push(`节能模式 ${ecoLabel(c.eco[0])} → ${ecoLabel(c.eco[1])}`)
-  if (c.ends) parts.push(`末端选中 ${c.ends[0].filter(Boolean).length} 项 → ${c.ends[1].filter(Boolean).length} 项`)
+  if (c.ends) parts.push(endNames && endNames.length === c.ends[1].length ? `参与运行的末端 ${namesOf(c.ends[0], endNames)} → ${namesOf(c.ends[1], endNames)}`
+    : `末端选中 ${c.ends[0].filter(Boolean).length} 项 → ${c.ends[1].filter(Boolean).length} 项`)
   return parts.join('，')
 }
+
+const namesOf = (sel: readonly boolean[], names: readonly string[]) => names.filter((_, i) => sel[i]).join('、') || '无'
 
 /** 待确认草稿的描述（面板值不可用或已等于草稿时用）：「设定温度 → 26.0°C，节能模式 → 节能」 */
 export function describeDraft(d: RoomDraft): string {
   const parts: string[] = []
   if (d.temp !== undefined) parts.push(`设定温度 → ${fmtTemp(d.temp)}°C`)
   if (d.eco !== undefined) parts.push(`节能模式 → ${ecoLabel(d.eco)}`)
+  if (d.ends !== undefined) parts.push(`末端选中 → ${d.ends.filter(Boolean).length} 项`)
   return parts.join('，')
 }
 
 /** 成功提示里的描述：「设定温度 24.5°C，节能模式 开」 */
-export function describeResult(c: DraftChanges): string {
+export function describeResult(c: DraftChanges, endNames?: readonly string[]): string {
   const parts: string[] = []
   if (c.temp) parts.push(`设定温度 ${fmtTemp(c.temp[1])}°C`)
   if (c.eco) parts.push(`节能模式 ${c.eco[1] === 1 ? '开' : '关'}`)
+  if (c.ends) parts.push(endNames && endNames.length === c.ends[1].length ? `参与运行的末端 ${namesOf(c.ends[1], endNames)}` : `末端选中 ${c.ends[1].filter(Boolean).length} 项`)
   return parts.join('，')
 }
 
-/** 确认期间状态是否变了：比较两份 Query（含末端）与房间关键状态 */
+/**
+ * 确认期间状态是否变了：比较两份 Query（含末端的个数、顺序、名称、类型、is_change、is_selected）。末端 switch 是状态显示、
+ * 由控制屏随时自动开关，不参与比较——真正发出去的是确认后新读到的那份 switch（原样带回）
+ */
 export function sameQuery(a: WriteQuery<201>, b: WriteQuery<201>) {
-  return JSON.stringify(a) === JSON.stringify(b)
+  const norm = (q: WriteQuery<201>) => JSON.stringify({ ...q, endModes: (q.endModes ?? []).map(({ switch: _sw, ...m }) => m) })
+  return norm(a) === norm(b)
 }

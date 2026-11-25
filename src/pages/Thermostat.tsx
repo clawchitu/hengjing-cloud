@@ -24,10 +24,10 @@ import { roomSwitchReported } from '../api/config'
 import type { CtrlReply } from '../api/ctrl'
 import {
   ALL, allRoomsTarget, roomTargetIssue, buildRoomSet, buildRoomSwitch, canStep, clearResult, describeChanges, describeDraft, describeResult, draftChanges, ecoLabel,
-  editBlock, editDraft, fmtTemp, hasDraftChanges, isLocked, knownOff, match201, match206, noteCurrentProject, reconcileDraft, record201, record206,
+  editBlock, editDraft, endBlock, END_CHANGED_TEXT, END_MIN_TEXT, END_SWITCH_TIP, fmtTemp, sameEnds, shownEnds, toggleEnd, hasDraftChanges, isLocked, knownOff, match201, match206, noteCurrentProject, reconcileDraft, record201, record206,
   resolveTempRange, runOp, sameQuery, stepTemp, summarize, switchBlock, SWITCH_UNREPORTED_NOTE, tempBlock, TEMP_OFF_NOTE, thermostatSource, useRooms, useRoomsRaw, useRoomStats,
   useWrites, useFreshRead, windLabel,
-  type ChartData, type FreshRead, type EditCtx, type EndMode, type RoomDraft, type RoomView, type Running, type StatsRange, type TempRange, type WriteResult,
+  type ChartData, type FreshRead, type WireEndMode, type EditCtx, type EndMode, type RoomDraft, type RoomView, type Running, type StatsRange, type TempRange, type WriteResult,
 } from '../features/thermostat'
 
 type WriteQuery201 = WriteQuery<201>
@@ -48,14 +48,38 @@ function usePresent() {
   return ref
 }
 
-export const END_TAGS_TIP = '蓝色为参与运行的末端，灰色为不参与；开 / 关 由控制屏根据运行情况自动控制。末端在平台上只读，不能修改'
+export const END_TAGS_TIP = '蓝色为参与运行的末端，灰色为不参与，点击切换；开 / 关 由控制屏根据运行情况自动控制，不能修改'
+export const END_TAGS_TITLE = '末端（点击选择参与运行的末端）'
 
-function EndTag({ m, dim }: { m: EndMode; dim?: boolean }) {
-  // 改动文档：is_selected 选中蓝色、未选中灰色；后面的「开 / 关」取该末端的 switch
+interface EndTagProps {
+  m: EndMode
+  /** 显示的选中状态（草稿优先，没有草稿取读数） */
+  selected: boolean
+  /** 与读数不同（草稿里改过） */
+  dirty: boolean
+  /** is_change = false：不能改（已选中的标「不可取消」） */
+  locked: boolean
+  /** 不能点的原因（面板离线、下发进行中等）；null = 可以点 */
+  disabled: string | null
+  dim?: boolean
+  roomName: string
+  onToggle: () => void
+}
+
+function EndTag({ m, selected, dirty, locked, disabled, dim, roomName, onToggle }: EndTagProps) {
+  // 改动文档：is_selected 选中蓝色、未选中灰色；后面的「开 / 关」取该末端的 switch（只读，由控制屏自动控制）。
+  // 名称部分可点：切换「选中」进草稿；is_change = false 的末端点击只给提示（onToggle 里由 toggleEnd 给出原因）
+  const inert = !!disabled
   return (
-    <Badge variant={m.selected ? 'blue' : 'gray'} style={dim ? { opacity: 0.8 } : undefined} data-selected={m.selected}>
-      {!dim && <span className="dot" style={{ width: 5, height: 5, color: m.on ? 'var(--green-2)' : '#cbd5e1' }} />}{m.name} {m.on ? '开' : '关'}
-    </Badge>
+    <button type="button" className={'end-tag' + (dirty ? ' dirty' : '') + (locked ? ' locked' : '')} data-selected={selected} aria-pressed={selected}
+      aria-disabled={inert || locked} disabled={inert} aria-label={`${roomName} 末端 ${m.name}`}
+      title={disabled ?? (locked ? (selected ? `「${m.name}」不可取消` : `「${m.name}」不允许修改`) : selected ? '点击取消选中' : '点击选中')}
+      onClick={(e) => { e.stopPropagation(); onToggle() }}>
+      <Badge variant={selected ? 'blue' : 'gray'} style={dim ? { opacity: 0.8 } : undefined} data-selected={selected}>
+        {!dim && <span className="dot" style={{ width: 5, height: 5, color: m.on ? 'var(--green-2)' : '#cbd5e1' }} />}{m.name} <span className="end-sw" title={END_SWITCH_TIP} data-end-switch="">{m.on ? '开' : '关'}</span>
+        {locked && selected && <span className="end-lock">不可取消</span>}
+      </Badge>
+    </button>
   )
 }
 
@@ -66,7 +90,7 @@ const VERDICT_TEXT: Record<FieldResult, string> = {
 /** 逐字段的短文案 */
 const FIELD_STATE: Record<FieldResult, string> = { applied: '已生效', unchanged: '未生效（设备状态暂未变化）', unverifiable: '暂无回读，无法确认', unknown: '结果未知' }
 /** 核对字段名（201 / 206 的写入字段） */
-const FIELD_LABEL: Record<string, string> = { temperature: '设定温度', eco: '节能模式', switch: '开关' }
+const FIELD_LABEL: Record<string, string> = { temperature: '设定温度', eco: '节能模式', switch: '开关', ends: '末端选择' }
 
 /** 逐字段列表：「设定温度：未生效（设备状态暂未变化）；节能模式：暂无回读，无法确认」（只有一个字段时不列） */
 function fieldsText(fields: Readonly<Record<string, FieldResult>> | undefined): string {
@@ -107,7 +131,7 @@ interface RoomCardProps {
   draft: RoomDraft | null
   /** 编辑期间面板值被外部修改的项 */
   conflict: ('temp' | 'eco' | 'ends')[]
-  onEdit: (patch: { temp?: number; eco?: 0 | 1 }) => void
+  onEdit: (patch: { temp?: number; eco?: 0 | 1; ends?: boolean[] }) => void
   onDiscard: () => void
   /** 这份草稿已交给一次下发、待确认（与写锁是否还在无关）：普通轮询不整理、不清除，直到核对一致、确定失败或用户放弃 */
   pending: boolean
@@ -143,6 +167,19 @@ function RoomCard({ room: r, ctx, range, selected, onSelect, draft, conflict, on
   const shownTemp = draft?.temp ?? r.setTemp
   const shownEco = draft?.eco ?? r.eco
   const canEdit = !block && !isBusy
+  // 末端：房间关着也可以改（endBlock 不看房间开关）；下发进行中不能改
+  const endBlk = endBlock(r, ctx)
+  const endSel = shownEnds(r, draft)
+  const endNames = r.endModes.map((m) => m.name)
+  const endsEmpty = !!changes.ends && !changes.ends[1].some(Boolean)
+  // 下发按钮的禁用原因：只改末端时按 endBlock（房间关着也能发），否则按 editBlock；末端全不选时禁用
+  const sendBlock = (changes.ends && !changes.temp && !changes.eco ? endBlk : block) ?? (endsEmpty ? END_MIN_TEXT : null)
+  const clickEnd = (i: number) => {
+    if (isBusy) return
+    const t = toggleEnd(r, draft, i, ctx)
+    if (!t.ok) { showToast(`${r.name}：${t.reason}`, true); return }
+    onEdit({ ends: t.ends })
+  }
 
   /** 确认返回后的同步核对失败：不下发，提示重新确认 */
   const abort = (why: string) => showToast(`${r.name}：${why}，本次未下发，请重新核对后再下发`, true)
@@ -151,7 +188,7 @@ function RoomCard({ room: r, ctx, range, selected, onSelect, draft, conflict, on
    * 确认之后交给下发流程（features/thermostat/writes.ts）：取共用写锁（按控制屏）→ 新读一次 200 → 用新读数重新组装并与
    * 确认时比对 → 一致才认领写锁并经统一写入口下发 → 写后新读一次 200 回读（结果未知时由写锁核对）
    */
-  async function submit(p: Project, confirmed: { query: WriteQuery201; draft: RoomDraft | null }, okText: string, kind: 'set' | 'switch', v?: boolean, onApplied?: () => void) {
+  async function submit(p: Project, confirmed: { query: WriteQuery201; draft: RoomDraft | null; ends?: WireEndMode[] }, okText: string, kind: 'set' | 'switch', v?: boolean, onApplied?: () => void) {
     return runOp({
       project: p, target: r.key, subject: r.name, okText, toast: showToast, onApplied, retry: kind === 'set' ? 'set' : v ? 'on' : 'off',
       present: () => present.current && latest.current.project?.id === p.id,
@@ -162,6 +199,8 @@ function RoomCard({ room: r, ctx, range, selected, onSelect, draft, conflict, on
         if (issue) return { ok: false, reason: issue }
         const fresh = read.list.find((x) => x.key === r.key)
         if (!fresh) return { ok: false, reason: '房间已不在面板列表里' }
+        // 改了末端：新读到的末端（个数、顺序、名称、类型、is_change、is_selected）必须与确认时的原始读数完全一致（switch 不比）
+        if (confirmed.ends && !sameEnds(fresh.wireEndModes, confirmed.ends)) return { ok: false, reason: END_CHANGED_TEXT }
         const cur = latest.current.project
         if (!cur || cur.id !== p.id) return { ok: false, reason: '当前项目已变化' }
         const c = { online: cur.online === true, fresh: true }
@@ -187,13 +226,16 @@ function RoomCard({ room: r, ctx, range, selected, onSelect, draft, conflict, on
     if (!built.ok) { showToast(built.reason, true); return }
     const dupe = raw ? roomTargetIssue(raw, r.equipmentId) : null
     if (dupe) { showToast(`${r.name}：${dupe}，本次未下发，请重新核对后再下发`, true); return }
-    const okText = `${r.name} 已生效：${describeResult(changes)}`
-    const ok = await confirm({ title: '下发房间设置', body: <>将向 <b>{p0.name}</b>的「{r.name}」下发：{describeChanges(changes)}，确定继续？{changes.temp && <div className="muted" style={{ marginTop: 8, fontSize: 12.5 }}>{TEMP_OFF_NOTE}。</div>}</>, okText: '确认下发' })
+    const okText = `${r.name} 已生效：${describeResult(changes, endNames)}`
+    // 确认时的末端原始读数（改了末端才需要）：确认返回后和预检新读各比一次
+    const endsAtConfirm = changes.ends ? r.wireEndModes.map((m) => ({ ...m })) : undefined
+    const ok = await confirm({ title: '下发房间设置', body: <>将向 <b>{p0.name}</b>的「{r.name}」下发：{describeChanges(changes, endNames)}，确定继续？{changes.temp && <div className="muted" style={{ marginTop: 8, fontSize: 12.5 }}>{TEMP_OFF_NOTE}。</div>}</>, okText: '确认下发' })
     if (!ok) return
     const now = latest.current
     const p = now.project
     if (!p || p.id !== p0.id) return abort('当前项目已变化')
     if (isLocked(p)) return abort('有下发正在进行')
+    if (endsAtConfirm && !sameEnds(now.room.wireEndModes, endsAtConfirm)) return abort(END_CHANGED_TEXT)
     // 下发开始：这份草稿进入「待确认」（与写锁分开维护）。只有写锁认可的核对全部一致（onApplied，含之后的自动再核对）、
     // 确定失败需回滚（fail），或用户点「放弃本次改动」才清；没发出（中止 / 被占）取消待确认、照常整理。
     // 待核对、回读失败、面板离线、目标缺失期间，以及写锁到期放开之后，普通轮询都不整理它（到期只恢复下发资格并强制重读）
@@ -201,7 +243,7 @@ function RoomCard({ room: r, ctx, range, selected, onSelect, draft, conflict, on
     // 不能因为这次没发出就当作上次已了结
     const wasPending = pending
     onPending(true)
-    const out = await submit(p, { query: built.query, draft: now.draft }, okText, 'set', undefined, onDiscard)
+    const out = await submit(p, { query: built.query, draft: now.draft, ends: endsAtConfirm }, okText, 'set', undefined, onDiscard)
     // ok（写锁认可的核对一致）/ fail（已发出被明确拒绝，回滚为面板值）才清；没发出（not-sent / 中止 / 被占）保留草稿、恢复原待确认
     if (out === 'ok' || out === 'fail') onDiscard()
     else if (out === 'not-sent' || out === 'aborted' || out === 'busy') onPending(wasPending)
@@ -281,37 +323,41 @@ function RoomCard({ room: r, ctx, range, selected, onSelect, draft, conflict, on
         </div>
         <div><span>风速</span><div className="te-line"><b>{off ? '--' : windLabel(r.windSpeed)}</b></div></div>
       </div>
-      {/* 末端本期只读（docs/HANDOFF.md：写锁核对 record201 还不核对末端，接入修改入口前要先补），这里只说明颜色和开 / 关的含义 */}
-      <div className="modes-row" title={END_TAGS_TIP}>
-        {r.endModes.length > 0 && <span className="ends-h">末端（由控制屏控制）</span>}
-        {r.endModes.map((m, i) => <EndTag key={`${m.type}:${m.name}:${i}`} m={m} dim={off} />)}
+      {/* 末端选择：点标签切换「选中」进草稿（201 end_modes 完整回传，写锁按 is_selected 逐个核对）；开 / 关只读 */}
+      <div className={'modes-row' + (changes.ends ? ' dirty' : '')} onClick={(e) => e.stopPropagation()}>
+        {r.endModes.length > 0 && <span className="ends-h" title={END_TAGS_TIP}>{END_TAGS_TITLE}</span>}
+        {r.endModes.map((m, i) => (
+          <EndTag key={`${m.type}:${m.name}:${i}`} m={m} selected={endSel[i] ?? m.selected} dirty={(endSel[i] ?? m.selected) !== m.selected}
+            locked={r.wireEndModes[i]?.isChange === false} disabled={endBlk ?? (isBusy ? '有下发正在进行' : null)} dim={off} roomName={r.name} onToggle={() => clickEnd(i)} />
+        ))}
+        {endsEmpty && <span className="end-warn" role="alert">{END_MIN_TEXT}</span>}
       </div>
       {mine ? (
         <div className="te-bar sending" role="status" onClick={(e) => e.stopPropagation()}>
           <span>{running?.stage === 'preflight' ? '正在重新读取面板，核对确认的内容 …'
             : running?.stage === 'verifying' ? '已下发，正在核对 …'
-            : `正在下发到控制屏${dirty ? `：${describeResult(changes)}` : ''} …`}</span>
+            : `正在下发到控制屏${dirty ? `：${describeResult(changes, endNames)}` : ''} …`}</span>
           <Button variant="primary" disabled>下发中</Button>
         </div>
       ) : conflict.length ? (
         <div className="te-bar fail" role="alert" onClick={(e) => e.stopPropagation()}>
-          <span>面板{conflict.map((c) => (c === 'temp' ? '设定温度' : c === 'eco' ? '节能模式' : '末端')).join('、')}已在外部变化（现为 {conflict.includes('temp') ? `${fmt1(r.setTemp)}°C` : ''}{conflict.length > 1 ? '，' : ''}{conflict.includes('eco') && r.eco !== null ? ecoLabel(r.eco) : ''}），未下发的修改需要重新核对。</span>
+          <span>面板{conflict.map((c) => (c === 'temp' ? '设定温度' : c === 'eco' ? '节能模式' : '末端')).join('、')}已在外部变化{(conflict.includes('temp') || conflict.includes('eco')) && <>（现为 {[conflict.includes('temp') ? `${fmt1(r.setTemp)}°C` : '', conflict.includes('eco') && r.eco !== null ? ecoLabel(r.eco) : ''].filter(Boolean).join('，')}）</>}，未下发的修改需要重新核对。</span>
           <Button onClick={onDiscard}>放弃修改</Button>
         </div>
       ) : pending && draft ? (
         <div className="te-bar pending" data-pending="" onClick={(e) => e.stopPropagation()}>
-          <span>{isBusy ? '已下发，待核对一致：' : '上次下发未核对一致：'}<b className="num">{dirty ? describeChanges(changes) : describeDraft(draft)}</b>{isBusy ? '' : '。可放弃本次改动，或以面板读数为准重新下发。'}</span>
+          <span>{isBusy ? '已下发，待核对一致：' : '上次下发未核对一致：'}<b className="num">{dirty ? describeChanges(changes, endNames) : describeDraft(draft)}</b>{isBusy ? '' : '。可放弃本次改动，或以面板读数为准重新下发。'}</span>
           <span className="row">
             <Button onClick={onDiscard}>放弃本次改动</Button>
-            {!isBusy && dirty && <Button variant="primary" onClick={() => void send()} disabled={!!block}>重新下发</Button>}
+            {!isBusy && dirty && <Button variant="primary" onClick={() => void send()} disabled={!!sendBlock} title={sendBlock ?? undefined}>重新下发</Button>}
           </span>
         </div>
       ) : dirty ? (
         <div className="te-bar pending" onClick={(e) => e.stopPropagation()}>
-          <span>待下发：<b className="num">{describeChanges(changes)}</b>{block && <span className="faint" data-block="">（{block}）</span>}</span>
+          <span>待下发：<b className="num">{describeChanges(changes, endNames)}</b>{sendBlock && <span className="faint" data-block="">（{sendBlock}）</span>}</span>
           <span className="row">
             <Button onClick={onDiscard} disabled={isBusy}>取消</Button>
-            <Button variant="primary" onClick={() => void send()} disabled={isBusy || !!block} title={block ?? undefined}>下发</Button>
+            <Button variant="primary" onClick={() => void send()} disabled={isBusy || !!sendBlock} title={sendBlock ?? undefined}>下发</Button>
           </span>
         </div>
       ) : null}
@@ -508,7 +554,7 @@ export default function Thermostat() {
   const sum = summarize(list)
   const allResult = writes.result(ALL)
 
-  const onEdit = async (key: string, patch: { temp?: number; eco?: 0 | 1 }) => {
+  const onEdit = async (key: string, patch: { temp?: number; eco?: 0 | 1; ends?: boolean[] }) => {
     const room = list.find((x) => x.key === key)
     if (!room) return
     if (draft && draft.key !== key) {

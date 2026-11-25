@@ -36,7 +36,7 @@ type Room = Rooms['data'][number]
  * 203 只列出能用 200 核对的房间级字段；systemSwitch、systemMode 没有回读。
  */
 export const VERIFIABLE_FIELDS: Readonly<Record<number, readonly string[]>> = Object.freeze({
-  201: Object.freeze(['temperature', 'eco', 'switch']),
+  201: Object.freeze(['temperature', 'eco', 'switch', 'ends']),
   206: Object.freeze(['switch']),
   203: Object.freeze(['roomSwitch', 'roomTemp']),
   204: Object.freeze(['controlType', 'dewPoint', 'humiditySet', 'windSpeed', 'switch']),
@@ -75,6 +75,35 @@ export interface RoomMatchOpts { switchReported?: boolean }
 /** 设定温度是 float，按 0.05 比较 */
 const sameTemp = (a: number, b: number) => Math.abs(a - b) < 0.05
 
+/**
+ * 201 的末端选择在核对数据里的写法（record201 的 target.ends）：按顺序每个末端一段「type:选中」，选中 1 / 未选中 0，逗号分隔，
+ * 例如 "0:1,1:1,3:0"。WorkModeData 没有 id，末端的身份按「位置 + type」认；switch 是状态显示、由控制屏控制，不进核对数据。
+ * 没改末端（201 的 end_modes 为空列表）时核对数据里没有 ends 这一项
+ */
+export function encodeEnds(ends: readonly { type: number; isSelected: boolean }[]): string {
+  return ends.map((m) => `${m.type}:${m.isSelected ? 1 : 0}`).join(',')
+}
+const decodeEnds = (v: string): { type: number; sel: boolean }[] | null => {
+  if (!v) return null
+  const out: { type: number; sel: boolean }[] = []
+  for (const part of v.split(',')) {
+    const m = /^(-?\d+):([01])$/.exec(part)
+    if (!m) return null
+    out.push({ type: Number(m[1]), sel: m[2] === '1' })
+  }
+  return out
+}
+/**
+ * 末端选择的核对（逐个比对 is_selected，switch 不参与）：个数或某个位置的 type 和下发时不同（末端配置变了，无法一一对应）→ 无法核对；
+ * 全部一致 → 已生效；有任何一个不一致 → 未变化
+ */
+function matchEnds(want: string, room: Room): FieldResult {
+  const w = decodeEnds(want)
+  const got = room.endModes ?? []
+  if (!w || got.length !== w.length || got.some((m, i) => m.type !== w[i].type)) return 'unverifiable'
+  return got.every((m, i) => (m.isSelected === true) === w[i].sel) ? 'applied' : 'unchanged'
+}
+
 /** 201 字段 → 200 读数 */
 const ROOM_READ: Record<string, (r: Room) => number> = {
   temperature: (r) => r.setTemp,
@@ -85,7 +114,8 @@ const ROOM_READ: Record<string, (r: Room) => number> = {
 const detail = (fields: Record<string, FieldResult>): MatchDetail => ({ verdict: verdictOf(Object.values(fields)), fields })
 
 /**
- * 201（单房间设置）：目标里每个改了的字段（不是 -1）逐个判四态，整体按 verdictOf。
+ * 201（单房间设置）：目标里每个改了的字段（不是 -1）逐个判四态，整体按 verdictOf。改了末端时 target.ends 见 encodeEnds，
+ * 逐个比对 is_selected（matchEnds；switch 不比）。
  * 不在清单里的字段 → 无法核对；回包没有房间、找不到目标房间 → 全部无法核对；目标房间面板离线 → 能核对的字段结果未知；
  * 读数无效 → 无法核对。没有任何改动的字段、消息号不对、设备 id 为空 → false（核对数据本身不对）
  */
@@ -97,6 +127,10 @@ export function matchRoomSet(rec: Pick<SentRecord, 'msg' | 'deviceId' | 'target'
   const room = (reply.data ?? []).find((r) => r.id === rec.deviceId)
   const fields: Record<string, FieldResult> = {}
   for (const [field, v] of changed) {
+    if (field === 'ends' && typeof v === 'string') {
+      fields[field] = !room ? 'unverifiable' : room.isConnected !== true ? 'unknown' : matchEnds(v, room)
+      continue
+    }
     if (!isVerifiableField(201, field) || typeof v !== 'number') { fields[field] = 'unverifiable'; continue }
     if (!room) { fields[field] = 'unverifiable'; continue }
     // 开关未上报：开关一律无法核对，先于离线判断（离线与否都拿不到可信的开关读数）
