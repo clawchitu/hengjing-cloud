@@ -27,7 +27,7 @@ import { WRITE_RECHECK_TEXT } from '../api/http'
 import { jwtSub, readTokens } from '../api/tokens'
 import { UnifiedCtrlSetQuery_OperatingMode as Mode } from '../api/gen/ctrl200_pb.js'
 import * as api from '../api'
-import { endOf, lockKeysOf, lockOf, writeLockTtl, type VerifyResult, lockVersion, onForceReread, OTHER_ACCOUNT_TEXT, subscribe as subscribeLock } from '../api/writeLock'
+import { attachEvidence, endOf, lockKeysOf, lockOf, writeLockTtl, type VerifyResult, lockVersion, onForceReread, OTHER_ACCOUNT_TEXT, subscribe as subscribeLock } from '../api/writeLock'
 import {
   clampTemp, LOCK_BUSY_TEXT, lockTargetOf, rereadHits, MODE_OPTIONS, readUnifiedSnapshot, resolveTempRange, TEXT, tempAvailability, unifiedAppCode, useUnifiedBatch,
   fieldResults, overallOf, resultTitle,
@@ -77,23 +77,21 @@ export interface ResultRow {
 const SETTLE_STATUSES: ReadonlySet<ResultRow['status']> = new Set(['unapplied', 'unverifiable', 'unknown'])
 
 /**
- * 每个项目最近一次 200 读数（批次的下发前后读、写锁的自动再核对都走同一个 readBack）。写锁最后一次核对就是这个项目最后一次读，
- * 用它逐字段重算最终结论；读失败记 null。只在本标签页内存里（刷新后没有，退回批次结论）
+ * 写锁最后收下的那次核对的读数：readBack 读到就作为证据挂到这次核对上（attachEvidence 只认写锁交给核对函数的信号，
+ * 批次自己的下发前后读不算）。写锁只在收下这次核对（记入 lastVerify）时才一起保存，从锁视图 / endOf 取回（lastEvidence），
+ * 所以读数与 lastVerify 一定是同一次；换账号、登出后写锁清空，刷新后也没有（退回批次结论）
  */
-const lastSnaps = new Map<string, UnifiedSnapshot | null>()
-function trackRead(projectId: string, p: Promise<UnifiedSnapshot>): Promise<UnifiedSnapshot> {
-  return p.then((s) => { lastSnaps.set(projectId, s); return s }, (e: unknown) => { lastSnaps.set(projectId, null); throw e })
-}
+const snapOf = (v: unknown): UnifiedSnapshot | undefined => (v && typeof v === 'object' ? v as UnifiedSnapshot : undefined)
 
-/** 这一行此刻怎么显示：正在核对 / 已生效 / 按锁最后一次核对的结论（lastVerify）/ 按批次结论（null） */
-type Live = { kind: 'settling' } | { kind: 'applied' } | { kind: 'final'; lastVerify?: VerifyResult; ended: boolean } | null
+/** 这一行此刻怎么显示：正在核对 / 已生效 / 按锁最后一次核对的结论（lastVerify 与同一次的读数）/ 按批次结论（null） */
+type Live = { kind: 'settling' } | { kind: 'applied' } | { kind: 'final'; lastVerify?: VerifyResult; snap?: UnifiedSnapshot; ended: boolean } | null
 function liveOf(r: ResultRow): Live {
   if (!r.lock) return null
   const l = lockOf(r.lock.key)
-  if (l) return l.expiresAt !== r.lock.exp ? null : l.settling ? { kind: 'settling' } : { kind: 'final', lastVerify: l.lastVerify, ended: false }
+  if (l) return l.expiresAt !== r.lock.exp ? null : l.settling ? { kind: 'settling' } : { kind: 'final', lastVerify: l.lastVerify, snap: snapOf(l.lastEvidence), ended: false }
   const end = endOf(r.lock.key)
   if (!end || end.expiresAt !== r.lock.exp) return null
-  return end.how === 'applied' ? { kind: 'applied' } : end.how === 'expired' ? { kind: 'final', lastVerify: end.lastVerify, ended: true } : null
+  return end.how === 'applied' ? { kind: 'applied' } : end.how === 'expired' ? { kind: 'final', lastVerify: end.lastVerify, snap: snapOf(end.lastEvidence), ended: true } : null
 }
 /** 写锁自动再核对一致、已放开：这一行定为已生效 */
 const appliedRow = (r: ResultRow): ResultRow => ({ ...r, lock: undefined, status: 'success', title: undefined, fields: undefined, detail: `${TEXT.success}（自动再核对一致）` })
@@ -103,10 +101,10 @@ const FINAL_TEXT: Record<FieldStatus, string> = { applied: TEXT.success, unchang
  * 退避用完 / 到期：按写锁最后一次核对重算这一行。回读失败（failed、offline 等）→ 每个下发了的字段结果未知；
  * 读到了但不一致 → 用那次读数逐字段算（与批次同一套 fieldResults）。没有可用的读数（刷新过）或锁还没核对过 → 按批次结论
  */
-function finalRow(r: ResultRow, lastVerify: VerifyResult | undefined): ResultRow {
+function finalRow(r: ResultRow, lastVerify: VerifyResult | undefined, evidence: UnifiedSnapshot | undefined): ResultRow {
   const lk = r.lock
   if (!lk || !lastVerify) return r
-  const snap = lastVerify === 'mismatch' || lastVerify === 'unverifiable' ? lastSnaps.get(lk.projectId) : null
+  const snap = lastVerify === 'mismatch' || lastVerify === 'unverifiable' ? evidence : null
   if (snap === undefined) return r
   const fs = fieldResults(lk.query, snap, { replied: lk.replied })
   const status = FINAL_STATUS[overallOf(fs)]
@@ -122,14 +120,14 @@ function shown(r: ResultRow): ShownRow {
   const live = liveOf(r)
   if (live?.kind === 'settling') return { ...r, title: undefined, fields: undefined, detail: TEXT.verifying, badge: { label: TEXT.verifying, variant: 'gray' } }
   if (live?.kind === 'applied') return { ...appliedRow(r), badge: STATUS.success }
-  const x = live?.kind === 'final' ? finalRow(r, live.lastVerify) : r
+  const x = live?.kind === 'final' ? finalRow(r, live.lastVerify, live.snap) : r
   return { ...x, badge: { label: x.notExecuted ? '失败（未执行）' : x.title ?? STATUS[x.status].label, variant: STATUS[x.status].variant } }
 }
 /** 锁已结束：定下这一行（已生效，或按锁最后一次核对），去掉锁引用，存进本标签页 */
 function settledRow(r: ResultRow): ResultRow | null {
   const live = liveOf(r)
   if (live?.kind === 'applied') return appliedRow(r)
-  if (live?.kind === 'final' && live.ended) return { ...finalRow(r, live.lastVerify), lock: undefined }
+  if (live?.kind === 'final' && live.ended) return { ...finalRow(r, live.lastVerify, live.snap), lock: undefined }
   return null
 }
 
@@ -263,8 +261,8 @@ export default function Control() {
   const { batch, state: run } = useUnifiedBatch({
     getProjects: () => projects,
     mock,
-    // 写锁的自动再核对也走这里：记下每个项目最后一次读数，退避用完后按它定最终结论
-    readBack: (id, signal) => trackRead(id, readSnap(id, signal)),
+    // 写锁的自动再核对也走这里：读数挂到这次核对上，写锁收下这次核对才保存，退避用完后按它定最终结论
+    readBack: (id, signal) => readSnap(id, signal).then((s) => { attachEvidence(signal, s); return s }),
     // 演示下发同写入口一样，先过 beforeSend
     send: mock ? (p, q, o) => (o.beforeSend() ? api.mockUnifiedSend(p, q) : Promise.reject(new ApiError('write_blocked', WRITE_RECHECK_TEXT))) : undefined,
     // 确认后、整批开始前强制重新拉一次项目列表（每批一次，直接调数据源，不经 S6a 的 hooks 缓存）

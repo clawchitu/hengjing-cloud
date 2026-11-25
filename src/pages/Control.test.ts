@@ -576,6 +576,55 @@ describe('下发', () => {
       expect(notes).toContain('回读（最后一次自动再核对）：房间开 · 26.0°C')
       expect(reads()).toBeGreaterThanOrEqual(5)
     })
+    /**
+     * 迟到读数（#64）：第一次退避（203 后第 3 次读）的回读忽略中止，核对超时（15 秒）后才回来，读到「房间开、温度没变」；
+     * 之后写锁收下的核对都读到旧值。lateAt 决定这份迟到读数在什么时候回来
+     */
+    async function lateRead(lateAt: 'before-expiry' | 'after-expiry') {
+      fakeClock()
+      setConfig({ apiBase: '/api', dataSource: 'real', apiEnv: 'test', requestTimeoutMs: 600_000, features: { roomSwitchReported: true } } as never)
+      let release = () => {}
+      const gate = new Promise<void>((r) => { release = r })
+      let hang = false
+      let late = false
+      const { reads } = after203(() => {
+        if (!hang) return rooms(0, 26)
+        hang = false
+        return gate.then(() => { late = true; return rooms(1, 26) }) as unknown as Response
+      })
+      const dlg = await prepare()
+      await click(okIn(dlg))
+      await screen.findByText(TEXT.verifying, { selector: '[data-slot=badge]' }, { timeout: 3000 })
+      hang = true
+      const r0 = reads()
+      await advance(RETRY_DELAYS_MS[0]) // 第一次退避：这次读挂住
+      await tick(30)
+      expect(hang).toBe(false)
+      expect(reads()).toBe(r0 + 1)
+      await advance(15_000) // 核对超时（读数还没回来）
+      await tick(30)
+      await advance(RETRY_DELAYS_MS[1]) // 第二次退避：旧值
+      await tick(30)
+      await advance(RETRY_DELAYS_MS[2]) // 第三次退避：旧值，退避用完
+      await tick(30)
+      expect(reads()).toBe(r0 + 3)
+      await screen.findByText('未变化', { selector: '[data-slot=badge]' }, { timeout: 3000 })
+      if (lateAt === 'after-expiry') { await advance(2 * 60_000); await tick(30) }
+      await act(async () => { release(); await new Promise((r) => setTimeout(r, 30)) }) // 迟到读数回来
+      await tick(30)
+      expect(late).toBe(true)
+      expect(screen.queryByText('1 项未生效，1 项已生效', { selector: '[data-slot=badge]' })).toBeNull()
+      expect(screen.getByText('未变化', { selector: '[data-slot=badge]' })).toBeTruthy()
+      expect(await openNotes()).toContain('回读（最后一次自动再核对）：房间关 · 26.0°C')
+      if (lateAt === 'before-expiry') { await advance(2 * 60_000); await tick(30) }
+      // 到期定下并存进本标签页：重新进入仍是写锁最后收下那次的结论
+      cleanup()
+      await mount(false)
+      expect(screen.getByText('未变化', { selector: '[data-slot=badge]' })).toBeTruthy()
+      expect(screen.queryByText('1 项未生效，1 项已生效', { selector: '[data-slot=badge]' })).toBeNull()
+    }
+    it('迟到读数（核对超时后、到期前才回来）不改变最终卡片：按写锁最后收下的那次核对的读数重算（#64）', () => lateRead('before-expiry'))
+    it('迟到读数（锁到期后才回来）不改变最终卡片（#64）', () => lateRead('after-expiry'))
     it('批次截止时还没收到应答（锁仍在 sent）：应答之后写锁核对一致 → 卡片最终显示「已生效」', async () => {
       fakeClock()
       setConfig({ apiBase: '/api', dataSource: 'real', apiEnv: 'test', requestTimeoutMs: 120_000, features: { roomSwitchReported: true } } as never)
