@@ -11,8 +11,9 @@ import Login from '../pages/Login'
  * 存 localStorage：刷新页面后会话恢复失败再跳登录页时也知道原路径是谁留下的
  */
 export const LAST_USER_KEY = 'hjc-last-user'
-const readLastUser = () => { try { return localStorage.getItem(LAST_USER_KEY) || null } catch { return null } }
-const writeLastUser = (u: string) => { try { if (localStorage.getItem(LAST_USER_KEY) !== u) localStorage.setItem(LAST_USER_KEY, u) } catch { /* 存储不可用：只是换账号后可能回到原路径 */ } }
+let lastUser: string | null = null // 存储不可用时的兜底（同一页面内仍有效）
+const readLastUser = () => { try { return localStorage.getItem(LAST_USER_KEY) || lastUser } catch { return lastUser } }
+const writeLastUser = (u: string) => { lastUser = u; try { if (localStorage.getItem(LAST_USER_KEY) !== u) localStorage.setItem(LAST_USER_KEY, u) } catch { /* 存储不可用：用内存里的 */ } }
 
 /**
  * 路由守卫。未登录 → 登录页（记下原路径和当时的账号，登录后同一账号回去）；真实接口模式下正在用已存令牌恢复登录态时

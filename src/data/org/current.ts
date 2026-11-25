@@ -37,7 +37,7 @@ const getPerUser = (u: string) => {
 /**
  * 某个账号的当前项目（解析时不在范围里就回退到这个账号的第一个可见项目）：
  * - 这个账号自己存过（hjc-project:<userKey>）→ 用它；
- * - 没存过，最近一次选择（hjc-project）是它自己选的 → 用它；
+ * - 没存过，最近一次选择（hjc-project）是它自己选的 → 用它，并存进它自己的记录（之后别的账号再选也不覆盖）；
  * - 升级前没记账号的旧数据 → 归第一个读到它的账号（记下账号，之后别的账号不再沿用），同一个账号升级后不丢上次的项目；
  * - 是别的账号选的 → ''。
  * 账号未知时照旧返回最近一次选择
@@ -48,8 +48,7 @@ export const getStoredProjectIdFor = (userKey: string | null | undefined) => {
   const mine = getPerUser(userKey)
   if (mine !== null) return mine
   const o = getOwner()
-  if (o === userKey) return id
-  if (o === null && id) {
+  if ((o === userKey || o === null) && id) {
     owner = userKey
     save(PROJECT_OWNER_KEY, userKey)
     perUser.set(userKey, id)
