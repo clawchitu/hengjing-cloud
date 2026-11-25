@@ -470,7 +470,11 @@ function SettingsPanel(props: PanelProps) {
       {showWrite && result && !mine && (
         <div className={'te-bar ' + (isGood(result) ? 'pending' : 'fail')} role={isGood(result) ? 'status' : 'alert'} style={{ margin: '12px 0 0' }} data-result="">
           <span>{resultText(result, labelOf)}</span>
-          <Button onClick={props.clearResult}>知道了</Button>
+          <span className="row">
+            {/* 控制屏实时预检（205）没通过、未下发：重新发起（照常再确认一次） */}
+            {result.retry && <Button variant="primary" onClick={() => { props.clearResult(); void send() }}>重试</Button>}
+            <Button onClick={props.clearResult}>知道了</Button>
+          </span>
         </div>
       )}
       <LockBar lock={lock} running={mine ? running : null} />

@@ -151,7 +151,7 @@ function RoomCard({ room: r, ctx, range, selected, onSelect, draft, conflict, on
    */
   async function submit(p: Project, confirmed: { query: WriteQuery201; draft: RoomDraft | null }, okText: string, kind: 'set' | 'switch', v?: boolean, onApplied?: () => void) {
     return runOp({
-      project: p, target: r.key, subject: r.name, okText, toast: showToast, onApplied,
+      project: p, target: r.key, subject: r.name, okText, toast: showToast, onApplied, retry: kind === 'set' ? 'set' : v ? 'on' : 'off',
       present: () => present.current && latest.current.project?.id === p.id,
       preflight: async (signal) => {
         const read = await freshRead(signal)
@@ -314,7 +314,11 @@ function RoomCard({ room: r, ctx, range, selected, onSelect, draft, conflict, on
       {result && !mine && (
         <div className={'te-bar ' + (isGood(result) ? 'pending' : 'fail')} role={isGood(result) ? 'status' : 'alert'} onClick={(e) => e.stopPropagation()}>
           <span>{resultText(result)}{switchNote(result) && <> {switchNote(result)}</>}</span>
-          <Button onClick={() => project && clearResult(project.id, r.key)}>知道了</Button>
+          <span className="row">
+            {/* 控制屏实时预检（205）没通过、未下发：重新发起同一操作（照常再确认一次） */}
+            {result.retry && <Button variant="primary" onClick={() => { const a = result.retry; if (project) clearResult(project.id, r.key); void (a === 'set' ? send() : toggle(a === 'on')) }}>重试</Button>}
+            <Button onClick={() => project && clearResult(project.id, r.key)}>知道了</Button>
+          </span>
         </div>
       )}
     </Card>
@@ -535,7 +539,7 @@ export default function Thermostat() {
     if (isLocked(p)) return abort('有下发正在进行')
     // 同样走状态机：确认后新读一次原始 200，目标集合（完整、有效、与确认时相同）变了就取消，要求按新列表重新确认
     await runOp({
-      project: p, target: ALL, subject, okText, toast: showToast,
+      project: p, target: ALL, subject, okText, toast: showToast, retry: v ? 'on' : 'off',
       present: () => present.current && latest.current.project?.id === p.id,
       preflight: async (signal) => {
         const fresh = allRoomsTarget((await freshRead(signal)).raw)
@@ -570,7 +574,10 @@ export default function Thermostat() {
       {allResult && writes.running?.target !== ALL && (
         <div className={'te-bar ' + (isGood(allResult) ? 'pending' : 'fail')} role={isGood(allResult) ? 'status' : 'alert'} style={{ margin: '0 0 16px' }} data-result="all">
           <span>{resultText(allResult)}{switchNote(allResult) && <> {switchNote(allResult)}</>}</span>
-          <Button onClick={() => clearResult(project.id, ALL)}>知道了</Button>
+          <span className="row">
+            {allResult.retry && <Button variant="primary" onClick={() => { const a = allResult.retry; clearResult(project.id, ALL); void all(a === 'on') }}>重试</Button>}
+            <Button onClick={() => clearResult(project.id, ALL)}>知道了</Button>
+          </span>
         </div>
       )}
       <div className="hj-grid g4" style={{ marginBottom: 16 }}>

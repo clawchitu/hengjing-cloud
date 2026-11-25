@@ -83,8 +83,10 @@ let rooms: object[] = []
 function backend(routes: Record<string, Handler> = {}) {
   return fakeBackend({
     '/auth/login': () => json({ access_token: jwt('admin-1'), refresh_token: 'R1', expires_in: 7200 }),
-    '/me': () => json({ user_entity: { id: 'admin-1', name: '测试' }, permission_paths: [] }),
+    '/me': () => json({ user_entity: { id: 'admin-1', name: '测试' }, permission_paths: ['/v1/ctrl/device-summary-get'] }),
     '/ctrl/projects': () => json({ project_entities: [P1, P2, P12, POFF] }),
+    // 下发前的控制屏实时预检（ctrl 205）：默认在线
+    '/ctrl/device-summary-get': () => json({ body: '' }),
     '/integrated-projects': () => json({ entities: GROUPS }),
     '/distributors': () => json({ distributor_entities: [{ id: 'D1', name: '科希家研发苏州main' }] }),
     '/apps': () => json({}),
@@ -963,7 +965,7 @@ describe('下发状态机：确认后新读、写后新读、会话、期限', (
     let user = 'admin-1'
     const be = backend({
       '/ctrl/room-temperature-set': slow.handler,
-      '/me': () => json({ user_entity: { id: user, name: '测试' }, permission_paths: [] }),
+      '/me': () => json({ user_entity: { id: user, name: '测试' }, permission_paths: ['/v1/ctrl/device-summary-get'] }),
       '/ctrl/room-temperature-data-get': () => reply200(rooms), // 与下发值不一致：核对不会解锁
     })
     await draftAndSend()
@@ -1746,5 +1748,96 @@ describe('首次回读不一致：正在核对（赤兔 11/25：退避都用完�
     await waitFor(() => expect(reads()).toBe(n + 1))
     await waitFor(() => expect(toasts()).toContain('暂未核对一致，稍后自动再核对'))
     expect(toasts()).not.toContain('未变化')
+  })
+})
+
+describe('下发前控制屏实时预检（ctrl 205，赤兔 11/25）', () => {
+  const offline205 = () => json({ code: 14, message: '控制屏消息发送失败' }, 503)
+  const summary = (be: ReturnType<typeof backend>) => be.callsTo('/ctrl/device-summary-get')
+  it('205 返回 503 → 0 个写请求、未下发、不占锁，结果条给「重试」；重试时现查 205（不复用），在线就照常下发', async () => {
+    let down = true
+    const be = backend({ '/ctrl/room-temperature-set': ok201, '/ctrl/device-summary-get': () => (down ? offline205() : json({ body: '' })) })
+    await draftAndSend()
+    await confirmOk()
+    await waitFor(() => expect(toasts()).toContain('客厅：控制屏未连接，暂不能下发'))
+    await flush(50)
+    expect(writes(be)).toHaveLength(0)
+    expect(summary(be)).toHaveLength(1)
+    expect((summary(be)[0].body as { project_id: string }).project_id).toBe(P1.id)
+    expect(lockOfKey(P1)).toBeNull()
+    const c = card('客厅')
+    expect(c.textContent).toContain('未下发：控制屏未连接，暂不能下发')
+    expect(c.textContent).toContain('待下发') // 草稿保留
+    down = false
+    fireEvent.click(btn(c, '重试'))
+    await confirmOk()
+    await waitFor(() => expect(toasts()).toContain('客厅 已生效：设定温度 26.0°C'))
+    expect(summary(be)).toHaveLength(2)
+    expect(writes(be)).toHaveLength(1)
+  })
+  it('205 超过 5 秒没返回 → 同样拦下：0 个写请求、不占锁、有重试', async () => {
+    const be = backend({ '/ctrl/room-temperature-set': ok201, '/ctrl/device-summary-get': () => new Promise<Response>(() => {}) })
+    await draftAndSend()
+    fakeClock()
+    await confirmOk()
+    await flush()
+    expect(summary(be)).toHaveLength(1)
+    await advance(4_900)
+    expect(toasts()).not.toContain('控制屏未连接')
+    expect(lockOfKey(P1)).not.toBeNull() // 预检阶段占着，还没发
+    await advance(200)
+    await waitFor(() => expect(toasts()).toContain('客厅：控制屏未连接，暂不能下发'))
+    expect(writes(be)).toHaveLength(0)
+    expect(lockOfKey(P1)).toBeNull()
+    expect(btn(card('客厅'), '重试')).toBeTruthy()
+  })
+  it('205 在 5 秒之后才返回成功 → 仍按超时拦下：0 个写请求、不占锁', async () => {
+    const be = backend({ '/ctrl/room-temperature-set': ok201, '/ctrl/device-summary-get': () => new Promise<Response>((r) => { setTimeout(() => r(json({ body: '' })), 5_500) }) })
+    await draftAndSend()
+    fakeClock()
+    await confirmOk()
+    await advance(6_000)
+    await waitFor(() => expect(toasts()).toContain('客厅：控制屏未连接，暂不能下发'))
+    await flush(50)
+    expect(writes(be)).toHaveLength(0)
+    expect(lockOfKey(P1)).toBeNull()
+  })
+  it('房间开关、全部开关同样预检：205 503 → 不发 201 / 206，重试按原操作重新确认', async () => {
+    const be = backend({ '/ctrl/room-temperature-set': ok201, '/ctrl/project-room-switch-set': ok206, '/ctrl/device-summary-get': offline205 })
+    await openRooms()
+    fireEvent.click(screen.getByRole('button', { name: '全部开启' }))
+    await confirmOk()
+    await waitFor(() => expect(document.querySelector('[data-result=all]')?.textContent).toContain('未下发：控制屏未连接，暂不能下发'))
+    expect(writes(be)).toHaveLength(0)
+    expect(lockOfKey(P1)).toBeNull()
+    fireEvent.click(within(document.querySelector('[data-result=all]') as HTMLElement).getByRole('button', { name: '重试' }))
+    expect((await dialog()).textContent).toContain('开启')
+  })
+  it('205 返回 403（无连接状态权限）→ 0 个写请求、不占锁，单独文案（不说控制屏未连接），不给重试', async () => {
+    const be = backend({ '/ctrl/room-temperature-set': ok201, '/ctrl/device-summary-get': () => new Response('no permission', { status: 403, headers: { 'content-type': 'text/plain' } }) })
+    await draftAndSend()
+    await confirmOk()
+    await waitFor(() => expect(toasts()).toContain('客厅：当前账号无连接状态权限，无法确认控制屏在线，暂不能下发，请联系管理员'))
+    await flush(50)
+    expect(writes(be)).toHaveLength(0)
+    expect(lockOfKey(P1)).toBeNull()
+    const c = card('客厅')
+    expect(c.textContent).toContain('未下发：当前账号无连接状态权限，无法确认控制屏在线，暂不能下发，请联系管理员')
+    expect(c.textContent).not.toContain('控制屏未连接')
+    expect(within(c).queryByRole('button', { name: '重试' })).toBeNull()
+  })
+  it('写请求收到网关纯文本 504：结果说明补「控制屏 10 秒内没有应答，可能离线」，仍按结果未知', async () => {
+    backend({ '/ctrl/room-temperature-set': () => new Response('upstream request timeout', { status: 504, headers: { 'content-type': 'text/plain' } }) })
+    await draftAndSend()
+    await confirmOk()
+    await waitFor(() => expect(toasts()).toContain('客厅 下发结果未知：未收到控制屏应答，下发结果未知；控制屏 10 秒内没有应答，可能离线'))
+    expect(card('客厅').textContent).toContain('控制屏 10 秒内没有应答，可能离线')
+  })
+  it('带 gRPC 码的 JSON 504（code 4）不补这句', async () => {
+    backend({ '/ctrl/room-temperature-set': () => json({ code: 4, message: 'deadline' }, 504) })
+    await draftAndSend()
+    await confirmOk()
+    await waitFor(() => expect(toasts()).toContain('客厅 下发结果未知'))
+    expect(toasts()).not.toContain('可能离线')
   })
 })

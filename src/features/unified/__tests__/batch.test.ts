@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { __resetWriteLockForTests, lockOf } from '@/api/writeLock'
 import { ApiError } from '@/api/errors'
 import { UnifiedCtrlSetQuery_OperatingMode as Mode } from '@/api/gen/ctrl200_pb.js'
+import type { ScreenState } from '@/api/screenPreflight'
 import { createUnifiedBatch, summarizeRooms, unifiedAppCode, type BatchProject, type BatchSender, type UnifiedSnapshot } from '../batch'
 import { echoMismatches } from '../rules'
 
@@ -449,5 +450,68 @@ describe('start：逐个下发，三种结果，不重试', () => {
     expect(t.batch.prepare(['a'], { roomSwitch: 0 }).phase).toBe('running')
     await p1
     expect(t.send).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('下发前控制屏实时预检（ctrl 205，赤兔 11/25）', () => {
+  const make = (projects: BatchProject[], screen: (id: string, signal: AbortSignal) => Promise<ScreenState>) => {
+    const readBack = vi.fn(async () => ({ rooms: 2, roomSwitch: 1, roomTemp: 26 }))
+    const w = fakeWire()
+    const sc = vi.fn(screen)
+    const batch = createUnifiedBatch({ getProjects: () => projects, readBack, send: w.send, log: () => {}, screen: sc, now: () => new Date('2026-11-24T10:00:00') })
+    return { batch, readBack, send: w.send, wire: w.wire, screen: sc }
+  }
+  it('离线项目：不取锁、不读、不发，标「未下发（控制屏未连接）」、可重试；在线的照常发，整批不受影响', async () => {
+    const a = P('a', '240829001'), b = P('b', '260911001')
+    const t = make([a, b], async (id) => (id === 'a' ? 'offline' : 'online'))
+    t.batch.prepare(['a', 'b'], { roomSwitch: 1 })
+    const done = await t.batch.start()
+    expect(t.screen.mock.calls.map((c) => c[0])).toEqual(['a', 'b'])
+    expect(t.wire).toEqual(['b'])
+    expect(t.readBack.mock.calls.map((c) => (c as unknown[])[0])).toEqual(['b', 'b'])
+    expect(done.rows.map((r) => [r.status, r.note, r.retry])).toEqual([['not-sent', '未下发（控制屏未连接），可重新勾选下发', true], ['success', undefined, undefined]])
+    expect(lockOf(a)).toBeNull()
+  })
+  it('超时（timeout）与预检抛错同样按未下发；全部离线 → 0 个写请求', async () => {
+    const t = make([P('a', '240829001'), P('b', '260911001')], async (id) => { if (id === 'a') return 'timeout'; throw new Error('x') })
+    t.batch.prepare(['a', 'b'], { roomSwitch: 1 })
+    const done = await t.batch.start()
+    expect(t.send).not.toHaveBeenCalled()
+    expect(done.rows.map((r) => r.status)).toEqual(['not-sent', 'not-sent'])
+    expect(done.rows.every((r) => r.note === '未下发（控制屏未连接），可重新勾选下发' && r.retry)).toBe(true)
+  })
+  it('205 返回 403（无连接状态权限）：同样不取锁、不发，单独文案、不标可重试；在线的照常发', async () => {
+    const a = P('a', '240829001'), b = P('b', '260911001')
+    const t = make([a, b], async (id) => (id === 'a' ? 'forbidden' : 'online'))
+    t.batch.prepare(['a', 'b'], { roomSwitch: 1 })
+    const done = await t.batch.start()
+    expect(t.wire).toEqual(['b'])
+    expect(done.rows[0]).toMatchObject({ status: 'not-sent', note: '未下发（当前账号无连接状态权限，无法确认控制屏在线，暂不能下发，请联系管理员）' })
+    expect(done.rows[0].retry).toBeUndefined()
+    expect(lockOf(a)).toBeNull()
+  })
+  it('多个 205 超时不影响在线项目：8 个各 5 秒不应答排在前面，最后一个在线的仍在 35 秒截止前发出（开始时并行查）', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      const slow = Array.from({ length: 8 }, (_, i) => P('s' + i, '10000000' + i))
+      const ok = P('ok', '240829001')
+      const t = make([...slow, ok], (id) => (id === 'ok' ? Promise.resolve('online' as const) : new Promise((r) => setTimeout(() => r('timeout'), 5_000))))
+      t.batch.prepare([...slow.map((p) => p.id), 'ok'], { roomSwitch: 1 })
+      const run = t.batch.start()
+      await vi.advanceTimersByTimeAsync(6_000)
+      const done = await run
+      expect(t.screen).toHaveBeenCalledTimes(9)
+      expect(t.wire).toEqual(['ok'])
+      expect(done.rows.at(-1)!.status).toBe('success')
+      expect(done.rows.slice(0, 8).every((r) => r.status === 'not-sent' && r.note === '未下发（控制屏未连接），可重新勾选下发')).toBe(true)
+    } finally { vi.useRealTimers() }
+  })
+  it('演示数据（mock）默认不查 205', async () => {
+    const readBack = vi.fn(async () => ({ rooms: 2, roomSwitch: 1, roomTemp: 26 }))
+    const w = fakeWire()
+    const batch = createUnifiedBatch({ getProjects: () => [P('a', '240829001')], readBack, send: w.send, log: () => {}, mock: true })
+    batch.prepare(['a'], { roomSwitch: 1 })
+    await batch.start()
+    expect(w.wire).toEqual(['a'])
   })
 })

@@ -21,7 +21,7 @@ import { __resetSessionViewForTests } from '../data/session'
 import { __resetMockUnifiedForTests, mockUnifiedRead, mockUnifiedSend } from '../api'
 import Control, { lastResultKey } from './Control'
 import { setCurrentUserId } from '../api/auth'
-import { __resetWriteLockForTests, OTHER_ACCOUNT_TEXT, RETRY_DELAYS_MS, STORAGE_PREFIX } from '../api/writeLock'
+import { __resetWriteLockForTests, lockOf, OTHER_ACCOUNT_TEXT, RETRY_DELAYS_MS, STORAGE_PREFIX } from '../api/writeLock'
 import { TEXT } from '../features/unified/constants'
 
 beforeAll(() => {
@@ -53,8 +53,10 @@ type Handler = (c: Call, n: number) => Response | Promise<Response>
 function backend(routes: Record<string, Handler> = {}) {
   return fakeBackend({
     '/auth/login': () => json({ access_token: J('dealer-1'), refresh_token: 'R1', expires_in: 7200 }),
-    '/me': () => json({ user_entity: { id: 'dealer-1', name: '测试', type: 1 } }),
+    '/me': () => json({ user_entity: { id: 'dealer-1', name: '测试', type: 1 }, permission_paths: ['/v1/ctrl/device-summary-get'] }),
     '/ctrl/projects': () => json({ project_entities: PROJECTS }),
+    // 下发前的控制屏实时预检（ctrl 205）：默认在线
+    '/ctrl/device-summary-get': () => json({ body: '' }),
     '/integrated-projects': () => json({ entities: GROUPS }),
     '/distributors': () => json({ distributor_entities: [{ id: 'D1', name: '科希家研发苏州main' }] }),
     ...routes,
@@ -767,6 +769,88 @@ describe('下发', () => {
     expect(screen.queryByRole('alertdialog')).toBeNull()
     expect(await screen.findByText('没有要下发的设置')).toBeTruthy()
     expect(be.callsTo('/ctrl/unified-ctrl-set')).toHaveLength(0)
+  })
+
+  describe('下发前控制屏实时预检（ctrl 205，赤兔 11/25）', () => {
+    const offline205 = () => json({ code: 14, message: '控制屏消息发送失败' }, 503)
+    const pid = (c: Call) => (c.body as { project_id?: string } | undefined)?.project_id
+    const P5 = { id: 'p5', code: '240829005', name: '测试项目0905', app_code: '1', online: true }
+    const two = (routes: Record<string, Handler>) => backend({
+      '/ctrl/projects': () => json({ project_entities: [...PROJECTS, P5] }),
+      '/integrated-projects': () => json({ entities: [{ ...GROUPS[0], project_ids: ['p1', 'p3', 'p5'] }, ...GROUPS.slice(1)] }),
+      ...routes,
+    })
+    async function prepareTwo() {
+      await mount()
+      await click(screen.getByText('测试项目0829'))
+      await click(screen.getByText('测试项目0905'))
+      await click(screen.getByRole('button', { name: '全部开启' }))
+      await click(keep())
+      await click(screen.getByRole('button', { name: '升高温度' }))
+      await click(screen.getByRole('button', { name: '确认下发' }))
+      return screen.findByRole('alertdialog')
+    }
+    const row = (code: string) => [...document.querySelectorAll('[role=region] tbody tr')].find((r) => r.textContent?.includes(code))!
+
+    it('205 返回 503 → 0 个写请求、未下发（控制屏未连接）、不占锁；不读 200 下发前状态', async () => {
+      const be = backend({ '/ctrl/room-temperature-data-get': () => rooms(1, 26), '/ctrl/unified-ctrl-set': () => reply(true), '/ctrl/device-summary-get': offline205 })
+      const dlg = await prepare()
+      const r0 = reads(be)
+      await click(okIn(dlg))
+      await screen.findByText('未下发', { selector: '[data-slot=badge]' }, { timeout: 3000 })
+      expect(be.callsTo('/ctrl/unified-ctrl-set')).toHaveLength(0)
+      expect(be.callsTo('/ctrl/device-summary-get')).toHaveLength(1)
+      expect(reads(be)).toBe(r0)
+      expect(lockOf('project:p1')).toBeNull()
+      expect(await openNotes()).toContain('未下发（控制屏未连接），可重新勾选下发')
+    })
+    it('205 超过 5 秒没返回 → 同样未下发、不发 203、不占锁', async () => {
+      const be = backend({ '/ctrl/room-temperature-data-get': () => rooms(1, 26), '/ctrl/unified-ctrl-set': () => reply(true), '/ctrl/device-summary-get': () => new Promise<Response>(() => {}) })
+      const dlg = await prepare()
+      fakeClock()
+      await click(okIn(dlg))
+      await advance(4_900)
+      expect(document.querySelector('[role=region] tbody tr [data-slot=badge]')?.textContent ?? '').not.toBe('未下发')
+      await advance(200)
+      await screen.findByText('未下发', { selector: '[data-slot=badge]' }, { timeout: 3000 })
+      expect(be.callsTo('/ctrl/unified-ctrl-set')).toHaveLength(0)
+      expect(lockOf('project:p1')).toBeNull()
+      expect(await openNotes()).toContain('未下发（控制屏未连接），可重新勾选下发')
+    })
+    it('一离线一在线：只给在线的发 203，离线的标「未下发（控制屏未连接）」，在线的照常核对出结果（p5 离线在后，p1 在线在前）', async () => {
+      const sentTo = new Set<string>()
+      const be = two({
+        '/ctrl/device-summary-get': (c) => (pid(c) === 'p5' ? offline205() : json({ body: '' })),
+        '/ctrl/room-temperature-data-get': (c) => (sentTo.has(pid(c) ?? '') ? rooms(1, 26.5) : rooms(0, 26)),
+        '/ctrl/unified-ctrl-set': (c) => { sentTo.add(pid(c) ?? ''); return reply(true) },
+      })
+      await click(okIn(await prepareTwo()))
+      await waitFor(() => expect(row('240829001')?.querySelector('[data-slot=badge]')?.textContent).toBe('已生效'), { timeout: 3000 })
+      expect(row('240829005').querySelector('[data-slot=badge]')!.textContent).toBe('未下发')
+      expect(be.callsTo('/ctrl/unified-ctrl-set').map(pid)).toEqual(['p1'])
+      expect(be.callsTo('/ctrl/device-summary-get').map(pid)).toEqual(['p1', 'p5'])
+      expect(lockOf('project:p5')).toBeNull()
+      expect(await openNotes()).toContain('未下发（控制屏未连接），可重新勾选下发')
+    })
+    it('205 返回 403（无连接状态权限）→ 0 个写请求、不占锁，单独文案（不说控制屏未连接），没有重试按钮', async () => {
+      const be = backend({ '/ctrl/room-temperature-data-get': () => rooms(1, 26), '/ctrl/unified-ctrl-set': () => reply(true), '/ctrl/device-summary-get': () => text('no permission', 403) })
+      await click(okIn(await prepare()))
+      await screen.findByText('未下发', { selector: '[data-slot=badge]' }, { timeout: 3000 })
+      expect(be.callsTo('/ctrl/unified-ctrl-set')).toHaveLength(0)
+      expect(lockOf('project:p1')).toBeNull()
+      const notes = await openNotes()
+      expect(notes).toContain('未下发（当前账号无连接状态权限，无法确认控制屏在线，暂不能下发，请联系管理员）')
+      expect(notes).not.toContain('控制屏未连接')
+      expect(screen.queryByRole('button', { name: '重试' })).toBeNull()
+    })
+    it('203 收到网关纯文本 504：说明里补「控制屏 10 秒内没有应答，可能离线」，仍按结果未知', async () => {
+      fakeClock()
+      backend({ '/ctrl/room-temperature-data-get': () => rooms(0, 26), '/ctrl/unified-ctrl-set': () => text('upstream request timeout', 504) })
+      await click(okIn(await prepare()))
+      await runRetries()
+      await screen.findByText('结果未知', { selector: '[data-slot=badge]' }, { timeout: 3000 })
+      expect(await openNotes()).toContain('控制屏 10 秒内没有应答，可能离线')
+    })
   })
 })
 
