@@ -6,41 +6,73 @@
 export const PROJECT_KEY = 'hjc-project'
 /** 记下 hjc-project 是哪个账号（session userKey）选的（S13 走查 P7：同一浏览器换账号不沿用上一个账号的当前项目） */
 export const PROJECT_OWNER_KEY = 'hjc-project-owner'
+/** 每个账号自己的当前项目：hjc-project:<userKey>（A 选、B 选、A 再登录，A 仍是自己选的） */
+export const projectKeyOf = (userKey: string) => `${PROJECT_KEY}:${userKey}`
 
 let stored: string | undefined // undefined：还没读过存储
 let owner: string | null | undefined // undefined：还没读过存储；null：没记账号（旧数据）
+const perUser = new Map<string, string | null>() // 账号 → 它自己的当前项目；null：没存过
 let tick = 0
 const subs = new Set<() => void>()
 const emit = () => { for (const fn of subs) fn() }
 
+const load = (k: string) => { try { return localStorage.getItem(k) } catch { return null } }
+const save = (k: string, v: string) => { try { localStorage.setItem(k, v) } catch { /* 存储不可用时只在内存里生效 */ } }
+
 function read(): string {
-  try { return localStorage.getItem(PROJECT_KEY) || '' } catch { return '' }
+  return load(PROJECT_KEY) || ''
 }
 
 function readOwner(): string | null {
-  try { return localStorage.getItem(PROJECT_OWNER_KEY) || null } catch { return null }
+  return load(PROJECT_OWNER_KEY) || null
 }
 
 export const getStoredProjectId = () => (stored === undefined ? (stored = read()) : stored)
 const getOwner = () => (owner === undefined ? (owner = readOwner()) : owner)
+const getPerUser = (u: string) => {
+  if (!perUser.has(u)) perUser.set(u, load(projectKeyOf(u)) || null)
+  return perUser.get(u)!
+}
+
 /**
- * 某个账号的当前项目：存的项目是别的账号选的 → ''（解析时回退到这个账号的第一个可见项目，不改写存储）。
- * 没记账号的旧数据、账号未知时照旧返回存的值（升级后同一个账号不丢上次的项目）
+ * 某个账号的当前项目（解析时不在范围里就回退到这个账号的第一个可见项目）：
+ * - 这个账号自己存过（hjc-project:<userKey>）→ 用它；
+ * - 没存过，最近一次选择（hjc-project）是它自己选的 → 用它；
+ * - 升级前没记账号的旧数据 → 归第一个读到它的账号（记下账号，之后别的账号不再沿用），同一个账号升级后不丢上次的项目；
+ * - 是别的账号选的 → ''。
+ * 账号未知时照旧返回最近一次选择
  */
 export const getStoredProjectIdFor = (userKey: string | null | undefined) => {
   const id = getStoredProjectId()
+  if (!userKey) return id
+  const mine = getPerUser(userKey)
+  if (mine !== null) return mine
   const o = getOwner()
-  return !userKey || !o || o === userKey ? id : ''
+  if (o === userKey) return id
+  if (o === null && id) {
+    owner = userKey
+    save(PROJECT_OWNER_KEY, userKey)
+    perUser.set(userKey, id)
+    save(projectKeyOf(userKey), id)
+    return id
+  }
+  return ''
 }
 export const getSelectTick = () => tick
 
-/** userKey：选这个项目的账号，一起记下（不传就不改账号记录） */
+/** userKey：选这个项目的账号，一起记下（不传就不改账号记录，算作记录里那个账号的选择） */
 export function setStoredProjectId(id: string, userKey?: string | null) {
   stored = id
-  try { localStorage.setItem(PROJECT_KEY, id) } catch { /* 存储不可用时只在内存里生效 */ }
+  save(PROJECT_KEY, id)
+  // 不传账号时算作记录里那个账号的选择（账号记录不变）
+  const u = userKey || getOwner()
   if (userKey) {
     owner = userKey
-    try { localStorage.setItem(PROJECT_OWNER_KEY, userKey) } catch { /* 同上 */ }
+    save(PROJECT_OWNER_KEY, userKey)
+  }
+  if (u) {
+    perUser.set(u, id)
+    save(projectKeyOf(u), id)
   }
   emit()
 }
@@ -85,6 +117,7 @@ export function noteScope(sig: string) {
 export function __resetCurrentForTests() {
   stored = undefined
   owner = undefined
+  perUser.clear()
   tick = 0
   subs.clear()
   rejected.clear()

@@ -1795,6 +1795,16 @@ describe('下发前控制屏实时预检（ctrl 205，赤兔 11/25）', () => {
     expect(lockOfKey(P1)).toBeNull()
     expect(btn(card('客厅'), '重试')).toBeTruthy()
   })
+  it('205 返回 500（其他失败，S13 P2）→ 不重查，拦下：0 个写请求，文案是「在线检查失败」，不带「未下发：」前缀', async () => {
+    const be = backend({ '/ctrl/room-temperature-set': ok201, '/ctrl/device-summary-get': () => json({ code: 13, message: '内部错误' }, 500) })
+    await draftAndSend()
+    await confirmOk()
+    await waitFor(() => expect(toasts()).toContain('客厅：控制屏在线检查失败，未下发，请重试'))
+    expect(toasts()).not.toMatch(/未下发：|控制屏未连接|超时/)
+    expect(summary(be)).toHaveLength(1)
+    expect(writes(be)).toHaveLength(0)
+    expect(lockOfKey(P1)).toBeNull()
+  })
   it('205 每次都在 5 秒之后才返回成功 → 迟到的成功丢弃，两次都按超时拦下：0 个写请求、不占锁', async () => {
     const be = backend({ '/ctrl/room-temperature-set': ok201, '/ctrl/device-summary-get': () => new Promise<Response>((r) => { setTimeout(() => r(json({ body: '' })), 5_500) }) })
     await draftAndSend()

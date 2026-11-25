@@ -1,6 +1,6 @@
 // 设备连接状态（S11）：ctrl 205 设备汇总，每 30 秒重新读一次。数据与映射见 src/data/connections.ts。
 // 按方案 1.2：「类型」列改为型号（205 的 model）；KPI 由前端按 conn_status 统计，「最长离线时长」「丢包率」
-// 接口无此字段，去掉；网关 IP / 延迟 / 运行时长无来源，页头只显示项目的控制屏 / DTU 编号。
+// 接口无此字段，去掉；网关 IP / 延迟 / 运行时长无来源，页头不显示控制屏 / DTU 编号（S13 走查 P6）。
 // 「立即检测」就是立刻重新读一次 205（只读，与 30 秒轮询同一个请求），不触发任何下发。
 import { useState, type ReactNode } from 'react'
 import { faLock, faPlugCircleXmark, faSatelliteDish, faTriangleExclamation } from '@fortawesome/free-solid-svg-icons'
