@@ -206,13 +206,18 @@ describe('读取（ctrl 200）', () => {
     expect(card('房间13').textContent).toContain('0 档')
   })
 
-  it('S13：末端一行有小标题和说明（只读：开 / 关 由控制屏自动控制），标签不是按钮', async () => {
+  it('末端一行：小标题「末端（点击选择参与运行的末端）」，每个末端是可点的按钮；开 / 关只读，tooltip 写「开/关由控制屏自动控制」', async () => {
     backend()
     const c = await openRooms()
     const row = c.querySelector('.modes-row') as HTMLElement
-    expect(row.querySelector('.ends-h')!.textContent).toBe('末端（由控制屏控制）')
-    expect(row.getAttribute('title')).toContain('开 / 关 由控制屏根据运行情况自动控制')
-    expect(within(row).queryAllByRole('button')).toHaveLength(0)
+    expect(row.querySelector('.ends-h')!.textContent).toBe('末端（点击选择参与运行的末端）')
+    const tags = within(row).getAllByRole('button')
+    expect(tags.map((b) => b.getAttribute('aria-label'))).toEqual(['客厅 末端 风盘', '客厅 末端 顶辐射', '客厅 末端 地冷'])
+    expect(tags.map((b) => b.getAttribute('aria-pressed'))).toEqual(['true', 'true', 'false'])
+    const sw = [...row.querySelectorAll('[data-end-switch]')]
+    expect(sw.map((x) => [x.textContent, x.getAttribute('title')])).toEqual([['开', '开/关由控制屏自动控制'], ['关', '开/关由控制屏自动控制'], ['关', '开/关由控制屏自动控制']])
+    // 开 / 关本身不是按钮（只读）
+    expect(sw.every((x) => x.tagName === 'SPAN')).toBe(true)
   })
 
   it('S13：app_code 12 的页头和说明只写程序名称，不写程序编码', async () => {
@@ -1900,5 +1905,196 @@ describe('下发前控制屏实时预检（ctrl 205，赤兔 11/25）', () => {
     await confirmOk()
     await waitFor(() => expect(toasts()).toContain('客厅 下发结果未知'))
     expect(toasts()).not.toContain('可能离线')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// 末端选择下发（201 end_modes）：点末端标签切换「选中」进草稿 → 确认 → 201（end_modes 完整回传，只改 is_selected，switch 原样，
+// 其余标量 -1）→ 写锁按 is_selected 逐个核对（switch 不比）。全不选禁用下发；末端在外部变化时拦下；is_change = false 的末端不能改
+
+/** 201 应答 success，并且设备按下发值生效：温度 / 节能 / 开关照 ok201，end_modes 非空时按位置改 is_selected（switch 保持读数） */
+const ok201Ends = (c?: Call) => {
+  if (c) {
+    const q = body201(c) as { equipmentId: number; endModes: { isSelected: boolean }[] }
+    if (q.endModes.length) {
+      rooms = rooms.map((r) => {
+        const x = r as typeof ROOM
+        return x.id !== q.equipmentId ? r : { ...x, endModes: x.endModes.map((m, i) => ({ ...m, isSelected: q.endModes[i]?.isSelected ?? m.isSelected })) }
+      })
+    }
+  }
+  return ok201(c)
+}
+const endTag = (c: HTMLElement, name: string) => within(c).getByRole('button', { name: `客厅 末端 ${name}` }) as HTMLButtonElement
+
+describe('末端选择下发（201 end_modes）', () => {
+  it('从点标签开始：点「地冷」→ 草稿 → 下发 → 确认 → 201 解码：end_modes 完整回传、只改了 is_selected、switch 原值、其余标量 -1；先「正在核对」再「已生效」', async () => {
+    let wrote = false
+    const slowRead = deferred(() => reply200(rooms))
+    const be = backend({
+      '/ctrl/room-temperature-set': (c) => { wrote = true; return ok201Ends(c) },
+      '/ctrl/room-temperature-data-get': () => (wrote ? slowRead.handler() : reply200(rooms)),
+    })
+    const c = await openRooms()
+    expect(endTag(c, '地冷').getAttribute('aria-pressed')).toBe('false')
+    fireEvent.click(endTag(c, '地冷'))
+    expect(endTag(card('客厅'), '地冷').getAttribute('aria-pressed')).toBe('true')
+    expect(endTag(card('客厅'), '地冷').className).toContain('dirty')
+    expect(card('客厅').textContent).toContain('待下发：参与运行的末端 风盘、顶辐射 → 风盘、顶辐射、地冷')
+    expect(writes(be)).toHaveLength(0)
+    fireEvent.click(btn(card('客厅'), '下发'))
+    const dlg = await dialog()
+    expect(dlg.textContent).toContain('参与运行的末端 风盘、顶辐射 → 风盘、顶辐射、地冷')
+    expect(dlg.textContent).not.toContain('设置温度不会开启房间')
+    fireEvent.click(within(dlg).getByRole('button', { name: '确认下发' }))
+    await waitFor(() => expect(writes(be)).toHaveLength(1))
+    expect(body201(writes(be)[0])).toEqual({
+      equipmentId: 406658286, temperature: -1, humidity: -1, windSpeed: -1, eco: -1, switch: -1,
+      endModes: [
+        { optionName: '风盘', type: 0, isSelected: true, isChange: true, switch: 1 },
+        { optionName: '顶辐射', type: 1, isSelected: true, isChange: true, switch: 0 },
+        { optionName: '地冷', type: 3, isSelected: true, isChange: true, switch: 0 },
+      ],
+    })
+    await waitFor(() => expect(card('客厅').textContent).toContain('正在核对'))
+    expect(toasts()).not.toContain('已生效')
+    await slowRead.release()
+    await waitFor(() => expect(toasts()).toContain('客厅 已生效：参与运行的末端 风盘、顶辐射、地冷'))
+    await waitFor(() => expect(card('客厅').textContent).not.toContain('待下发'))
+    expect(endTag(card('客厅'), '地冷').getAttribute('aria-pressed')).toBe('true')
+    expect(writes(be)).toHaveLength(1)
+  })
+
+  it('末端和温度一起改：一条 201，温度是真实值、末端完整回传，其余 -1', async () => {
+    const be = backend({ '/ctrl/room-temperature-set': ok201Ends })
+    const c = await openRooms()
+    fireEvent.click(btn(c, '客厅 设定温度升高'))
+    fireEvent.click(endTag(card('客厅'), '顶辐射'))
+    fireEvent.click(btn(card('客厅'), '下发'))
+    await confirmOk()
+    await waitFor(() => expect(toasts()).toContain('客厅 已生效：设定温度 26.0°C，参与运行的末端 风盘'))
+    expect(body201(writes(be)[0])).toMatchObject({ temperature: 26, eco: -1, switch: -1, humidity: -1, windSpeed: -1, endModes: [{ isSelected: true, switch: 1 }, { isSelected: false, switch: 0 }, { isSelected: false, switch: 0 }] })
+  })
+
+  it('末端全不选：提示「至少选择一个末端」，下发按钮禁用，不发 201', async () => {
+    const be = backend({ '/ctrl/room-temperature-set': ok201Ends })
+    const c = await openRooms()
+    fireEvent.click(endTag(c, '风盘'))
+    fireEvent.click(endTag(card('客厅'), '顶辐射'))
+    const k = card('客厅')
+    expect(within(k).getByRole('alert').textContent).toBe('至少选择一个末端')
+    const send = btn(k, '下发')
+    expect(send.disabled).toBe(true)
+    expect(send.getAttribute('title')).toBe('至少选择一个末端')
+    fireEvent.click(send)
+    await flush(50)
+    expect(screen.queryByRole('alertdialog')).toBeNull()
+    expect(writes(be)).toHaveLength(0)
+    // 再点回一个：恢复可下发
+    fireEvent.click(endTag(card('客厅'), '风盘'))
+    expect(btn(card('客厅'), '下发').disabled).toBe(false)
+  })
+
+  it('确认期间末端在外部变化（个数变了）：确认返回后拦下，提示「末端已在外部变化」，不发 201', async () => {
+    const be = backend({ '/ctrl/room-temperature-set': ok201Ends })
+    const c = await openRooms()
+    fireEvent.click(endTag(c, '地冷'))
+    fireEvent.click(btn(card('客厅'), '下发'))
+    await dialog()
+    await poll([{ ...ROOM, endModes: [ENDS[0], ENDS[1]] }, OFF_ROOM])
+    await confirmOk()
+    await flush(80)
+    expect(writes(be)).toHaveLength(0)
+    expect(toasts()).toContain('末端已在外部变化')
+  })
+
+  it('确认后预检新读 200：末端顺序变了 / 名称变了 → 拦下「末端已在外部变化」，不发 201；只是末端 switch 变了照发（发新读到的 switch）', async () => {
+    for (const next of [[ENDS[1], ENDS[0], ENDS[2]], [ENDS[0], ENDS[1], { ...ENDS[2], optionName: '地暖', type: 2 }]]) {
+      cleanup(); toastLog = []; rooms = [ROOM, OFF_ROOM]; __resetWritesForTests(); __resetWriteLockForTests()
+      let confirmed = false
+      const be = backend({
+        '/ctrl/room-temperature-set': ok201Ends,
+        '/ctrl/room-temperature-data-get': () => reply200(confirmed ? [{ ...ROOM, endModes: next }, OFF_ROOM] : rooms),
+      })
+      const c = await openRooms()
+      fireEvent.click(endTag(c, '地冷'))
+      fireEvent.click(btn(card('客厅'), '下发'))
+      const dlg = await dialog()
+      confirmed = true
+      fireEvent.click(within(dlg).getByRole('button', { name: '确认下发' }))
+      await waitFor(() => expect(toasts()).toContain('客厅：末端已在外部变化，本次未下发'))
+      expect(writes(be)).toHaveLength(0)
+    }
+    cleanup(); toastLog = []; rooms = [ROOM, OFF_ROOM]; __resetWritesForTests(); __resetWriteLockForTests()
+    let confirmed = false
+    const flipped = [{ ...ENDS[0], switch: 0 }, { ...ENDS[1], switch: 1 }, ENDS[2]]
+    const be = backend({
+      '/ctrl/room-temperature-set': (c) => ok201Ends(c),
+      '/ctrl/room-temperature-data-get': () => reply200(confirmed && rooms[0] === ROOM ? [{ ...ROOM, endModes: flipped }, OFF_ROOM] : rooms),
+    })
+    const c = await openRooms()
+    fireEvent.click(endTag(c, '地冷'))
+    fireEvent.click(btn(card('客厅'), '下发'))
+    const dlg = await dialog()
+    confirmed = true
+    fireEvent.click(within(dlg).getByRole('button', { name: '确认下发' }))
+    await waitFor(() => expect(writes(be)).toHaveLength(1))
+    expect((body201(writes(be)[0]).endModes as { switch: number }[]).map((m) => m.switch)).toEqual([0, 1, 0])
+  })
+
+  it('下发成功但末端没变（回读 is_selected 不一致）：不提示已生效，退避用完显示「指令已下发，设备状态暂未变化」，草稿保留', async () => {
+    fakeClock()
+    const be = backend({ '/ctrl/room-temperature-set': ok201NoApply })
+    const c = await openRooms()
+    fireEvent.click(endTag(c, '地冷'))
+    fireEvent.click(btn(card('客厅'), '下发'))
+    await confirmOk()
+    await waitFor(() => expect(writes(be)).toHaveLength(1))
+    await waitFor(() => expect(card('客厅').textContent).toContain('正在核对'))
+    await flush(); await runRetries()
+    await waitFor(() => expect(within(card('客厅')).getAllByRole('alert').map((a) => a.textContent).join()).toContain('指令已下发，设备状态暂未变化'))
+    expect(toasts()).not.toContain('已生效')
+    expect(card('客厅').textContent).toContain('风盘、顶辐射 → 风盘、顶辐射、地冷')
+  })
+
+  it('is_change = false（全空气）：已选中的标「不可取消」，点击无效并提示，不进草稿', async () => {
+    rooms = [{ ...ROOM, endModes: [{ optionName: '全空气', type: 4, isSelected: true, isChange: false, switch: 1 }, ...ENDS] }, OFF_ROOM]
+    const be = backend({ '/ctrl/room-temperature-set': ok201Ends })
+    const c = await openRooms()
+    const air = endTag(c, '全空气')
+    expect(air.textContent).toContain('不可取消')
+    expect(air.getAttribute('aria-disabled')).toBe('true')
+    fireEvent.click(air)
+    expect(toasts()).toContain('客厅：「全空气」不可取消')
+    expect(endTag(card('客厅'), '全空气').getAttribute('aria-pressed')).toBe('true')
+    expect(card('客厅').textContent).not.toContain('待下发')
+    // 改别的末端照常，全空气原样带回
+    fireEvent.click(endTag(card('客厅'), '地冷'))
+    fireEvent.click(btn(card('客厅'), '下发'))
+    await confirmOk()
+    await waitFor(() => expect(writes(be)).toHaveLength(1))
+    expect((body201(writes(be)[0]).endModes as object[])[0]).toEqual({ optionName: '全空气', type: 4, isSelected: true, isChange: false, switch: 1 })
+  })
+
+  it('房间关着（开关读数可信且为关）：温度、节能不能改，但末端可以改、可以下发', async () => {
+    rooms = [ROOM, { ...OFF_ROOM, endModes: ENDS }]
+    const be = backend({ '/ctrl/room-temperature-set': ok201Ends })
+    await open()
+    await screen.findByText('主卧', { selector: '.room-name' })
+    const c = card('主卧')
+    expect(btn(c, '主卧 设定温度升高').disabled).toBe(true)
+    fireEvent.click(within(c).getByRole('button', { name: '主卧 末端 地冷' }))
+    expect(card('主卧').textContent).toContain('待下发：参与运行的末端')
+    fireEvent.click(btn(card('主卧'), '下发'))
+    await confirmOk()
+    await waitFor(() => expect(toasts()).toContain('主卧 已生效'))
+    expect(body201(writes(be)[0])).toMatchObject({ equipmentId: 406658291, temperature: -1, eco: -1, switch: -1 })
+  })
+
+  it('面板离线：末端标签不能点', async () => {
+    rooms = [{ ...ROOM, isConnected: false }]
+    backend()
+    const c = await openRooms()
+    expect(endTag(c, '地冷').disabled).toBe(true)
   })
 })

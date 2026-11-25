@@ -5,7 +5,7 @@ import { decodeReply, encodeMessage } from '@/api/ctrl'
 import { ApiError } from '@/api/errors'
 import * as pb from '@/api/gen/ctrl200_pb.js'
 import {
-  buildRoomSet, buildRoomSwitch, canStep, describeChanges, describeResult, draftChanges, editBlock, editDraft, endModesFor, newDraft, reconcileDraft, STALE_TEXT,
+  buildRoomSet, buildRoomSwitch, canStep, endBlock, sameEnds, sameQuery, shownEnds, toggleEnd, describeChanges, describeResult, draftChanges, editBlock, editDraft, endModesFor, newDraft, reconcileDraft, STALE_TEXT,
   resolveTempRange, stepTemp, switchBlock, tempBlock, type RoomDraft,
 } from '../edit'
 import { classify } from '../writes'
@@ -188,8 +188,9 @@ describe('201 Query：只发改了的标量，其余 -1；end_modes 没改传空
     expect(x.endModes[0]).not.toBe(three[0])
     expect((wire(x) as { endModes: unknown[] }).endModes).toHaveLength(3)
     expect(describeChanges(draftChanges(r, d))).toContain('末端选中 2 项 → 2 项')
-    // 只改末端：核对数据里没有末端，无法核对，本期不下发
-    expect(buildRoomSet(r, editDraft(r, null, { ends: [true, false, true] }), OK, R)).toMatchObject({ ok: false, reason: expect.stringMatching(/只改末端/) })
+    expect(describeChanges(draftChanges(r, d), ['风盘', '顶辐射', '地冷'])).toContain('参与运行的末端 风盘、顶辐射 → 风盘、地冷')
+    // 只改末端：也走 201，标量全部 -1，末端完整回传
+    expect(q(buildRoomSet(r, editDraft(r, null, { ends: [true, false, true] }), OK, R))).toMatchObject({ temperature: -1, eco: -1, switch: -1, humidity: -1, windSpeed: -1, endModes: [{ isSelected: true }, { isSelected: false }, { isSelected: true }] })
   })
   it('末端选择与读数相同算没改：空列表；末端和温度一起改：两样都带', () => {
     expect(endModesFor(room(), [true, true])).toEqual({ ok: true, endModes: [] })
@@ -200,7 +201,7 @@ describe('201 Query：只发改了的标量，其余 -1；end_modes 没改传空
   it('末端不合法：一个都没选、取消了不允许关闭的末端（is_change = false）、数量和读数对不上 → 不下发', () => {
     expect(endModesFor(room(), [false, false])).toMatchObject({ ok: false, reason: expect.stringMatching(/至少/) })
     const fixed = room({ wireEndModes: [{ optionName: '全空气', type: 4, isSelected: true, isChange: false, switch: 1 }, ENDS[0]] })
-    expect(endModesFor(fixed, [false, true])).toMatchObject({ ok: false, reason: expect.stringMatching(/全空气.*不允许修改/) })
+    expect(endModesFor(fixed, [false, true])).toMatchObject({ ok: false, reason: '「全空气」不可取消' })
     const fixedOff = room({ wireEndModes: [{ optionName: '全空气', type: 4, isSelected: false, isChange: false, switch: 0 }, ENDS[0]] })
     expect(endModesFor(fixedOff, [true, true])).toMatchObject({ ok: false, reason: expect.stringMatching(/不允许修改/) })
     expect(endModesFor(room(), [true])).toMatchObject({ ok: false })
@@ -254,5 +255,65 @@ describe('文案', () => {
     const c = draftChanges(room(), draft({ temp: 24.5 }))
     expect(describeChanges(c)).toBe('设定温度 25.5 → 24.5°C')
     expect(describeResult(draftChanges(room(), draft({ eco: 1 })))).toBe('节能模式 开')
+  })
+})
+
+describe('末端选择（点标签）', () => {
+  const E = [
+    { optionName: '风盘', type: 0, isSelected: true, isChange: true, switch: 1 },
+    { optionName: '顶辐射', type: 1, isSelected: false, isChange: true, switch: 0 },
+  ]
+  const AIR = { optionName: '全空气', type: 4, isSelected: true, isChange: false, switch: 1 }
+  it('toggleEnd：在草稿当前选择上切换；房间关着也可以改；面板离线 / 读数过期不行', () => {
+    const r = room({ wireEndModes: E })
+    expect(toggleEnd(r, null, 1, OK)).toEqual({ ok: true, ends: [true, true] })
+    const d = editDraft(r, null, { ends: [true, true] })
+    expect(toggleEnd(r, d, 0, OK)).toEqual({ ok: true, ends: [false, true] })
+    expect(shownEnds(r, d)).toEqual([true, true])
+    const off = room({ wireEndModes: E, on: false, switchKnown: true })
+    expect(endBlock(off, OK)).toBeNull()
+    expect(toggleEnd(off, null, 1, OK).ok).toBe(true)
+    expect(toggleEnd(room({ wireEndModes: E, connected: false }), null, 1, OK)).toMatchObject({ ok: false })
+    expect(toggleEnd(r, null, 1, { online: true, fresh: false })).toMatchObject({ ok: false, reason: STALE_TEXT })
+  })
+  it('is_change = false：已选中的「不可取消」、未选中的「不允许修改」，toggleEnd 和 endModesFor（预检兜底）都拒绝', () => {
+    const r = room({ wireEndModes: [AIR, ...E] })
+    expect(toggleEnd(r, null, 0, OK)).toEqual({ ok: false, reason: '「全空气」不可取消' })
+    expect(endModesFor(r, [false, true, false])).toEqual({ ok: false, reason: '「全空气」不可取消' })
+    expect(buildRoomSet(r, editDraft(r, null, { ends: [false, true, false] }), OK, R)).toEqual({ ok: false, reason: '「全空气」不可取消' })
+    const r2 = room({ wireEndModes: [{ ...AIR, isSelected: false }, ...E] })
+    expect(toggleEnd(r2, null, 0, OK)).toEqual({ ok: false, reason: '「全空气」不允许修改' })
+    // 名称为空时按 type 显示（4 = 全空气）
+    expect(toggleEnd(room({ wireEndModes: [{ ...AIR, optionName: '' }, ...E] }), null, 0, OK)).toEqual({ ok: false, reason: '「全空气」不可取消' })
+  })
+  it('只改末端：房间关着也能组装 201（标量全 -1），草稿不因房间关着被清；全不选 → 「至少选择一个末端」', () => {
+    const off = room({ wireEndModes: E, on: false, switchKnown: true })
+    const d = editDraft(off, null, { ends: [true, true] })
+    expect(q(buildRoomSet(off, d, OK, R))).toMatchObject({ temperature: -1, eco: -1, switch: -1, endModes: [{ isSelected: true }, { isSelected: true }] })
+    expect(reconcileDraft(d, off, OK).draft).toBe(d)
+    expect(buildRoomSet(off, editDraft(off, d, { temp: 24 }), OK, R).ok).toBe(false)
+    expect(buildRoomSet(off, editDraft(off, null, { ends: [false, false] }), OK, R)).toEqual({ ok: false, reason: '至少选择一个末端' })
+  })
+  it('温度已被面板追平、房间关着：剩下的末端照常做冲突检查，外部改了末端就不下发', () => {
+    const E3 = (s: boolean[]) => ['风盘', '顶辐射', '地冷'].map((n, i) => ({ optionName: n, type: [0, 1, 3][i], isSelected: s[i], isChange: true, switch: 0 }))
+    // 编辑时：温度 25.5、末端 [T,F,F]；草稿：温度 26、选中顶辐射。之后外部把温度设成 26、选中地冷、关房间
+    const off = room({ on: false, switchKnown: true, setTemp: 26, wireEndModes: E3([true, false, true]) })
+    const d = draft({ base: { setTemp: 25.5, eco: 0, ends: [true, false, false] }, temp: 26, ends: [true, true, false] })
+    expect(reconcileDraft(d, off, OK)).toMatchObject({ conflict: ['ends'] })
+    expect(buildRoomSet(off, d, OK, R)).toEqual({ ok: false, reason: '面板设定值已在外部变化，请重新核对' })
+    // 末端没被外部改：只剩末端改动，房间关着照样可以发
+    const off2 = room({ on: false, switchKnown: true, setTemp: 26, wireEndModes: E3([true, false, false]) })
+    expect(q(buildRoomSet(off2, d, OK, R))).toMatchObject({ temperature: -1, endModes: [{ isSelected: true }, { isSelected: true }, { isSelected: false }] })
+  })
+  it('sameEnds：个数、顺序、名称、类型、is_change、is_selected 都要一致，switch 不比；sameQuery 同样不比末端 switch', () => {
+    expect(sameEnds(E, E.map((m) => ({ ...m, switch: 0 })))).toBe(true)
+    expect(sameEnds(E, [E[1], E[0]])).toBe(false)
+    expect(sameEnds(E, [E[0]])).toBe(false)
+    expect(sameEnds(E, [E[0], { ...E[1], optionName: '顶辐射2' }])).toBe(false)
+    expect(sameEnds(E, [E[0], { ...E[1], isSelected: true }])).toBe(false)
+    expect(sameEnds(E, [E[0], { ...E[1], isChange: false }])).toBe(false)
+    const a = q(buildRoomSet(room({ wireEndModes: E }), editDraft(room({ wireEndModes: E }), null, { ends: [true, true] }), OK, R))
+    expect(sameQuery(a, { ...a, endModes: a.endModes.map((m) => ({ ...m, switch: 1 - m.switch })) })).toBe(true)
+    expect(sameQuery(a, { ...a, endModes: a.endModes.map((m, i) => (i === 0 ? { ...m, isSelected: false } : m)) })).toBe(false)
   })
 })
