@@ -245,7 +245,9 @@ export default function Control() {
   const [pq, setPq] = useState('')
   // 按 Group.projectIds 判断归属：一个项目可能属于多个集成项目
   const inGroup = projectsInGroup(groups.find((g) => g.id === gid), projects)
+  const groupNames = seqNames(groups, (g) => g.name, (g) => g.id)
   const pickNames = seqNames(inGroup, (p) => p.name, (p) => p.id)
+  const codeNames = seqNames(inGroup, (p) => p.name, (p) => p.code)
   const ps = inGroup.filter((p) => !pq.trim() || (p.name + p.code).toLowerCase().includes(pq.trim().toLowerCase()))
   const [pickedRaw, setPicked] = useState<string[]>(() => (__HJC_MOCK__ && mock ? ['PRJ-10241', 'PRJ-10242', 'PRJ-10243', 'PRJ-10245'] : []))
   const picked = pickedRaw.filter((id) => inGroup.some((p) => p.id === id))
@@ -279,7 +281,8 @@ export default function Control() {
   const lockV = useSyncExternalStore(subscribeLock, lockVersion, lockVersion)
   const shownLast = last?.map(shown) ?? null
   // 界面不显示项目 id（S13 走查）：同名项目用序号区分
-  const lastNames = seqNames(shownLast ?? [], (r) => r.name, (r) => r.code)
+  // 序号和项目列表用同一份（按整个集成项目算），确认框、结果表里的「X (2)」就是列表里勾的那个
+  const lastNames = codeNames
   // 写锁结束了（核对一致放开 / 到期）：把这一行定下来并存进本标签页（刷新后也是最终结论）
   useEffect(() => {
     if (!last?.some((r) => settledRow(r))) return
@@ -344,7 +347,7 @@ export default function Control() {
       title: '确认下发统一控制指令',
       body: <>将向以下 <b>{s.rows.length}</b> 个项目逐个下发，并覆盖用户本地设置：
         <div className="kv">{s.items.map((i) => <div key={i.label}><span>{i.label}</span><b>{i.value}</b></div>)}</div>
-        <div className="muted" style={{ marginTop: 8, fontSize: 12.5 }}>{[...seqNames(s.rows, (r) => r.name, (r) => r.code).values()].join('、')}</div>
+        <div className="muted" style={{ marginTop: 8, fontSize: 12.5 }}>{s.rows.map((r) => codeNames.get(r.code) ?? r.name).join('、')}</div>
         {s.items.some((i) => i.label === TEXT.roomTemp) && <div className="muted" style={{ marginTop: 8, fontSize: 12.5 }}>{TEXT.tempOffNote}。</div>}
         <div className="muted" style={{ marginTop: 4, fontSize: 12.5 }}>下发前后各读一次当前状态用于核对；失败不会自动重试。</div></>,
       okText: TEXT.confirmOk, danger: true,
@@ -410,7 +413,7 @@ export default function Control() {
             <Icon icon={faLayerGroup} style={{ position: 'absolute', left: 14, top: 12, color: 'var(--primary)' }} />
             <Select value={gid} disabled={busy} onValueChange={(v) => { setGid(v); setPicked([]) }}>
               <SelectTrigger aria-label="集成项目" className="h-10 w-full pl-[38px] font-medium text-foreground" />
-              <SelectContent>{groups.map((g) => <SelectItem key={g.id} value={g.id}>{g.name}</SelectItem>)}</SelectContent>
+              <SelectContent>{groups.map((g) => <SelectItem key={g.id} value={g.id}>{groupNames.get(g.id) ?? g.name}</SelectItem>)}</SelectContent>
             </Select>
           </div>
           <InputGroup className="mb-[14px] h-10"><Icon icon={faMagnifyingGlass} /><InputGroupInput className="min-w-0" placeholder="按项目名称检索" value={pq} onChange={(e) => setPq(e.target.value)} /></InputGroup>

@@ -477,7 +477,7 @@ export default function Thermostat() {
     if (r.draft === rawDraft) return
     // 回读是外部数据源：读到新状态后同步整理草稿（有意在 effect 里更新状态，只在草稿确实变化时）
     setDraftState({ pid, d: r.draft })
-    if (r.cleared === 'gone' || r.cleared === 'blocked') showToast(`「${draftRoom?.name ?? rawDraft.key}」${CLEARED_TEXT[r.cleared]}，未下发的修改已清除`, true)
+    if (r.cleared === 'gone' || r.cleared === 'blocked') showToast(`「${draftRoom?.name ?? '该房间'}」${CLEARED_TEXT[r.cleared]}，未下发的修改已清除`, true)
   }, [rawDraft, list, online, rooms.isError, draftRoom?.name, pid, frozen])
 
   if (!project) return <div className="page"><div className="empty-fav" role="status"><b>暂无可用项目</b></div></div>

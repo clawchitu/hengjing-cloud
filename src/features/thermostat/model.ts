@@ -96,7 +96,7 @@ export function toRoomView(r: RawRoom, opts: RoomViewOpts = {}): RoomView {
   return {
     key: String(r.id),
     equipmentId: r.id,
-    name: r.name || `房间 ${r.id}`,
+    name: r.name?.trim() || '未命名房间', // 不拿 ID 当名称（S13：界面不显示 id），多个未命名的由 orderRooms 加序号
     temp: reading(r.temperature),
     humidity: reading(r.humidity),
     dew: reading(r.dewPoint),

@@ -39,7 +39,7 @@ export function toAirSensors(data: readonly AirSensorData[]): AirSensor[] {
     const v = (x: number | undefined) => (online ? hourlyReading(x) : null)
     return {
       id, key, online,
-      name: uniq(d.name?.trim() || `传感器 ${id || i + 1}`),
+      name: uniq(d.name?.trim() || '未命名传感器'), // 不拿 ID 当名称（S13：界面不显示 id）
       // 有效性同 208，见 stats.ts validReading
       temp: validReading('temp', v(d.temperature)), hum: validReading('hum', v(d.humidity)), dew: validReading('dew', v(d.dewPoint)),
       pm25: validReading('pm25', v(d.pm25)), co2: validReading('co2', v(d.co2)),

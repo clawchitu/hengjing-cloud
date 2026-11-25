@@ -131,3 +131,11 @@ describe('orderRooms（S13：自然排序、同名用序号区分、不用 ID）
     ])
   })
 })
+
+describe('房间没名称（S13：不拿 ID 当名称）', () => {
+  it('写「未命名房间」，多个时加序号；不含设备 ID', () => {
+    const views = toRoomViews({ data: [{ id: 406658286, name: '' }, { id: 406658291 }] } as never)
+    expect(views.map((v) => v.name)).toEqual(['未命名房间', '未命名房间 (2)'])
+    expect(views.map((v) => v.name).join()).not.toContain('406658')
+  })
+})
