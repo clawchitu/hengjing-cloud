@@ -284,6 +284,8 @@ tr.st-err td { background: #fffcf2; }
 .wx-bot > div { background: rgba(255,255,255,.12); border-radius: 10px; padding: 10px 14px; display: flex; gap: 12px; align-items: center; }
 .wx-bot b { font-size: 13px; display: block; }
 .wx-bot small { font-size: 11px; opacity: .85; }
+.wx-time { position: absolute; right: 20px; bottom: 10px; font-size: 11px; opacity: .7; z-index: 1; }
+.wx.wx-msg { min-height: 220px; }
 .aqi { width: 32px; height: 32px; border-radius: 8px; background: #34d399; display: grid; place-items: center; font-weight: 700; font-size: 13px; }
 .week .wd { display: grid; grid-template-columns: 44px 22px 1fr 30px 70px 34px; align-items: center; gap: 6px; font-size: 13px; padding: 11.5px 0; border-bottom: 1px solid var(--line-2); }
 .week .wd:last-child { border-bottom: 0; }

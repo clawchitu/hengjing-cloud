@@ -134,6 +134,16 @@ test.describe('确认弹窗', () => {
   })
 })
 
+/** 首页天气城市选择：打开、输入、回车 */
+async function pickCity(page: Page, q: string) {
+  await page.getByRole('button', { name: /^天气城市：/ }).click()
+  await page.clock.runFor(100)
+  await page.getByRole('combobox', { name: '搜索城市' }).fill(q)
+  await page.clock.runFor(50)
+  await page.keyboard.press('Enter')
+  await page.clock.runFor(50)
+}
+
 test.describe('toast', () => {
   // toast 2.6 秒后自动消失，而 settle() 会推进 3 秒时钟，所以先把页面跑稳，
   // 再触发 toast，只推进 300ms 就截图。
@@ -141,10 +151,10 @@ test.describe('toast', () => {
     await login('dealer')
     await page.goto('/home')
     await settle(page)
-    // 首屏顶部的城市按钮：不会把页面滚动走，也没有副作用
-    await page.getByRole('button', { name: '上海市 · 浦东新区' }).click()
-    await tick(page, 300)
-    const t = page.locator('[data-sonner-toast]').filter({ hasText: '演示环境仅提供上海市浦东新区天气' })
+    // 首屏顶部的天气城市选择：换城市只改本机记住的选择，不发写请求
+    await pickCity(page, '苏州')
+    await tick(page, 250)
+    const t = page.locator('[data-sonner-toast]').filter({ hasText: '天气城市已切换为 苏州市' })
     await expect(t).toBeVisible()
     await expect(t).toHaveAttribute('data-type', 'success')
     await shotView(page, 'toast-success', { settle: false })
@@ -154,12 +164,10 @@ test.describe('toast', () => {
     await login('dealer')
     await page.goto('/home')
     await settle(page)
-    const city = page.getByRole('button', { name: '上海市 · 浦东新区' })
-    await city.click()
+    await pickCity(page, '苏州')
+    await pickCity(page, '南京')
     await tick(page, 100)
-    await city.click()
-    await tick(page, 300)
-    const t = page.locator('[data-sonner-toast]').filter({ hasText: '演示环境仅提供上海市浦东新区天气' })
+    const t = page.locator('[data-sonner-toast]').filter({ hasText: '天气城市已切换为' })
     await expect(t).toHaveCount(2)
     await shotView(page, 'toast-stack', { settle: false })
   })

@@ -117,26 +117,6 @@ export const lastRun = {
   ],
 }
 
-// ---------------------------------------------------------------- 天气
-export const weather = {
-  city: '上海市 · 浦东新区', temp: 28, text: '多云转晴', feels: 31, high: 32, low: 24,
-  humidity: 68, wind: '东南风', windLevel: '3级', dew: 21.6, pressure: 1008, visibility: 16, uv: '中等',
-  aqi: 42, aqiText: '优', pm25: 18, sunrise: '04:50', sunset: '19:01', rain: 20, rainNote: '夜间有小阵雨可能',
-  week: [
-    { d: '今天', icon: 'cloudsun', text: '多云', lo: 24, hi: 32 },
-    { d: '周四', icon: 'sun', text: '晴', lo: 25, hi: 34 },
-    { d: '周五', icon: 'rain', text: '中雨', lo: 23, hi: 28 },
-    { d: '周六', icon: 'rain', text: '小雨', lo: 23, hi: 29 },
-    { d: '周日', icon: 'cloud', text: '阴', lo: 24, hi: 30 },
-    { d: '周一', icon: 'cloudsun', text: '多云', lo: 25, hi: 33 },
-    { d: '周二', icon: 'sun', text: '晴', lo: 26, hi: 35 },
-  ],
-  hours: ['15时', '16时', '17时', '18时', '19时', '20时', '21时', '22时', '23时', '00时', '01时', '02时', '03时', '04时', '05时', '06时', '07时', '08时', '09时', '10时', '11时', '12时', '13时', '14时'],
-  hourTemp: [31.2, 32, 31, 30, 29, 28, 27.2, 26.4, 26, 25.6, 25.2, 25, 24.6, 24.8, 25, 25.5, 26.5, 27.6, 28.6, 29.4, 30, 30.6, 31, 31.6, 31.4],
-  hourHum: [64, 62, 63, 65, 67, 70, 73, 76, 79, 81, 82, 83, 83, 83, 82, 80, 76, 72, 68, 65, 63, 62, 61, 61, 62],
-  hourIcons: [['cloudsun', '15时'], ['sun', '17时'], ['cloud', '19时'], ['moon', '21时'], ['rain', '23时'], ['rain', '01时'], ['moon', '03时'], ['cloud', '05时'], ['cloudsun', '07时'], ['sun', '09时'], ['sun', '11时'], ['sun', '13时']],
-}
-
 // ---------------------------------------------------------------- 空气传感器
 /** pm25 / co2 are undefined when the sensor model has no such probe */
 export interface Sensor { id: string; room: string; floor: string; online: boolean; temp: number; hum: number; dew: number; pm25?: number; co2?: number; tag: '良好' | 'CO₂ 超标' | 'PM2.5 偏高' | '离线'; last?: string }

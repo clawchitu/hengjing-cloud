@@ -1,5 +1,5 @@
 // F1 / F5（只读部分）：首页统计卡与常用项目，和 /integrated-projects/stat、/projects/frequent 的原始回包一致。
-// 不碰天气（真实接口模式下首页天气暂未接入）。
+// 天气（S7b）不做核对：首页会发 /weather、/weather24（只读，已在白名单），这里只保证它们不算违规、不影响统计卡和常用项目。
 import { expect, open, orgFromApi, test, type ApiHit } from './harness'
 
 /** 网关 JSON 里 int64 是字符串；缺失、非法按 0（与接口文档 6.1 一致） */

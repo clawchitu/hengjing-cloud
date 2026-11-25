@@ -121,12 +121,12 @@
 
 ### S7b 首页天气界面和城市选择
 
-> 待办（来源 #52 自审建议 2）：新口径下 `config.ts` 的 `weatherCityFilter` 不再使用，`weatherNowFallback` 是否沿用由 S7b 定；不用就在 S7b 一并删掉开关和 `public/config.js` 里的对应项（高风险路径，按高风险审）。S7b 用 `src/features/weather` 的 `useWeatherCity` / `useWeatherNow` / `useWeather24`，城市选择只到地级市、来源是本地城市文件（3.1 已作废）。
+> 已办（来源 #52 自审建议 2）：S7b 删掉了不再使用的 `weatherCityFilter`（`config.ts` 和 `public/config.js` 注释）；`weatherNowFallback` 沿用（默认开）。S7b 用 `src/features/weather` 的 `useWeatherCity` / `useWeatherNow` / `useWeather24`，城市选择只到地级市、来源是本地城市文件（3.1 已作废）。
 
 范围：
 - 新文件 `src/pages/home/WeatherSection.tsx`，放天气三块和城市选择。`Home.tsx` 只把现有的天气块换成这个组件，统计卡和常用项目（S6b）不动。
 - 六格（改动 1）：相对湿度、露点、风向、风力、气压、紫外线。去掉能见度，风向和风力拆开。体感温度没有字段，去掉。
-- 城市选择（改动 2）：右上角 Popover + Command，省 → 市两级，可搜索。最上面一组是「项目所在城市」。选中后写缓存。
+- 城市选择（改动 2）：右上角 Popover + Command，省 → 市两级，可搜索。城市列表就是本地城市文件（`cities.data.ts`，337 个地级城市），默认无锡，不做定位。选中后写 localStorage 缓存。
 - 7 天：`f1`–`f7`。空气质量、日出日落、降水概率有值才显示。
 - 24 小时：只画温度，湿度线和图例去掉。
 - 三块各自有加载、失败、空三态，一块失败不影响另外两块。`/weather` 失败时的降级见 3.2。
@@ -215,7 +215,7 @@
 | ~~`freshAirFilterSwapped`~~ | — | — | 已撤掉：后端 11/25 答复第 10 条，两个字段没反 |
 | `freshAirFilterWarn` | 布尔 | `false` | 滤网寿命的红、橙色和更换提示（阈值按比例）。字段没反，但 `filter_life_p` 是 int32，确认前保持关 |
 | `roomSwitchReported` | 布尔 | `false` | 200 的房间开关是否可信（后端 11/25 答复第 1 条：控制屏没上报房间状态，后端会修，修好后改 `true`）。`false` 时开关显示「未知」、核对开关记无法核对、不拿它禁用温度和节能。只管真实接口，演示数据按 `true` |
-| `weatherCityFilter` | `auto` / `intersect` / `none` | `auto` | 候选城市是否用 city-list 过滤 |
+| ~~`weatherCityFilter`~~ | — | — | 已撤掉：候选城市不再用 city-list 过滤 |
 | `weatherNowFallback` | 布尔 | `true` | `/weather` 失败时用小时预报顶替实时数据 |
 
 设定范围、单位、取值含义不是开关，放在 `src/features/freshAir/model.ts` 顶部的常量里。

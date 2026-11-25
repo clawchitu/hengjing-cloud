@@ -27,7 +27,8 @@ export interface WeatherLoad<T> {
   data: T | null
   /** error / forbidden 时给页面显示的文案 */
   text: string | null
-  refetch: () => void
+  /** 重新请求；成功返回 true，失败返回 false，不抛 */
+  refetch: () => Promise<boolean>
 }
 
 // 选择变化时通知所有用到 useWeatherCity 的组件（城市选择器和天气卡可以各自调用，拿到同一个城市）
@@ -49,7 +50,7 @@ export function useWeatherCity(): { city: City; setCity: (code: string) => boole
   return { city, setCity }
 }
 
-const noop = () => {}
+const noop = () => Promise.resolve(false)
 
 function useWeatherQuery<T>(route: '/v1/weather' | '/v1/weather24', which: 'now' | 'hours', city: City, fetch: (q: string, signal: AbortSignal) => Promise<T>): WeatherLoad<T> {
   const { userKey, authed } = useSession()
@@ -59,11 +60,12 @@ function useWeatherQuery<T>(route: '/v1/weather' | '/v1/weather24', which: 'now'
   const query = useQuery({
     queryKey: weatherKeys[which](userKey, src.kind, q),
     queryFn: ({ signal }) => fetch(q, signal),
-    enabled: authed && permitted,
+    // 会话视图可能先是 authed、账号键还没到（userKey 为 null）：这时不请求，免得先按默认城市、不带账号的键多发一次
+    enabled: authed && !!userKey && permitted,
     staleTime: src.kind === 'real' ? WEATHER_STALE_MS : Infinity,
   })
   const qRefetch = query.refetch
-  const refetch = useCallback(() => { void qRefetch() }, [qRefetch])
+  const refetch = useCallback(() => qRefetch().then((r) => !r.isError && r.data !== undefined, () => false), [qRefetch])
   if (!permitted) return { status: authed ? 'forbidden' : 'loading', data: null, text: authed ? WEATHER_FORBIDDEN_TEXT : null, refetch: noop }
   if (query.data !== undefined) return { status: 'success', data: query.data, text: null, refetch }
   if (query.isError) return { status: 'error', data: null, text: NO_WEATHER_TEXT, refetch }

@@ -48,8 +48,12 @@ export function Seg<T extends string>({ value, options, onChange, className = ''
   )
 }
 
+/** 系统设置了「减少动态效果」时关掉图表动画（数据更新时不再逐段重画；e2e 也按 reduce 跑，截图因此稳定） */
+const reduceMotion = () => typeof window !== 'undefined' && typeof window.matchMedia === 'function' && window.matchMedia('(prefers-reduced-motion: reduce)').matches
+
 export function Chart({ option, height = 300, style }: { option: object; height?: number; style?: CSSProperties }) {
-  return <ReactECharts option={option as EChartsOption} style={{ height, width: '100%', ...style }} notMerge lazyUpdate opts={{ renderer: 'svg' }} />
+  const opt = reduceMotion() ? { ...option, animation: false } : option
+  return <ReactECharts option={opt as EChartsOption} style={{ height, width: '100%', ...style }} notMerge lazyUpdate opts={{ renderer: 'svg' }} />
 }
 
 export function Pager({ total, page, size, onPage, label }: { total: number; page: number; size: number; onPage: (p: number) => void; label?: ReactNode }) {
