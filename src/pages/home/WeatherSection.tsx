@@ -6,7 +6,7 @@
 //   一小时，标「小时预报」，湿度、露点、气压、紫外线没有来源，隐藏；
 // - 账号没有天气接口权限：整块显示「当前账号未开通天气功能」，不发请求；
 // - 演示数据模式走同一个组件（数据源由 weatherSource() 选择）。
-import { useId, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useId, useRef, useState, type ReactNode } from 'react'
 import {
   faLocationDot, faChevronDown, faRotateRight, faDroplet, faWind, faTemperatureLow, faGauge, faSun, faUmbrella, faMagnifyingGlass, faCompass, type IconDefinition,
 } from '@fortawesome/free-solid-svg-icons'
@@ -131,12 +131,21 @@ export function CityPicker({ city, onPick }: { city: City; onPick: (code: string
 // ---------------------------------------------------------------------------
 // 三块
 
+/** 重试按钮：请求期间显示加载态并禁用，回来后恢复（卸载后不再改状态） */
+function RetryButton({ refetch, style }: { refetch: () => Promise<boolean>; style?: React.CSSProperties }) {
+  const [busy, setBusy] = useState(false)
+  const alive = useRef(true)
+  useEffect(() => { alive.current = true; return () => { alive.current = false } }, [])
+  const go = () => { setBusy(true); void refetch().finally(() => { if (alive.current) setBusy(false) }) }
+  return <Button style={style} disabled={busy} aria-busy={busy} onClick={go}>{busy ? '重试中…' : '重试'}</Button>
+}
+
 function Msg({ load, what, height }: { load: WeatherLoad<unknown>; what: string; height?: number }) {
   const err = load.status === 'error'
   return (
     <div className="chart-loading" role={err ? 'alert' : 'status'} style={{ height: height ?? 160 }}>
       <div style={{ textAlign: 'center' }}>
-        {err ? <>{what}：{load.text ?? NO_WEATHER_TEXT}<div style={{ marginTop: 12 }}><Button onClick={load.refetch}>重试</Button></div></>
+        {err ? <>{what}：{load.text ?? NO_WEATHER_TEXT}<div style={{ marginTop: 12 }}><RetryButton refetch={load.refetch} /></div></>
           : load.status === 'forbidden' ? load.text : '加载中…'}
       </div>
     </div>
@@ -147,7 +156,7 @@ interface Tile { key: string; icon: IconDefinition; label: string; value: ReactN
 
 function NowBlock({ now, hours, cityName }: { now: WeatherLoad<WeatherNowView>; hours: WeatherLoad<Weather24View>; cityName: string }) {
   const n = now.data
-  const fallback = !n && now.status === 'error' && getConfig().features.weatherNowFallback !== false && hours.data
+  const fallback = !n && (now.status === 'error' || now.status === 'forbidden') && getConfig().features.weatherNowFallback !== false && hours.data
     ? nearestHour(hours.data.hours, Date.now()) : null
   if (!n && !fallback) {
     return (
@@ -155,7 +164,7 @@ function NowBlock({ now, hours, cityName }: { now: WeatherLoad<WeatherNowView>; 
         <div className="wx-main"><div>
           <div className="wx-desc"><Icon icon={faLocationDot} /> {cityName}</div>
           <div className="wx-desc">{now.status === 'error' ? `实时天气：${now.text ?? NO_WEATHER_TEXT}` : now.status === 'forbidden' ? now.text : '正在获取实时天气…'}</div>
-          {now.status === 'error' && <Button style={{ marginTop: 14 }} onClick={now.refetch}>重试</Button>}
+          {now.status === 'error' && <RetryButton style={{ marginTop: 14 }} refetch={now.refetch} />}
         </div></div>
       </div>
     )
@@ -265,8 +274,23 @@ export type HomeWeather = ReturnType<typeof useHomeWeather>
 export function WeatherActions({ w }: { w: HomeWeather }) {
   const { toast } = useApp()
   const [spin, setSpin] = useState(false)
+  const alive = useRef(true)
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(() => { alive.current = true; return () => { alive.current = false; if (timer.current) clearTimeout(timer.current) } }, [])
   if (w.forbidden) return null
-  const refresh = () => { setSpin(true); w.now.refetch(); w.hours.refetch(); setTimeout(() => { setSpin(false); toast('天气已更新') }, 800) }
+  // 等两路请求都回来（且至少转 800ms）再按结果提示；离开首页时清掉计时器、不再提示
+  const refresh = () => {
+    if (spin) return
+    setSpin(true)
+    const wait = new Promise<void>((r) => { timer.current = setTimeout(r, 800) })
+    void Promise.all([w.now.refetch(), w.hours.refetch(), wait]).then(([a, b]) => {
+      if (!alive.current) return
+      timer.current = null
+      setSpin(false)
+      if (a && b) toast('天气已更新')
+      else toast('更新失败，沿用上次数据', true)
+    })
+  }
   const pick = (code: string) => { if (w.setCity(code)) toast(`天气城市已切换为 ${findCity(code)?.name ?? code}`) }
   return (
     <div className="actions">

@@ -21,10 +21,12 @@ export const WEEKDAYS = ['', '周一', '周二', '周三', '周四', '周五', '
 export const hourLabel = (t: string | null) => (t ? `${Number(t.slice(11, 13))}时` : '')
 export const deg = (v: number | null) => (v === null ? '--' : `${v}°`)
 
-/** /weather 不可用时，用 24 小时预报里离现在最近的一小时顶替实时（只顶替温度、天气、风向、风力） */
+/** 顶替的时间差上限：最近的一小时离现在超过 2 小时就不顶替 */
+export const NEAREST_HOUR_MAX_GAP_MS = 2 * 3600_000
+/** /weather 不可用时，用 24 小时预报里离现在最近的一小时顶替实时（只顶替温度、天气、风向、风力）；差超过 2 小时返回 null */
 export function nearestHour(hours: readonly HourForecast[], now: number): HourForecast | null {
   let best: HourForecast | null = null
-  let gap = Infinity
+  let gap = NEAREST_HOUR_MAX_GAP_MS + 1
   for (const h of hours) {
     if (!h.time) continue
     const t = Date.parse(h.time.replace(' ', 'T') + ':00+08:00')

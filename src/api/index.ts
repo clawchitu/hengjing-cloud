@@ -170,9 +170,6 @@ export const mockUnifiedSend = (project: { id: string }, q: { roomSwitch: number
 export const __resetMockUnifiedForTests = () => { mockUnified.clear() }
 
 // home -----------------------------------------------------------------------
-type Weather = typeof M.weather
-/** 天气（演示数据）。交付包里没有天气接口，返回 null，首页显示「暂无天气数据」 */
-export const getWeather = (_city: string): Promise<Weather | null> => delay(__HJC_MOCK__ ? M.weather : null)
 
 // sensors ----------------------------------------------------------------------
 // 室内空气传感器页的演示数据源（真实接口是 ctrl 207 / 208，见 src/data/sensors/source.ts）。

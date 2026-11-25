@@ -153,7 +153,8 @@ test.describe('toast', () => {
     await settle(page)
     // 首屏顶部的天气城市选择：换城市只改本机记住的选择，不发写请求
     await pickCity(page, '苏州')
-    await tick(page, 250)
+    // 换城市后 24 小时图会重画（ECharts 更新动画约 1 秒）：等它画完再截图，toast 2.6 秒才消失
+    await tick(page, 1200)
     const t = page.locator('[data-sonner-toast]').filter({ hasText: '天气城市已切换为 苏州市' })
     await expect(t).toBeVisible()
     await expect(t).toHaveAttribute('data-type', 'success')
@@ -166,7 +167,7 @@ test.describe('toast', () => {
     await settle(page)
     await pickCity(page, '苏州')
     await pickCity(page, '南京')
-    await tick(page, 100)
+    await tick(page, 1200) // 等 24 小时图重画完（同上）；第一条 toast 此时约 1.4 秒，仍在
     const t = page.locator('[data-sonner-toast]').filter({ hasText: '天气城市已切换为' })
     await expect(t).toHaveCount(2)
     await shotView(page, 'toast-stack', { settle: false })
