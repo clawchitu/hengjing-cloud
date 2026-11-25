@@ -27,7 +27,7 @@ import { OrgGate } from '../app/OrgGate'
 import Layout from '../components/Layout'
 import { __resetCurrentForTests, setStoredProjectId } from '../data/org/current'
 import { __resetSessionViewForTests } from '../data/session'
-import { __resetFreshAirForTests, FRESH_ROUTES, TEXT_DEVICE_OFF, TEXT_WRITE_FORBIDDEN, TEXT_WRITE_OFF } from '../features/freshAir'
+import { __resetFreshAirForTests, FRESH_ROUTES, TEXT_DEVICE_OFF, TEXT_STALE, TEXT_WRITE_FORBIDDEN, TEXT_WRITE_OFF } from '../features/freshAir'
 import { __resetWritesForTests } from '../features/thermostat/writes'
 import FreshAir from './FreshAir'
 
@@ -278,6 +278,159 @@ describe('草稿生命周期', () => {
     await waitFor(() => expect(panel().textContent).not.toContain('待下发'))
     await flush(50)
     expect(toastLog.filter((t) => t.includes('未下发的修改已清除'))).toHaveLength(1)
+  })
+})
+
+describe('210 读取失败时保留草稿', () => {
+  /** 210 按 fail 回 500（有旧读数 = staleError） */
+  let fail = false
+  const flaky: Handler = () => (fail ? json({ code: 13, message: 'x' }, 500) : json({ body: encodeMessage(pb.RunningCtrlGetReplySchema, r210) }))
+  beforeEach(() => { fail = false })
+
+  it('一次读取失败：草稿保留、下发禁用并写明原因、不提示清除；恢复后草稿仍在，可下发', async () => {
+    const be = backend({ [R210]: flaky })
+    await signIn('u', 'pw', true)
+    const client = mount(P12.id)
+    await waitFor(() => expect(within(panel()).queryByRole('group', { name: '风速' })).toBeTruthy())
+    fireEvent.click(opt('风速', '高'))
+    expect(sendBtn().disabled).toBe(false)
+    fail = true
+    await act(async () => { await client.refetchQueries({ type: 'active' }).catch(() => {}) })
+    await waitFor(() => expect(panel().textContent).toContain('刷新失败'))
+    await flush(50)
+    expect(panel().textContent).toContain('待下发：风速 自动 → 高')
+    expect(sendBtn().disabled).toBe(true)
+    expect(sendBtn().title).toBe(TEXT_STALE)
+    expect(panel().textContent).toContain(TEXT_STALE)
+    expect(toasts()).not.toContain('未下发的修改已清除')
+    fail = false
+    await act(async () => { await client.refetchQueries({ type: 'active' }) })
+    await waitFor(() => expect(panel().textContent).not.toContain('刷新失败'))
+    expect(panel().textContent).toContain('待下发：风速 自动 → 高')
+    await waitFor(() => expect(sendBtn().disabled).toBe(false))
+    fireEvent.click(sendBtn())
+    await confirmOk()
+    await waitFor(() => expect(writes(be)).toHaveLength(1))
+    expect(body204(writes(be)[0])).toMatchObject({ windSpeed: 1, controlType: -1 })
+    expect(toasts()).not.toContain('未下发的修改已清除')
+  })
+
+  it('读取失败期间设备真正离线（202 未连接）：照旧清草稿并提示一次', async () => {
+    backend({ [R210]: flaky })
+    await signIn('u', 'pw', true)
+    const client = mount(P12.id)
+    await waitFor(() => expect(within(panel()).queryByRole('group', { name: '风速' })).toBeTruthy())
+    fireEvent.click(opt('风速', '高'))
+    fail = true
+    await act(async () => { await client.refetchQueries({ type: 'active' }).catch(() => {}) })
+    await waitFor(() => expect(panel().textContent).toContain('刷新失败'))
+    expect(panel().textContent).toContain('待下发：风速 自动 → 高')
+    units = [UNIT({ isConnected: false })]
+    await act(async () => { await client.refetchQueries({ type: 'active' }).catch(() => {}) })
+    await flush(50)
+    expect(screen.queryByText(/待下发/)).toBeNull()
+    expect(toastLog.filter((x) => x.includes('未下发的修改已清除'))).toHaveLength(1)
+    fail = false
+    units = [UNIT()]
+    await act(async () => { await client.refetchQueries({ type: 'active' }) })
+    await waitFor(() => expect(within(panel()).queryByRole('group', { name: '风速' })).toBeTruthy())
+    expect(panel().textContent).not.toContain('待下发')
+  })
+
+  it('湿度基准 55、草稿 56 → 读取失败 → 恢复时读数 57：草稿保留、提示外部变化，不能下发（靠草稿冲突检测拦，0 个 204）', async () => {
+    const be = backend({ [R210]: flaky })
+    await signIn('u', 'pw', true)
+    const client = mount(P12.id)
+    await waitFor(() => expect(within(panel()).queryByRole('group', { name: '风速' })).toBeTruthy())
+    fireEvent.click(stepBtn('湿度设定升高'))
+    expect(panel().textContent).toContain('待下发：湿度设定 55 %RH → 56 %RH')
+    fail = true
+    await act(async () => { await client.refetchQueries({ type: 'active' }).catch(() => {}) })
+    await waitFor(() => expect(panel().textContent).toContain('刷新失败'))
+    r210 = S210({ humiditySet: 57 })
+    fail = false
+    await act(async () => { await client.refetchQueries({ type: 'active' }) })
+    await waitFor(() => expect(panel().textContent).toContain('湿度设定已在外部变化，未下发的修改需要重新核对'))
+    expect(within(panel()).getByRole('button', { name: '放弃修改' })).toBeTruthy() // 草稿保留，只能放弃
+    const b = within(panel()).queryByRole('button', { name: '下发设置' }) as HTMLButtonElement | null
+    expect(b === null || b.disabled).toBe(true)
+    if (b) fireEvent.click(b)
+    await flush(100)
+    expect(writes(be)).toHaveLength(0)
+    expect(toasts()).not.toContain('未下发的修改已清除')
+  })
+
+  it('210 读取失败且还没有读数（error）：草稿保留，占位写「未下发的修改已保留」；恢复后草稿仍在', async () => {
+    backend({ [R210]: flaky })
+    await signIn('u', 'pw', true)
+    const client = mount(P12.id)
+    await waitFor(() => expect(within(panel()).queryByRole('group', { name: '风速' })).toBeTruthy())
+    fireEvent.click(opt('风速', '高'))
+    fail = true
+    await act(async () => { await client.resetQueries({ type: 'active' }).catch(() => {}) }) // 清掉旧读数再读：没有读数的失败
+    await waitFor(() => expect(panel().textContent).toContain('运行设置读取失败'))
+    expect(panel().textContent).toContain('未下发的修改已保留')
+    expect(within(panel()).queryByRole('group', { name: '风速' })).toBeNull()
+    expect(toasts()).not.toContain('未下发的修改已清除')
+    fail = false
+    await act(async () => { await client.refetchQueries({ type: 'active' }) })
+    await waitFor(() => expect(panel().textContent).toContain('待下发：风速 自动 → 高'))
+    expect(panel().textContent).not.toContain('未下发的修改已保留')
+  })
+
+  it.each([
+    ['202 读取失败（error）', () => json({ code: 13, message: 'x' }, 500), '新风数据加载失败'],
+    ['202 控制屏暂不可用（unavailable，503 + code 14）', () => json({ code: 14, message: 'unavailable' }, 503), '控制屏未连接'],
+  ] as const)('%s：整页占位写「未下发的修改已保留」，草稿未清；恢复后草稿仍在', async (_n, bad, title) => {
+    let fail202 = false
+    const ok202 = () => json({ body: encodeMessage(pb.FreshDehumidifierGetReplySchema, { data: units }) })
+    backend({ [R202]: () => (fail202 ? bad() : ok202()) })
+    await signIn('u', 'pw', true)
+    const client = mount(P12.id)
+    await waitFor(() => expect(within(panel()).queryByRole('group', { name: '风速' })).toBeTruthy())
+    fireEvent.click(opt('风速', '高'))
+    fail202 = true
+    await act(async () => { await client.resetQueries({ type: 'active' }).catch(() => {}) }) // 清掉旧读数再读：202 没有读数的失败
+    // 500 / 503 都会自动重试一次（约 1 秒，src/api/query.ts）
+    await waitFor(() => expect(screen.getByText(title)).toBeTruthy(), { timeout: 4000 })
+    expect(screen.queryByRole('region', { name: '运行设置' })).toBeNull() // 整页占位，不是面板
+    expect(document.querySelector('.placeholder [data-draft-kept]')?.textContent).toBe('未下发的修改已保留，读取恢复后可继续下发。')
+    expect(toasts()).not.toContain('未下发的修改已清除')
+    fail202 = false
+    await act(async () => { await client.refetchQueries({ type: 'active' }) })
+    await waitFor(() => expect(panel().textContent).toContain('待下发：风速 自动 → 高'), { timeout: 4000 })
+    expect(document.body.textContent).not.toContain('未下发的修改已保留')
+  })
+
+  it('210 控制屏暂不可用（unavailable，503 + code 14）：运行设置面板占位写「未下发的修改已保留」，草稿未清；恢复后草稿仍在', async () => {
+    // 210 的 503 会让同项目 202 读数作废、202 重读后又重读 210（hooks.ts 的失效序号，循环另修），持续 503 时页面停不在这个状态。
+    // 为停在「210 unavailable、202 正常」：210 前两次（首次 + 自动重试一次）回 503，之后的请求挂起到恢复，期间 210 保持 unavailable
+    let mode: 'ok' | 'fail' = 'ok'
+    let n503 = 0
+    const hung: (() => void)[] = []
+    const ok210 = () => json({ body: encodeMessage(pb.RunningCtrlGetReplySchema, r210) })
+    backend({
+      [R210]: () => {
+        if (mode === 'ok') return ok210()
+        if (n503++ < 2) return json({ code: 14, message: 'unavailable' }, 503)
+        return new Promise<Response>((res) => hung.push(() => res(ok210())))
+      },
+    })
+    await signIn('u', 'pw', true)
+    const client = mount(P12.id)
+    await waitFor(() => expect(within(panel()).queryByRole('group', { name: '风速' })).toBeTruthy())
+    fireEvent.click(opt('风速', '高'))
+    mode = 'fail'
+    // 不清旧读数：503 让旧读数作废（显示 unavailable）；没有读数时新请求一发出就回到「正在读取」（React Query 清掉 error）
+    await act(async () => { await client.refetchQueries({ type: 'active' }).catch(() => {}) })
+    await waitFor(() => expect(panel().textContent).toContain('控制屏未连接'), { timeout: 4000 })
+    expect(panel().querySelector('[data-draft-kept]')?.textContent).toBe('未下发的修改已保留，读取恢复后可继续下发。')
+    expect(within(panel()).queryByRole('group', { name: '风速' })).toBeNull()
+    expect(toasts()).not.toContain('未下发的修改已清除')
+    mode = 'ok'
+    await act(async () => { hung.splice(0).forEach((r) => r()); await client.refetchQueries({ type: 'active' }) })
+    await waitFor(() => expect(panel().textContent).toContain('待下发：风速 自动 → 高'), { timeout: 4000 })
+    expect(document.body.textContent).not.toContain('未下发的修改已保留')
   })
 })
 

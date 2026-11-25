@@ -49,10 +49,13 @@ export function stepTemp(from: number, dir: 1 | -1, range: TempRange): number {
 /** 到上限 / 下限时对应按钮禁用 */
 export const canStep = (v: number, dir: 1 | -1, range: TempRange) => (dir > 0 ? v < range.max - 1e-9 : v > range.min + 1e-9)
 
+/** 最近一次读取面板失败（显示的是上一次成功的读数）：只禁用编辑和下发，不清草稿（见 reconcileDraft） */
+export const STALE_TEXT = '面板读数暂时获取失败，恢复后可下发'
+
 /** 下发前提（房间开关也要满足）：不满足返回原因 */
 export function writeBlock(room: RoomView, ctx: EditCtx): string | null {
   if (!ctx.online) return '项目离线，不能设置'
-  if (!ctx.fresh) return '最近一次读取面板失败，不能设置'
+  if (!ctx.fresh) return STALE_TEXT
   if (!room.connected) return '面板离线，不能设置'
   return null
 }
@@ -123,12 +126,14 @@ export interface Reconciled {
 
 /**
  * 草稿生命周期（每次回读后调用）：房间不在 / 不能设置 → 清除；面板值已等于草稿的项 → 去掉该项，全去掉则清除；
- * 剩下的项里，面板值与开始编辑时的基准不同 → 冲突
+ * 剩下的项里，面板值与开始编辑时的基准不同 → 冲突。
+ * 最近一次读取失败（ctx.fresh = false，面板值是上一次成功的那份）只是暂时没有新鲜读数：不据此清草稿，
+ * 下发由 editBlock / buildRoomSet 拦住（STALE_TEXT）；下一次读取成功再按上面的规则整理
  */
 export function reconcileDraft(draft: RoomDraft | null, room: RoomView | undefined, ctx: EditCtx): Reconciled {
   if (!draft) return { draft: null, conflict: [] }
   if (!room) return { draft: null, cleared: 'gone', conflict: [] }
-  if (editBlock(room, ctx)) return { draft: null, cleared: 'blocked', conflict: [] }
+  if (editBlock(room, { ...ctx, fresh: true })) return { draft: null, cleared: 'blocked', conflict: [] }
   const d: RoomDraft = { ...draft }
   if (d.temp !== undefined && room.setTemp !== null && same(d.temp, room.setTemp)) delete d.temp
   if (d.eco !== undefined && d.eco === room.eco) delete d.eco

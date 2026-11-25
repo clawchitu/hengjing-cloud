@@ -56,12 +56,16 @@ function PageHead({ project, count, right }: { project: Project | null; count?: 
   )
 }
 
-function Placeholder({ icon, title, text, onRetry, alert }: { icon: IconDefinition; title: string; text: string; onRetry?: () => void; alert?: boolean }) {
+/** 读取失败 / 控制屏暂不可用、还有未下发修改时，占位页上补的一句（草稿保留，见 TRANSIENT） */
+const TEXT_DRAFT_KEPT = '未下发的修改已保留，读取恢复后可继续下发。'
+
+function Placeholder({ icon, title, text, onRetry, alert, note }: { icon: IconDefinition; title: string; text: string; onRetry?: () => void; alert?: boolean; note?: string }) {
   return (
     <Card className="placeholder" role={alert ? 'alert' : 'status'}>
       <div className="ph-ico"><Icon icon={icon} /></div>
       <h3>{title}</h3>
       <p>{text}</p>
+      {note && <p data-draft-kept="">{note}</p>}
       {onRetry && <Button style={{ marginTop: 16 }} onClick={onRetry}>重试</Button>}
     </Card>
   )
@@ -356,6 +360,8 @@ interface PanelProps {
   clearResult: () => void
   readPair: (deviceId: number | null, signal?: AbortSignal, opts?: { defer?: boolean }) => Promise<FreshPair>
   writable: string | null
+  /** 210 读取失败还没有读数 / 控制屏暂不可用时，这台设备仍有保留着的未下发修改（占位页上写一句） */
+  draftKept?: boolean
 }
 
 function SettingsPanel(props: PanelProps) {
@@ -422,6 +428,7 @@ function SettingsPanel(props: PanelProps) {
           <div role={msg.alert ? 'alert' : 'status'} className="ctl-hint" style={{ display: 'block' }}>
             <b style={{ display: 'block', marginBottom: 4 }}><Icon icon={msg.icon} /> {msg.title}</b>
             <span>{msg.text}</span>
+            {props.draftKept && <span data-draft-kept="" style={{ display: 'block', marginTop: 4 }}>{TEXT_DRAFT_KEPT}</span>}
             {msg.retry && <div style={{ marginTop: 10 }}><Button onClick={msg.retry}>重试</Button></div>}
           </div>
         )}
@@ -471,7 +478,9 @@ function SettingsPanel(props: PanelProps) {
   )
 }
 
-const CLEARED_TEXT = { gone: '已读不到这台设备的运行设置', blocked: '已不能设置（设备或项目离线、读取失败、该项已不可设置）', applied: '' }
+const CLEARED_TEXT = { gone: '已读不到这台设备的运行设置', blocked: '已不能设置（设备或项目离线、该项已不可设置）', applied: '' }
+/** 暂时没有新鲜读数（加载中、读取失败还没有读数、服务暂不可用）：不整理草稿，等下一次读取成功；读取失败但有旧读数（staleError）由 reconcileDraft 保留草稿 */
+const TRANSIENT = new Set<SettingsState['kind']>(['loading', 'error', 'unavailable'])
 
 export default function FreshAir() {
   const { project } = useCurrentProject()
@@ -521,7 +530,8 @@ export default function FreshAir() {
     prevLock.current = lockKey
   }, [lockKey, refetch])
 
-  // 草稿生命周期：回读后读不到 / 不能设置 / 已生效的草稿真正清除（只整理当前选中设备的草稿；待确认期间不整理）。
+  // 草稿生命周期：回读后读不到 / 不能设置 / 已生效的草稿真正清除（只整理当前选中设备的草稿；待确认期间不整理；
+  // 读取失败、加载中只禁用下发、保留草稿，见 TRANSIENT 与 reconcileDraft）。
   // 读数变化后在渲染时直接写回整理结果（React「随输入调整状态」的做法，有条件、只在草稿确实变化时），清除原因记在状态里，
   // 由下面的 effect 提示一次（effect 里不改状态）
   const draftOnSelected = !!rawDraft && u?.deviceId === rawDraft.deviceId
@@ -529,7 +539,7 @@ export default function FreshAir() {
     let next: FaDraft | null = rawDraft
     let note = ''
     if (view.kind === 'ready' && !units.some((x) => x.deviceId === rawDraft.deviceId)) { next = null; note = `新风设备${CLEARED_TEXT.gone}，未下发的修改已清除` }
-    else if (draftOnSelected && settings.kind !== 'loading') {
+    else if (draftOnSelected && !TRANSIENT.has(settings.kind)) {
       const r = reconcileDraft(rawDraft, s, ctx)
       next = r.draft
       if (r.cleared === 'gone' || r.cleared === 'blocked') note = `「${u?.name || '新风设备'}」${CLEARED_TEXT[r.cleared]}，未下发的修改已清除`
@@ -560,6 +570,8 @@ export default function FreshAir() {
   const updated = view.kind === 'ready' || view.kind === 'empty'
     ? <div className="muted num" style={{ fontSize: 12, marginTop: 24 }}><Icon icon={faRotate} /> {view.kind === 'ready' && view.staleError ? `刷新失败，显示 ${timeLabel(view.updatedAt)} 的数据` : `${timeLabel(view.updatedAt)} 更新`}</div>
     : null
+  // 202 读取失败 / 控制屏暂不可用：不整理草稿（view 不是 ready），占位页写明已保留
+  const keptNote = rawDraft && Object.keys(rawDraft.values).length ? TEXT_DRAFT_KEPT : undefined
   const head = <PageHead project={project} count={view.kind === 'ready' ? units.length : undefined} right={updated} />
   const body = (() => {
     switch (view.kind) {
@@ -567,8 +579,8 @@ export default function FreshAir() {
       case 'no-project': case 'offline': return <></>
       case 'forbidden': return <Placeholder icon={faLock} title="未开通新风数据" text="当前账号没有读取新风除湿机数据的权限，请联系管理员开通。" />
       case 'loading': return <Placeholder icon={faFan} title="正在读取" text="正在从控制屏读取新风除湿机数据…" />
-      case 'unavailable': return <Placeholder icon={faPlugCircleXmark} title="控制屏未连接" text="控制屏暂时无法连接，稍后会自动重试。" onRetry={view.retry} />
-      case 'error': return <Placeholder alert icon={faTriangleExclamation} title="新风数据加载失败" text={view.error.message || defaultText('server')} onRetry={view.retry} />
+      case 'unavailable': return <Placeholder icon={faPlugCircleXmark} title="控制屏未连接" text="控制屏暂时无法连接，稍后会自动重试。" onRetry={view.retry} note={keptNote} />
+      case 'error': return <Placeholder alert icon={faTriangleExclamation} title="新风数据加载失败" text={view.error.message || defaultText('server')} onRetry={view.retry} note={keptNote} />
       case 'empty': return <Placeholder icon={faFan} title="暂无新风除湿机数据" text="该项目暂时没有可显示的新风除湿机。" />
       default: return null
     }
@@ -600,7 +612,8 @@ export default function FreshAir() {
                 draft={onDevice ? draft : null} conflict={onDevice ? rec.conflict : []} pending={frozen && onDevice}
                 onEdit={(f, v) => void onEdit(f, v)} onDiscard={discard} onPending={markPending}
                 lock={writes.lock} running={writes.running} result={s ? writes.result(faTarget(s.deviceId)) : null}
-                clearResult={() => { if (s) clearResultOf(project.id, faTarget(s.deviceId)) }} readPair={readPair} writable={writable} />
+                clearResult={() => { if (s) clearResultOf(project.id, faTarget(s.deviceId)) }} readPair={readPair} writable={writable}
+                draftKept={draftOnSelected && (settings.kind === 'error' || settings.kind === 'unavailable') && Object.keys(rawDraft.values).length > 0} />
             )}
           </div>
 

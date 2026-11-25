@@ -21,7 +21,7 @@ import { fakeBackend, json, type Call } from '../api/__tests__/helpers'
 import { AppProvider } from '../app/store'
 import { __resetCurrentForTests, setStoredProjectId } from '../data/org/current'
 import { __resetSessionViewForTests } from '../data/session'
-import { __resetWritesForTests, LIMITS, realSource as thermoRealSource } from '../features/thermostat'
+import { __resetWritesForTests, LIMITS, STALE_TEXT, realSource as thermoRealSource } from '../features/thermostat'
 import Layout from '../components/Layout'
 import { OrgGate } from '../app/OrgGate'
 import { __resetWriteLockForTests, configureWriteLock, lockOf as lockOfKey, subscribe as subscribeLock, acquire as acquireLock, release as releaseLock, STORAGE_PREFIX, verify as verifyLock, RETRY_DELAYS_MS } from '../api/writeLock'
@@ -274,6 +274,75 @@ describe('修改设定温度与节能（ctrl 201）', () => {
     fakeBackend({ '/ctrl/room-temperature-data-get': () => json({ code: 13, message: 'x' }, 500) })
     await act(async () => { await client.refetchQueries({ type: 'active' }).catch(() => {}) })
     await waitFor(() => expect(btn(card('客厅'), '客厅 设定温度升高').disabled).toBe(true))
+  })
+
+  it('有草稿时一次读取失败：草稿保留、下发禁用并写明原因、不提示清除；恢复后草稿仍在，可下发', async () => {
+    let fail = false
+    const be = backend({
+      '/ctrl/room-temperature-data-get': () => (fail ? json({ code: 13, message: 'x' }, 500) : reply200(rooms)),
+      '/ctrl/room-temperature-set': ok201,
+    })
+    const c = await openRooms()
+    fireEvent.click(btn(c, '客厅 设定温度升高'))
+    expect(card('客厅').textContent).toContain('设定温度 25.5 → 26.0°C')
+    fail = true
+    await act(async () => { await client.refetchQueries({ type: 'active' }).catch(() => {}) })
+    await waitFor(() => expect(btn(card('客厅'), '下发').disabled).toBe(true))
+    await new Promise((r) => setTimeout(r, 50))
+    expect(card('客厅').textContent).toContain('设定温度 25.5 → 26.0°C')
+    expect(btn(card('客厅'), '下发').title).toBe(STALE_TEXT)
+    expect(card('客厅').textContent).toContain(STALE_TEXT)
+    expect(toastLog.join()).not.toContain('未下发的修改已清除')
+    fail = false
+    await act(async () => { await client.refetchQueries({ type: 'active' }) })
+    await waitFor(() => expect(btn(card('客厅'), '下发').disabled).toBe(false))
+    expect(card('客厅').textContent).toContain('设定温度 25.5 → 26.0°C')
+    fireEvent.click(btn(card('客厅'), '下发'))
+    await confirmOk()
+    await waitFor(() => expect(writes(be)).toHaveLength(1))
+    expect(body201(writes(be)[0])).toMatchObject({ temperature: 26 })
+  })
+
+  it('基准 21.5、草稿 21.0 → 读取失败 → 恢复时面板 22.0：草稿保留、提示外部变化，没有下发按钮（靠草稿冲突检测拦，0 个 201）', async () => {
+    let fail = false
+    const be = backend({
+      '/ctrl/room-temperature-data-get': () => (fail ? json({ code: 13, message: 'x' }, 500) : reply200(rooms)),
+      '/ctrl/room-temperature-set': ok201,
+    })
+    rooms = rooms.map((r) => ((r as { name?: string }).name === '客厅' ? { ...r, setTemp: 21.5 } : r))
+    const c = await openRooms()
+    await waitFor(() => expect(card('客厅').textContent).toContain('21.5'))
+    fireEvent.click(btn(c, '客厅 设定温度降低'))
+    expect(card('客厅').textContent).toContain('21.5 → 21.0')
+    fail = true
+    await act(async () => { await client.refetchQueries({ type: 'active' }).catch(() => {}) })
+    await waitFor(() => expect(btn(card('客厅'), '下发').disabled).toBe(true))
+    rooms = rooms.map((r) => ((r as { name?: string }).name === '客厅' ? { ...r, setTemp: 22.0 } : r))
+    fail = false
+    await act(async () => { await client.refetchQueries({ type: 'active' }) })
+    await waitFor(() => expect(card('客厅').textContent).toContain('面板设定温度已在外部变化'))
+    expect(within(card('客厅')).getByRole('button', { name: '放弃修改' })).toBeTruthy() // 草稿保留，只能放弃
+    expect(within(card('客厅')).queryByRole('button', { name: '下发' })).toBeNull()
+    await new Promise((r) => setTimeout(r, 100))
+    expect(writes(be)).toHaveLength(0)
+    expect(toastLog.join()).not.toContain('未下发的修改已清除')
+  })
+
+  it('有草稿时读取失败、随后房间真正离线（面板未连接）：照旧清草稿并提示一次', async () => {
+    let fail = false
+    backend({ '/ctrl/room-temperature-data-get': () => (fail ? json({ code: 13, message: 'x' }, 500) : reply200(rooms)) })
+    const c = await openRooms()
+    fireEvent.click(btn(c, '客厅 设定温度升高'))
+    fail = true
+    await act(async () => { await client.refetchQueries({ type: 'active' }).catch(() => {}) })
+    await waitFor(() => expect(btn(card('客厅'), '下发').disabled).toBe(true))
+    expect(card('客厅').textContent).toContain('设定温度 25.5 → 26.0°C')
+    fail = false
+    rooms = rooms.map((r) => ((r as { name?: string }).name === '客厅' ? { ...r, isConnected: false } : r))
+    await act(async () => { await client.refetchQueries({ type: 'active' }) })
+    await waitFor(() => expect(card('客厅').textContent).not.toContain('25.5 → 26.0'))
+    await new Promise((r) => setTimeout(r, 50))
+    expect(toastLog.filter((x) => x.includes('未下发的修改已清除'))).toHaveLength(1)
   })
 
   it('success 但回读设备未变化：只算已下发，不提示成功，卡片显示「指令已下发，设备状态暂未变化」，草稿保留、写锁保持', async () => {

@@ -94,6 +94,19 @@ describe('editDraft / draftChanges / reconcileDraft', () => {
     expect(reconcileDraft(d, s, CTX).draft).toBe(d)
   })
 
+  it('最近一次读取失败（fresh = false，暂时没有新鲜读数）：草稿保留、不能下发；真正不能设置的照旧清除；恢复后可下发', () => {
+    const s = view()
+    const d = editDraft(s, null, 'windSpeed', 1, CTX)
+    const stale = { ...CTX, fresh: false }
+    expect(reconcileDraft(d, s, stale)).toEqual({ draft: d, conflict: [] })
+    expect(build204(s, raw(), d, stale)).toEqual({ ok: false, reason: TEXT_STALE })
+    expect(reconcileDraft(d, s, { ...stale, online: false })).toMatchObject({ draft: null, cleared: 'blocked' })
+    expect(reconcileDraft(d, s, { ...stale, connected: false })).toMatchObject({ draft: null, cleared: 'blocked' })
+    expect(reconcileDraft(d, view({ windSpeed: -1 }), stale)).toMatchObject({ draft: null, cleared: 'blocked' })
+    expect(reconcileDraft(d, s, CTX).draft).toBe(d)
+    expect(build204(s, raw(), d, CTX).ok).toBe(true)
+  })
+
   it('设定值步进：露点 0.5、湿度 1，范围内；不在格点上先对齐', () => {
     expect(stepSetpoint('dewPoint', 13, 1)).toBe(13.5)
     expect(stepSetpoint('dewPoint', 13.2, -1)).toBe(13)
