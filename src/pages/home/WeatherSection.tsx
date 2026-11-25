@@ -83,7 +83,7 @@ export function CityPicker({ city, onPick }: { city: City; onPick: (code: string
     const into = p && !isSingleCity(p) ? p : null
     setQ(''); setProv(into); setHl(into ? city.code : provinceHl); setOpen(true)
   }
-  const pick = (c: City) => { setOpen(false); if (c.code !== city.code) onPick(c.code) }
+  const pick = (c: City) => { disarm(); setOpen(false); if (c.code !== city.code) onPick(c.code) }
   const enter = (p: Province) => {
     if (isSingleCity(p)) { pick(p.cities[0]); return }
     setProv(p)
