@@ -187,7 +187,10 @@ test.describe('确认弹窗随离开失效', () => {
     await page.locator('.sidebar').getByText('房间温控面板', { exact: true }).click() // 应用内跳转，后退走 popstate
     await settle(page)
     await expect(page).toHaveURL(/\/thermostat$/)
-    await page.getByRole('button', { name: '全部开启' }).click()
+    // 温控页的代码块和演示数据可能在 settle 推进完假时钟之后才到（CI 机器慢时），按钮没出来就再推进时钟，别干等 30 秒
+    const allOn = page.getByRole('button', { name: '全部开启' })
+    await expect(async () => { await page.clock.runFor(500); await expect(allOn).toBeVisible({ timeout: 500 }) }).toPass({ timeout: 15_000 })
+    await allOn.click()
     await tick(page)
     await expect(page.getByRole('alertdialog')).toBeVisible()
     await page.goBack()
