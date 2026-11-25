@@ -53,7 +53,7 @@ function ProjectSearch() {
   // Cmd+K / Ctrl+K：聚焦顶栏搜索（不做单独的命令面板）
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key.toLowerCase() !== 'k' || !(e.metaKey || e.ctrlKey) || e.altKey || e.shiftKey || e.isComposing) return
+      if (e.key?.toLowerCase() !== 'k' || !(e.metaKey || e.ctrlKey) || e.altKey || e.shiftKey || e.isComposing) return
       e.preventDefault()
       inputRef.current?.focus()
       inputRef.current?.select()

@@ -59,6 +59,11 @@ describe('defaultSections', () => {
     expect(defaultSections({ projects, recent: ['p8'], pinned: ['p2'], dealerAccount: false }).map((x) => [x.key, x.rows.map((p) => p.id)])).toEqual([['pinned', ['p2']], ['recent', ['p8']]])
     expect(defaultSections({ projects, recent: [], pinned: [], dealerAccount: false })).toEqual([])
   })
+  it('存储里不在当前账号范围内的 id（别的账号留下的、已删除的）：置顶和最近使用都跳过', () => {
+    const s = defaultSections({ projects, recent: ['HZ-ONLY', 'p4'], pinned: ['gone', 'HZ-ONLY', 'p1'], dealerAccount: false })
+    expect(s.map((x) => [x.key, x.rows.map((p) => p.id)])).toEqual([['pinned', ['p1']], ['recent', ['p4']]])
+    expect(defaultSections({ projects, recent: ['gone'], pinned: ['HZ-ONLY'], dealerAccount: false })).toEqual([])
+  })
 })
 
 describe('prefs：按账号存 localStorage', () => {
@@ -76,8 +81,14 @@ describe('prefs：按账号存 localStorage', () => {
     expect(getPinned('mock:a')).toEqual(['y', 'x'])
     togglePinned('mock:a', 'y')
     expect(getPinned('mock:a')).toEqual(['x'])
-    localStorage.setItem('hjc-pinned-projects:mock:c', '{bad')
-    expect(getPinned('mock:c')).toEqual([])
+    for (const [i, bad] of ['{bad', '{}', 'null', '"x"', '42'].entries()) {
+      localStorage.setItem('hjc-pinned-projects:mock:c' + i, bad)
+      localStorage.setItem('hjc-recent-projects:mock:c' + i, bad)
+      expect(getPinned('mock:c' + i)).toEqual([])
+      expect(getRecent('mock:c' + i)).toEqual([])
+    }
+    localStorage.setItem('hjc-pinned-projects:mock:d', '[1,null,"p1","",{},"p1","p2"]')
+    expect(getPinned('mock:d')).toEqual(['p1', 'p2'])
     togglePinned(null, 'x')
     expect(getPinned(null)).toEqual([])
   })

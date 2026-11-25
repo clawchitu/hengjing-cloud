@@ -310,7 +310,12 @@ test('Cmd+K / Ctrl+K 聚焦顶栏搜索', async ({ page, login }) => {
   await open(page, login, 'dealer')
   const top = page.getByPlaceholder('搜索项目名称 / 项目ID')
   await expect(top).not.toBeFocused()
-  await page.keyboard.press('ControlOrMeta+k')
-  await tick(page)
-  await expect(top).toBeFocused()
+  // Cmd 和 Ctrl 两个修饰键都要能用（不按平台区分）
+  for (const combo of ['Meta+k', 'Control+k']) {
+    await page.locator('h1').first().click()
+    await expect(top).not.toBeFocused()
+    await page.keyboard.press(combo)
+    await tick(page)
+    await expect(top).toBeFocused()
+  }
 })
