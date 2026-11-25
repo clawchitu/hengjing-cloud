@@ -2,15 +2,14 @@ import { create, toBinary } from '@bufbuild/protobuf'
 import { base64Encode, BinaryReader, BinaryWriter, WireType } from '@bufbuild/protobuf/wire'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { setCurrentUserId } from '../auth'
-import { CTRL, buildProjectRoomSwitchSet, buildRoomTemperatureSet, buildRunningCtrlSet, buildUnifiedCtrlSet, callCtrl, decodeReply, encodeMessage, encodeWrite, sendUnifiedCtrls, validateWriteQuery, writeCtrl } from '../ctrl'
+import { CTRL, buildProjectRoomSwitchSet, buildRoomTemperatureSet, buildRunningCtrlSet, buildUnifiedCtrlSet, callCtrl, decodeReply, encodeMessage, sendUnifiedCtrls, validateWriteQuery, writeCtrl } from '../ctrl'
 import { setConfig } from '../config'
 import * as pb from '../gen/ctrl200_pb.js'
 import { __resetHttpForTests, request, requestWrite } from '../http'
-import { __resetSealedForTests } from '../guard'
 import { ctrlQuery } from '../query'
 import { clearTokens, writeTokens } from '../tokens'
 import { withUnchanged } from '../values'
-import { fakeBackend, json, sealedBody } from './helpers'
+import { fakeBackend, json } from './helpers'
 
 // 后端实体 id 与项目 code 不同：白名单按 code，请求体用 id
 const P1 = { id: '66cfd7959fb60d63c917fd0a', code: '240829001' }
@@ -244,7 +243,7 @@ describe('写防护按项目 code：201/203/204/206 与批量统一控制', () =
     const be = fakeBackend({ '/ctrl/project-room-switch-set': () => json({}) })
     let n = 0
     const flaky = { id: P1.id, get code() { return n++ === 0 ? P1.code : 'evil' } }
-    await requestWrite('ctrl-206', [flaky], { body: sealedBody('ctrl-206') })
+    await requestWrite('ctrl-206', [flaky], { body: 'CAE=' })
     expect(n).toBe(1)
     expect(be.calls[0].body).toEqual({ body: 'CAE=', project_id: P1.id })
   })
@@ -288,11 +287,11 @@ describe('写防护按项目 code：201/203/204/206 与批量统一控制', () =
   it('requestWrite()：普通对象（含 null 原型）浅拷贝后填入快照 id，不修改调用方对象（单项目与批量）', async () => {
     setConfig({ apiBase: '/api', apiEnv: 'test' })
     const be = fakeBackend({ '/ctrl/project-room-switch-set': () => json({}), '/ctrl/unified-ctrls-send': () => json({}) })
-    const b1 = { user_id: 'u1', body: sealedBody('ctrl-206') }
+    const b1 = { user_id: 'u1', body: 'CAE=' }
     await requestWrite('ctrl-206', [P1], b1)
     expect(be.calls[0].body).toEqual({ user_id: 'u1', body: 'CAE=', project_id: P1.id })
     expect(b1).toEqual({ user_id: 'u1', body: 'CAE=' })
-    const b2 = Object.assign(Object.create(null) as Record<string, unknown>, { body: sealedBody('unified-ctrls-send', 'GAE=') })
+    const b2 = Object.assign(Object.create(null) as Record<string, unknown>, { body: 'GAE=' })
     await requestWrite('unified-ctrls-send', [P1, P2], b2)
     expect(be.calls[1].body).toEqual({ body: 'GAE=', project_ids: [P1.id, P2.id] })
     expect(Object.keys(b2)).toEqual(['body'])
@@ -305,7 +304,7 @@ describe('写防护按项目 code：201/203/204/206 与批量统一控制', () =
       await expect(requestWrite(op, [P1, P2], {})).rejects.toMatchObject({ kind: 'write_blocked' })
     }
     expect(be.calls).toHaveLength(0)
-    await requestWrite('unified-ctrls-send', [P1, P2], { body: sealedBody('unified-ctrls-send', 'GAE=') })
+    await requestWrite('unified-ctrls-send', [P1, P2], { body: 'GAE=' })
     expect(be.calls[0].body).toEqual({ body: 'GAE=', project_ids: [P1.id, P2.id] })
   })
 })
@@ -415,9 +414,9 @@ describe('写接口只有一个入口', () => {
   })
 })
 
-describe('发送边界：直接调 requestWrite 也绕不过写消息校验', () => {
+describe('发送边界：直接调 requestWrite 也绕不过枚举检查', () => {
   beforeEach(() => {
-    __resetHttpForTests(); clearTokens(); __resetSealedForTests()
+    __resetHttpForTests(); clearTokens()
     writeTokens({ accessToken: `h.${btoa(JSON.stringify({ sub: 'u1' }))}.s`, refreshToken: 'R1', expiresAt: Date.now() + 3600_000 })
     setCurrentUserId('u1')
     setConfig({ apiBase: '/api', apiEnv: 'test', writeProjectCodes: [P1.code, P2.code] })
@@ -431,72 +430,32 @@ describe('发送边界：直接调 requestWrite 也绕不过写消息校验', ()
   // #60 那条：system_mode = -1（10 字节 varint）
   const MINUS1 = 'CP///////////wEQ////////////ARgBJQAAgL8='
 
-  it('手写 body 没经过 encodeWrite：空串（全部 0 = 关系统、关房间、温度 0）、00:20 那条、#60 那条一律 write_blocked，不发请求', async () => {
-    const be = fakeBackend(routes)
-    for (const body of ['', 'CP///////////wEYASUAAIC/', MINUS1]) {
-      await expect(requestWrite('ctrl-203', [P1], { user_id: 'u1', body }), JSON.stringify(body)).rejects.toMatchObject({ kind: 'write_blocked', message: expect.stringMatching(/encodeWrite/) })
-      await expect(requestWrite('unified-ctrls-send', [P1, P2], { body }), JSON.stringify(body)).rejects.toMatchObject({ kind: 'write_blocked', message: expect.stringMatching(/encodeWrite/) })
-    }
-    await expect(requestWrite('ctrl-206', [P1], { user_id: 'u1', body: '' })).rejects.toMatchObject({ kind: 'write_blocked' })
-    expect(be.calls).toHaveLength(0)
-  })
-  it('登记过但枚举外（-1、7）仍拒发：发送边界按 schema 解码再查枚举', async () => {
+  it('#60 那条（-1）、枚举外（7）：发送边界按 schema 解码再查枚举，拒发', async () => {
     const be = fakeBackend(routes)
     const bad = [MINUS1, encodeMessage(pb.UnifiedCtrlSetQuerySchema, { systemSwitch: -1, systemMode: 7, roomSwitch: 1, roomTemp: -1 })]
     for (const body of bad) {
-      await expect(requestWrite('ctrl-203', [P1], { user_id: 'u1', body: sealedBody('ctrl-203', body) })).rejects.toMatchObject({ kind: 'write_blocked', message: expect.stringMatching(/不在枚举/) })
-      await expect(requestWrite('unified-ctrls-send', [P1, P2], { body: sealedBody('unified-ctrls-send', body) })).rejects.toMatchObject({ kind: 'write_blocked', message: expect.stringMatching(/不在枚举/) })
+      await expect(requestWrite('ctrl-203', [P1], { user_id: 'u1', body })).rejects.toMatchObject({ kind: 'write_blocked', message: expect.stringMatching(/不在枚举/) })
+      await expect(requestWrite('unified-ctrls-send', [P1, P2], { body })).rejects.toMatchObject({ kind: 'write_blocked', message: expect.stringMatching(/不在枚举/) })
     }
     expect(be.calls).toHaveLength(0)
   })
-  it('非规范 base64（带空白、base64url、拼接）即使登记过也拒发；请求体带未知字段拒发', async () => {
+  it('非规范 base64（带空白、base64url、拼接）拒发；请求体带未知字段拒发', async () => {
     const be = fakeBackend(routes)
     const ok = encodeMessage(pb.UnifiedCtrlSetQuerySchema, { systemSwitch: -1, systemMode: 0, roomSwitch: 1, roomTemp: -1 })
     for (const body of [ok + '\n', ` ${ok}`, ok.replace(/\//g, '_'), 'CAE=CAE=', 'CAE']) {
-      await expect(requestWrite('ctrl-203', [P1], { user_id: 'u1', body: sealedBody('ctrl-203', body) }), JSON.stringify(body)).rejects.toMatchObject({ kind: 'write_blocked' })
+      await expect(requestWrite('ctrl-203', [P1], { user_id: 'u1', body }), JSON.stringify(body)).rejects.toMatchObject({ kind: 'write_blocked' })
     }
-    await expect(requestWrite('unified-ctrls-send', [P1], { body: sealedBody('unified-ctrls-send', ok), shadow_body: 'x' })).rejects.toMatchObject({ kind: 'write_blocked', message: expect.stringMatching(/shadow_body/) })
-    await expect(requestWrite('unified-ctrls-send', [P1], { body: sealedBody('unified-ctrls-send', ok), user_id: 'u1' })).rejects.toMatchObject({ kind: 'write_blocked', message: expect.stringMatching(/user_id/) })
-    await expect(requestWrite('ctrl-203', [P1], { user_id: 1, body: sealedBody('ctrl-203', ok) } as never)).rejects.toMatchObject({ kind: 'write_blocked' })
+    await expect(requestWrite('unified-ctrls-send', [P1], { body: ok, shadow_body: 'x' })).rejects.toMatchObject({ kind: 'write_blocked', message: expect.stringMatching(/shadow_body/) })
+    await expect(requestWrite('unified-ctrls-send', [P1], { body: ok, user_id: 'u1' })).rejects.toMatchObject({ kind: 'write_blocked', message: expect.stringMatching(/user_id/) })
+    await expect(requestWrite('ctrl-203', [P1], { user_id: 1, body: ok } as never)).rejects.toMatchObject({ kind: 'write_blocked' })
     expect(be.calls).toHaveLength(0)
   })
   it('body 缺失、不是字符串、解不出来 → write_blocked，不发请求', async () => {
     const be = fakeBackend(routes)
-    for (const b of [{}, { body: 1 }, { body: null }, { body: sealedBody('ctrl-203', '////') }]) {
+    for (const b of [{}, { body: 1 }, { body: null }, { body: '////' }]) {
       await expect(requestWrite('ctrl-203', [P1], b as never), JSON.stringify(b)).rejects.toMatchObject({ kind: 'write_blocked' })
     }
     expect(be.calls).toHaveLength(0)
-  })
-  it('登记是按写接口、一次一用：203 登记的 body 不能拿去发批量，发过一次不能再直接重发', async () => {
-    const be = fakeBackend(routes)
-    const body = encodeWrite('ctrl-203', pb.UnifiedCtrlSetQuerySchema, buildUnifiedCtrlSet({ roomTemp: 24 }))
-    await expect(requestWrite('unified-ctrls-send', [P1], { body })).rejects.toMatchObject({ kind: 'write_blocked' })
-    await requestWrite('ctrl-203', [P1], { user_id: 'u1', body })
-    await expect(requestWrite('ctrl-203', [P1], { user_id: 'u1', body })).rejects.toMatchObject({ kind: 'write_blocked' })
-    expect(be.calls).toHaveLength(1)
-  })
-  it('被拦下（项目不在名单、单项目传多个项目、带未知字段）后登记已被取走：同一 body 不能再拿去发', async () => {
-    const be = fakeBackend(routes)
-    const body = encodeWrite('ctrl-206', pb.ProjectRoomSwitchSetQuerySchema, buildProjectRoomSwitchSet(false))
-    const OUT = { id: 'p9', code: '999' }
-    await expect(requestWrite('ctrl-206', [OUT], { user_id: 'u1', body })).rejects.toMatchObject({ kind: 'write_blocked' })
-    await expect(requestWrite('ctrl-206', [P1], { user_id: 'u1', body })).rejects.toMatchObject({ kind: 'write_blocked', message: expect.stringMatching(/encodeWrite/) })
-    const b2 = encodeWrite('ctrl-206', pb.ProjectRoomSwitchSetQuerySchema, buildProjectRoomSwitchSet(false))
-    await expect(requestWrite('ctrl-206', [P1, P2], { user_id: 'u1', body: b2 })).rejects.toMatchObject({ kind: 'write_blocked' })
-    await expect(requestWrite('ctrl-206', [P1], { user_id: 'u1', body: b2 })).rejects.toMatchObject({ kind: 'write_blocked', message: expect.stringMatching(/encodeWrite/) })
-    const b3 = encodeWrite('unified-ctrls-send', pb.UnifiedCtrlSetQuerySchema, buildUnifiedCtrlSet({ roomSwitch: 1 }))
-    await expect(requestWrite('unified-ctrls-send', [P1], { body: b3, shadow_body: 'x' })).rejects.toMatchObject({ kind: 'write_blocked' })
-    await expect(requestWrite('unified-ctrls-send', [P1], { body: b3 })).rejects.toMatchObject({ kind: 'write_blocked', message: expect.stringMatching(/encodeWrite/) })
-    expect(be.calls).toHaveLength(0)
-  })
-  it('登记上限 256 条：超过时丢最早的，最早那条要重新组装才能发', async () => {
-    const be = fakeBackend(routes)
-    const first = encodeWrite('ctrl-203', pb.UnifiedCtrlSetQuerySchema, buildUnifiedCtrlSet({ roomTemp: 16 }))
-    for (let i = 0; i < 256; i++) encodeWrite('ctrl-203', pb.UnifiedCtrlSetQuerySchema, buildUnifiedCtrlSet({ roomTemp: 17 + i / 100 }))
-    await expect(requestWrite('ctrl-203', [P1], { user_id: 'u1', body: first })).rejects.toMatchObject({ kind: 'write_blocked', message: expect.stringMatching(/encodeWrite/) })
-    const last = encodeWrite('ctrl-203', pb.UnifiedCtrlSetQuerySchema, buildUnifiedCtrlSet({ roomTemp: 17 + 255 / 100 }))
-    await requestWrite('ctrl-203', [P1], { user_id: 'u1', body: last })
-    expect(be.calls).toHaveLength(1)
   })
   it('经 writeCtrl / sendUnifiedCtrls 组装的照常发出（system_mode = 0 不变、可选模式）', async () => {
     const be = fakeBackend(routes)

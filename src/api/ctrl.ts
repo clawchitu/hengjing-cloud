@@ -15,7 +15,7 @@ import { base64Decode, base64Encode, BinaryReader, WireType } from '@bufbuild/pr
 import { getCurrentUserId } from './auth'
 import { getConfig } from './config'
 import { ApiError } from './errors'
-import { assertEnumsDefined, assertNoImplicitZero, sealWriteBody, type WriteOp, type WriteProject } from './guard'
+import { assertEnumsDefined, assertNoImplicitZero, type WriteOp, type WriteProject } from './guard'
 import { request, requestWrite } from './http'
 import { MODE_UNCHANGED } from './values'
 import * as pb from './gen/ctrl200_pb.js'
@@ -262,8 +262,6 @@ export function encodeWrite(op: WriteOp, schema: DescMessage, query: object): st
   }
   assertEnumsDefined(schema, decoded)
   assertNoImplicitZero(op, decoded, explicitFieldsOf(query))
-  // 登记为「已校验」：requestWrite 只发登记过的 body
-  sealWriteBody(op, body)
   return body
 }
 

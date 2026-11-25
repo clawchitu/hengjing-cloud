@@ -180,43 +180,14 @@ export const WRITE_QUERY_SCHEMAS: Readonly<Record<WriteOp, DescMessage>> = Objec
 })
 
 /**
- * 经 ctrl.ts encodeWrite 校验过的 body（按写接口登记，计数）。proto3 里明确给出的 0 和漏掉的字段在线上一模一样（都不上线），
- * 发送边界只看 body 分不出来，所以「隐式 0」检查只能在知道明确字段的 encodeWrite 里做；requestWrite 只接受这里登记过的 body，
- * 直接拿手写的 body（比如空串 = 全部 0 = 关系统、关房间）调 requestWrite 一律拒发。只应由 encodeWrite 调用
- */
-const sealedBodies = new Map<string, number>()
-const SEALED_MAX = 256
-const sealKey = (op: WriteOp, body: string) => `${op}\n${body}`
-export function sealWriteBody(op: WriteOp, body: string): void {
-  const k = sealKey(op, body)
-  sealedBodies.set(k, (sealedBodies.get(k) ?? 0) + 1)
-  // 没发出去的（发送前被拦下）不会被取走：超过上限丢最早的，最多让那条要重新组装
-  while (sealedBodies.size > SEALED_MAX) sealedBodies.delete(sealedBodies.keys().next().value as string)
-}
-/** 取走登记（一次一用）：requestWrite 一进来就取，不管后面成功还是被拦下，登记都不会留下给别的调用借用 */
-export function takeWriteBodySeal(op: WriteOp, body: unknown): boolean {
-  if (typeof body !== 'string') return false
-  const k = sealKey(op, body)
-  const n = sealedBodies.get(k)
-  if (!n) return false
-  if (n === 1) sealedBodies.delete(k)
-  else sealedBodies.set(k, n - 1)
-  return true
-}
-/** 测试用：清空登记 */
-export const __resetSealedForTests = () => sealedBodies.clear()
-
-/**
- * 发送边界检查（http.ts requestWrite 在发出前调用，绕不过）：
- * - body 必须是 encodeWrite 刚校验并登记过的（requestWrite 一进来就用 takeWriteBodySeal 取走，sealed 是取的结果），否则拒发——堵住直接调 requestWrite 发手写 body（含隐式 0）；
- * - 再把 body（Query 的 base64）按该写接口的 schema 解码：所有枚举字段必须在枚举里；203 / 批量统一控制的运行模式只能是 0（不变）或界面可选的模式。
+ * 发送边界的枚举检查（http.ts requestWrite 在发出前调用，直接调 requestWrite 也绕不过）：
+ * 把 body（Query 的 base64，只认规范写法）按该写接口的 schema 解码：所有枚举字段必须在枚举里；203 / 批量统一控制的运行模式只能是 0（不变）或界面可选的模式。
  * body 缺失、不是字符串、解不出来一律拒发
  */
-export function assertWriteBody(op: WriteOp, body: unknown, sealed: boolean): void {
+export function assertWriteBodyEnums(op: WriteOp, body: unknown): void {
   const schema = WRITE_QUERY_SCHEMAS[op]
   if (!schema) throw new ApiError('write_blocked', `未登记的写操作：${op}`)
   if (typeof body !== 'string') throw new ApiError('write_blocked', '写请求体缺少 body，未下发')
-  if (!sealed) throw new ApiError('write_blocked', '写请求体没有经过写消息组装校验（encodeWrite），未下发')
   let decoded: Record<string, unknown>
   try {
     const bytes = body ? base64Decode(body) : new Uint8Array()

@@ -1,6 +1,5 @@
 // 测试用的假后端：按路径返回响应，并记录每次请求。不连任何真实后端。
 import { vi } from 'vitest'
-import { sealWriteBody, type WriteOp } from '../guard'
 
 export interface Call { url: string; method: string; headers: Record<string, string>; body: unknown }
 type Handler = (call: Call, n: number) => Response | Promise<Response>
@@ -32,8 +31,3 @@ export function fakeBackend(routes: Record<string, Handler>) {
   return { calls, counts, fetchMock, callsTo: (p: string) => calls.filter((c) => c.url.endsWith(p)) }
 }
 
-/** 直接测 requestWrite 时用：模拟 encodeWrite 校验过并登记的 body（requestWrite 只发登记过的 body）。默认 'CAE=' = 字段 #1 为 1 */
-export function sealedBody(op: WriteOp, body = 'CAE='): string {
-  sealWriteBody(op, body)
-  return body
-}
