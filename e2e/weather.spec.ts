@@ -150,10 +150,19 @@ test.describe('天气城市选择', () => {
 
   test('需要滚动的城市（凉山）：打开后高亮直接到位，没有平滑滚动的中间帧', async ({ page }) => {
     await useLiangshan(page)
+    // 打开之前就开始记录：列表每次 scroll 的 scrollTop（平滑滚动会留下一连串中间值，直接到位只有一两个）
+    await page.evaluate(() => {
+      const w = window as unknown as { __scrolls: number[] }
+      w.__scrolls = []
+      document.addEventListener('scroll', (e) => {
+        const el = e.target as HTMLElement
+        if (el.hasAttribute?.('cmdk-list')) w.__scrolls.push(el.scrollTop)
+      }, true)
+    })
     await trigger(page).click()
     await tick(page, 50)
     const list = page.locator('[cmdk-list]')
-    const cur = page.locator('[cmdk-item][data-current]')
+    const cur = page.locator('[cmdk-item][aria-selected="true"][data-current]')
     expect(await list.evaluate((el) => getComputedStyle(el).scrollBehavior)).toBe('auto')
     expect(await list.evaluate((el) => el.scrollHeight > el.clientHeight)).toBe(true)
     await expect(cur).toHaveText('凉山彝族自治州')
@@ -163,6 +172,9 @@ test.describe('天气城市选择', () => {
     await tick(page, 500)
     await expect(cur).toBeInViewport({ ratio: 1 })
     expect(await list.evaluate((el) => el.scrollTop)).toBe(early)
+    const seen = await page.evaluate(() => new Set((window as unknown as { __scrolls: number[] }).__scrolls.filter((v) => v > 0)).size)
+    expect(seen).toBeGreaterThan(0)
+    expect(seen).toBeLessThanOrEqual(2)
   })
 
   test('需要滚动的城市（凉山）：顶部固定的返回行不遮挡高亮；向上走到第一个市也不被挡', async ({ page }) => {
@@ -173,7 +185,9 @@ test.describe('天气城市选择', () => {
     const clear = async () => {
       const head = (await back(page).boundingBox())!
       const box = (await sel.boundingBox())!
+      const l = (await page.locator('[cmdk-list]').boundingBox())!
       expect(box.y).toBeGreaterThanOrEqual(head.y + head.height - 1)
+      expect(box.y + box.height).toBeLessThanOrEqual(l.y + l.height + 1)
     }
     await expect(sel).toHaveText('凉山彝族自治州')
     await clear()

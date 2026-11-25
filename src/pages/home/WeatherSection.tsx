@@ -67,12 +67,14 @@ export function CityPicker({ city, onPick }: { city: City; onPick: (code: string
   }
   const pick = (c: City) => { setOpen(false); if (c.code !== city.code) onPick(c.code) }
   const enter = (p: Province) => {
+    restore.current = false
     if (isSingleCity(p)) { pick(p.cities[0]); return }
     setProv(p)
     setHl(p.cities.some((c) => c.code === city.code) ? city.code : p.cities[0].code)
     inputRef.current?.focus()
   }
   const back = () => {
+    restore.current = false
     const from = prov
     setProv(null)
     setHl(from ? PROV + from.code : '')
@@ -82,6 +84,7 @@ export function CityPicker({ city, onPick }: { city: City; onPick: (code: string
   // 搜索清空回到列表：搜索结果里被高亮的那项卸载时，cmdk 会把高亮改成第一项（在本次提交的 layout 阶段，晚于 onChange 里的 setHl）。
   // 清空后的两帧内（restore 为真），高亮不是默认高亮就设回去；用户按键动了高亮就不再恢复
   const restore = useRef(false)
+  const restoreGen = useRef(0)
   useEffect(() => {
     if (restore.current && !searching && hl !== defaultHl) setHl(defaultHl)
   }, [hl, defaultHl, searching])
@@ -190,11 +193,12 @@ export function CityPicker({ city, onPick }: { city: City; onPick: (code: string
                 else {
                   restore.current = true
                   setHl(defaultHl)
-                  requestAnimationFrame(() => requestAnimationFrame(() => { restore.current = false }))
+                  const gen = ++restoreGen.current
+                  requestAnimationFrame(() => requestAnimationFrame(() => { if (restoreGen.current === gen) restore.current = false }))
                 }
               }}
               onKeyDown={(e) => {
-                if (e.key !== 'Backspace') restore.current = false // 用户自己动了高亮，不再恢复
+                restore.current = false // 用户自己动了高亮（含退格返回），不再恢复
                 if (e.key === 'Home' || e.key === 'End') e.stopPropagation()
                 if (e.key === 'Backspace' && !q && prov) { e.preventDefault(); back() }
               }}
