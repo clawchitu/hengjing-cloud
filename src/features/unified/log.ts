@@ -15,7 +15,7 @@ export type LogCode = FlowCode | IssueCode
 
 const LOG_CODES = new Set<string>([
   'OK', 'VERIFIED', 'NOT_VERIFIED', 'ECHO_MISMATCH', 'READ_FAILED', 'PROJECT_CHANGED', 'ABORTED', 'NOT_SENT', 'REJECTED', 'UNKNOWN', 'REPLY_OK',
-  'NO_PROJECT', 'OFFLINE', 'BAD_SWITCH', 'BAD_MODE', 'TEMP_DISABLED', 'TEMP_INVALID', 'TEMP_WHILE_ROOM_OFF', 'NO_CHANGES',
+  'NO_PROJECT', 'OFFLINE', 'BAD_SWITCH', 'BAD_MODE', 'TEMP_DISABLED', 'TEMP_INVALID', 'NO_CHANGES',
 ] satisfies LogCode[])
 const ERROR_KINDS = new Set<string>([
   'unauthenticated', 'forbidden', 'unavailable', 'timeout', 'network', 'bad_request', 'server', 'ctrl', 'write_blocked', 'aborted',

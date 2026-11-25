@@ -74,7 +74,7 @@ const MODE_VALUES = new Set<number>(MODE_OPTIONS.map((o) => o.value))
 
 /** 校验问题的固定代码（日志只记代码，不记文案） */
 export type IssueCode =
-  | 'NO_PROJECT' | 'OFFLINE' | 'BAD_SWITCH' | 'BAD_MODE' | 'TEMP_DISABLED' | 'TEMP_INVALID' | 'TEMP_WHILE_ROOM_OFF' | 'NO_CHANGES'
+  | 'NO_PROJECT' | 'OFFLINE' | 'BAD_SWITCH' | 'BAD_MODE' | 'TEMP_DISABLED' | 'TEMP_INVALID' | 'NO_CHANGES'
 export interface Issue { code: IssueCode; message: string }
 
 export type Validation = { ok: true; query: WriteQuery<203> } | { ok: false; errors: string[]; issues: Issue[] }
@@ -99,9 +99,8 @@ export function validateUnified(draft: UnifiedDraft, ctx: UnifiedContext | null 
       const e = checkTemp(d.roomTemp, resolveTempRange(ctx.tempRange))
       if (e) add('TEMP_INVALID', e)
     }
-    // 后端答复⑦：房间关闭时界面不允许设置温度。注意：这里只能拦「本次同时关房间」，
-    // 房间原本就关着的情况要等页面接入 200 的房间状态后在页面层处理
-    if (d.roomSwitch === SWITCH_OFF) add('TEMP_WHILE_ROOM_OFF', TEXT.tempWhileRoomOff)
+    // 后端 11/25 答复第 16 条：统一控制下发温度时，房间关着温度也会生效（不会把房间打开，开启后按此温度运行）。
+    // 所以房间关着、或这次同时关房间，都可以设温度，不再拦（页面给「房间开启后生效」的提示）
   }
 
   const query = buildUnifiedCtrlSet({
