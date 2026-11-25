@@ -17,4 +17,9 @@
 //                          写 false 时房间开关显示「未知」、核对开关记无法核对、不拿它禁用温度和节能。
 //   weatherNowFallback     true（默认）| false：/weather 失败时用小时预报顶替实时数据。
 //   例：features: { freshAirWrite: 'off' }
-window.__HJC_CONFIG__ = {}
+// icp             备案号：{ number, hosts }。只在 hosts 里的域名（等于它，或以「.它」结尾）下，在登录页底部和全站页脚显示，
+//                 链接到 https://beian.miit.gov.cn/（新窗口）；其他域名（hvac-demo、hvac-mock、localhost 等）不显示。
+//                 不写或写了非法值都取默认值 { number: '苏ICP备18008267号-1', hosts: ['cosyhome.com.cn'] }。
+window.__HJC_CONFIG__ = {
+  icp: { number: '苏ICP备18008267号-1', hosts: ['cosyhome.com.cn'] },
+}

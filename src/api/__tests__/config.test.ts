@@ -1,12 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { envOfUrl, FEATURE_DEFAULTS, resolveConfig, roomSwitchReported, setConfig, TEST_API_ORIGIN } from '../config'
+import { envOfUrl, FEATURE_DEFAULTS, ICP_DEFAULT, resolveConfig, roomSwitchReported, setConfig, TEST_API_ORIGIN } from '../config'
 import { can, isDealer } from '../auth'
 
 describe('运行时配置', () => {
   it('默认：/api、演示数据、按生产处理、超时 10/12 秒', () => {
     expect(resolveConfig([])).toEqual({
       apiBase: '/api', apiEnv: 'prod', dataSource: 'mock', writeMode: 'test-only', writeProjectCodes: ['260911001', '240829001'],
-      requestTimeoutMs: 10_000, ctrlTimeoutMs: 12_000, features: FEATURE_DEFAULTS,
+      requestTimeoutMs: 10_000, ctrlTimeoutMs: 12_000, features: FEATURE_DEFAULTS, icp: ICP_DEFAULT,
     })
   })
   it('功能开关：不写全部取默认值', () => {

@@ -4,7 +4,7 @@ import { fromBinary } from '@bufbuild/protobuf'
 import { base64Decode } from '@bufbuild/protobuf/wire'
 import { decodeReply, encodeMessage } from '../../api/ctrl'
 import * as pb from '../../api/gen/ctrl200_pb.js'
-import { connCounts, filterConn, linksOf, mockConnRows, pct, toConnRows, toConnStatus } from '../connections'
+import { connCounts, filterConn, mockConnRows, pct, toConnRows, toConnStatus } from '../connections'
 import { toProject } from '../org/map'
 
 // 11/24 测试环境 240829001 的 205 真实回复（只读联调抓到的，device_id 全部缺省）
@@ -105,17 +105,10 @@ describe('mockConnRows（演示数据）', () => {
   })
 })
 
-describe('linksOf（控制屏 / DTU 编号）与在线判定', () => {
-  it('只列有值的；两者都有时控制屏在前', () => {
-    expect(linksOf({ controlScreenId: 'CS1', dtuId: 'D1' })).toEqual([{ label: '控制屏', id: 'CS1' }, { label: 'DTU', id: 'D1' }])
-    expect(linksOf({ dtuId: 'D1' })).toEqual([{ label: 'DTU', id: 'D1' }])
-    expect(linksOf({ controlScreenId: ' ', dtuId: undefined })).toEqual([])
-    expect(linksOf(null)).toEqual([])
-  })
-
+describe('项目在线判定', () => {
   it('项目实体：control_screen_id / dtu_id 映射过来；online 只有 true 才算在线', () => {
     const p = toProject({ id: 'x', control_screen_id: '667b7cc60b7d46467c424d33', online: true } as never)
-    expect(linksOf(p)).toEqual([{ label: '控制屏', id: '667b7cc60b7d46467c424d33' }])
+    expect(p.controlScreenId).toBe('667b7cc60b7d46467c424d33')
     expect(p.online).toBe(true)
     for (const online of [undefined, false, 'true', 1, null]) expect(toProject({ id: 'x', online } as never).online).toBe(false)
   })

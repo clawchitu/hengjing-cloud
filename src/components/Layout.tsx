@@ -5,6 +5,7 @@ import {
   faChevronDown, faChevronRight, faMagnifyingGlass, faHouse, faPlugCircleXmark,
 } from '@fortawesome/free-solid-svg-icons'
 import { Avatar, Icon, LogoMark } from './legacy'
+import { SiteFooter } from './Icp'
 import { Badge } from '@/components/ui/badge'
 import { InputGroup, InputGroupInput } from '@/components/ui/input'
 import { Command, CommandEmpty, CommandItem, CommandList } from '@/components/ui/command'
@@ -16,7 +17,7 @@ import { useCancelConfirmOnLeave, useConfirm } from '../app/feedback'
 import { useIsFetching } from '@tanstack/react-query'
 import { dealerSections, orgKeys, projectsInGroup, useOrgScope, whenProjectSet } from '../data/org'
 import type { Project } from '../api'
-import { linksOf, OFFLINE_RECHECK_MS } from '../data/connections'
+import { OFFLINE_RECHECK_MS } from '../data/connections'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 
@@ -328,15 +329,14 @@ const itemValue = (groupId: string, projectId: string) => groupId + ':' + projec
  * 只显示横幅和空态（方案 1.2「离线横幅」、S11 验收）。
  */
 function OfflineBanner({ p }: { p: Project }) {
-  const links = linksOf(p)
+  // 不显示 control_screen_id（S13 走查 P6：它是型号 id、不是屏号，三个项目共用同一个值），统一写「控制屏未连接」
   return (
     <div className="offline-banner" role="alert">
       <div className="ob-ico"><Icon icon={faPlugCircleXmark} /></div>
       <div className="ob-main">
         <b>项目离线 · {p.name}</b>
         <span>
-          {links.length ? <>{links.map((l, i) => <Fragment key={l.label}>{i > 0 && '、'}{l.label} <span className="num">{l.id}</span></Fragment>)}{' '}未连接</> : '控制屏未连接'}
-          ，暂时读不到设备数据，也无法下发控制。
+          控制屏未连接，暂时读不到设备数据，也无法下发控制。
         </span>
       </div>
     </div>
@@ -471,6 +471,7 @@ export default function Layout() {
         ) : offline ? (
           <OfflinePage p={project} title={cur?.label ?? ''} onLeave={noteOfflineLeave} />
         ) : <Fragment key={project.id}><Outlet /></Fragment>}
+        <SiteFooter />
       </div>
     </div>
   )

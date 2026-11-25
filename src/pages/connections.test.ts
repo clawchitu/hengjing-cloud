@@ -106,7 +106,7 @@ beforeEach(() => {
 afterEach(() => { cleanup(); setVisible(true); vi.useRealTimers(); vi.unstubAllGlobals(); setConfig(null) })
 
 describe('设备连接状态页（ctrl 205）', () => {
-  it('请求体：project_id 用实体 id、user_id 用当前用户、空 Query 传空串；页头显示控制屏编号', async () => {
+  it('请求体：project_id 用实体 id、user_id 用当前用户、空 Query 传空串；页头不显示控制屏编号（S13 P6：control_screen_id 是型号 id）', async () => {
     const be = backend()
     await signIn('u', 'pw', true)
     mountAt('/connections')
@@ -114,9 +114,9 @@ describe('设备连接状态页（ctrl 205）', () => {
     expect(be.callsTo('/ctrl/device-summary-get').map((c) => c.body)).toEqual([{ project_id: 'p1', user_id: 'admin-1', body: '' }])
     const sub = document.querySelector('.page-head .sub')!.textContent
     expect(sub).toContain('测试项目0829')
-    expect(sub).toContain('控制屏 667b7cc60b7d46467c424d33')
-    expect(sub).not.toContain('DTU')
-    expect(sub).toContain('每 30 秒检测一次')
+    expect(sub).toBe('测试项目0829·每 30 秒检测一次')
+    expect(sub).not.toContain('667b7cc6')
+    expect(sub).not.toContain('控制屏')
   })
 
   it('字段上屏：型号列、地址原样、缺省显示 --、65536 显示未知；KPI 按 conn_status 统计，没有最长离线 / 丢包率', async () => {
@@ -161,14 +161,14 @@ describe('设备连接状态页（ctrl 205）', () => {
     expect(screen.queryByText('未初始化')).toBeNull()
   })
 
-  it('只有 DTU 的项目：页头显示 DTU 编号', async () => {
+  it('只有 DTU 的项目：页头也不显示编号', async () => {
     localStorage.setItem('hjc-project', 'p3')
     backend()
     await signIn('u', 'pw', true)
     mountAt('/connections')
     await screen.findByText('网络HUB')
     const sub = document.querySelector('.page-head .sub')!.textContent
-    expect(sub).toContain('DTU dtu-9')
+    expect(sub).not.toContain('dtu-9')
     expect(sub).not.toContain('控制屏')
   })
 
@@ -282,7 +282,8 @@ describe('项目离线态（S11）', () => {
       expect(await screen.findByText('项目离线，暂无数据')).toBeTruthy()
       const banner = screen.getByRole('alert').textContent
       expect(banner).toContain('项目离线 · 离线项目')
-      expect(banner).toContain('控制屏 cs-off、DTU dtu-off 未连接')
+      expect(banner).toContain('控制屏未连接，暂时读不到设备数据') // S13 P6：不显示控制屏 / DTU 编号
+      expect(banner).not.toMatch(/cs-off|dtu-off/)
       expect(banner).not.toMatch(/最后在线|仅供参考|GW-/)
       if (page) expect(screen.queryByText(page + '页内容')).toBeNull()
       expect(screen.queryByText('设备连接明细')).toBeNull()

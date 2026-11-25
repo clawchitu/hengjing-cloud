@@ -4,8 +4,11 @@
 //   （用户已确认）
 //        │ acquire(project)：同屏已被锁 → 'busy'
 //        ▼
-//   screen     现查一次 ctrl 205（src/api/screenPreflight.ts，单独 5 秒超时，不缓存）：503 / 超时 / 失败 →
-//        │     「控制屏未连接，暂不能下发」，不发写请求、放锁，结果条给「重试」（'not-sent'）；205 只提前拦截，四态判法不变
+//   screen     现查 ctrl 205（src/api/screenPreflight.ts 的 preflightScreen，每次 5 秒，超时再查一次，最坏 10 秒，不缓存）：
+//        │     没通过 → 不发写请求、放锁，结果条给「重试」（'not-sent'）；503「控制屏未连接」、两次超时「控制屏在线检查超时」、
+//        │     其他失败「控制屏在线检查失败」分开写（S13 P2）；205 只提前拦截，四态判法不变。
+//        │     锁期限：acquire 起算 held 30 秒，最坏 205 两次 10 秒 + 确认后读 15 秒 = 25 秒内 markSent；之后写 12 秒在有效期内
+//        │     （writes.test.ts「205 重查与写锁期限」钉住）
 //        ▼
 //   preflight  新发一次 200（hooks.ts 的 useFreshRead：先取消在途 200，绑定会话），用新读数重新校验并组装，与确认时比对
 //        │     读取失败 / 不一致 / 期间离开、切项目、会话变化 → 不写，放锁（'aborted'）
@@ -188,13 +191,14 @@ export async function runOp<P, L>(o: OpSpec<P, L>): Promise<RunResult> {
     // ---- 控制屏实时预检（205，每次现查）：没通过 → 不发写请求；锁在 finally 里放（还没认领）
     const sac = new AbortController()
     let screen: ScreenState
-    try { screen = await (o.screen ?? preflightScreen)(projectId, sac.signal) } catch { screen = 'offline' }
+    try { screen = await (o.screen ?? preflightScreen)(projectId, sac.signal) } catch { screen = 'error' }
     if (!sameSession() || !sameProject() || !o.present()) return 'aborted'
     if (screen !== 'online') {
-      // 403（无连接状态权限）：单独文案，重试没用，不给重试
+      // 403（无连接状态权限）：单独文案，重试没用，不给重试；两次超时、其他失败的文案本身已写「未下发」（S13 P2）
       const why = screenBlockText(screen)
       say(`${o.subject}：${why}`, true)
-      record({ outcome: 'fail', text: `未下发：${why}`, readback: 'ok', ...(screen === 'forbidden' ? {} : { retry: o.retry ?? 'retry' }) })
+      const text = screen === 'timeout' || screen === 'error' ? why : `未下发：${why}`
+      record({ outcome: 'fail', text, readback: 'ok', ...(screen === 'forbidden' ? {} : { retry: o.retry ?? 'retry' }) })
       return 'not-sent'
     }
 
