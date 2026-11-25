@@ -189,7 +189,7 @@ describe('读取（ctrl 200）', () => {
     expect(c.textContent).not.toContain('406658286')
     const off = card('主卧')
     expect(off.textContent).not.toContain('湿度') // 65536 隐藏
-    expect(off.querySelectorAll('.modes-row [data-slot=badge]')).toHaveLength(1)
+    expect(off.querySelectorAll('.modes-row .end-tag')).toHaveLength(1)
     expect((be.callsTo('/ctrl/room-temperature-data-get')[0].body as { project_id: string }).project_id).toBe(P1.id)
   })
 
