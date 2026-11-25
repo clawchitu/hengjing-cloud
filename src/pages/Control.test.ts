@@ -850,7 +850,7 @@ describe('下发', () => {
       await click(okIn(dlg))
       await advance(5_100)
       vi.useRealTimers()
-      await waitFor(() => expect(row('240829001')?.querySelector('[data-slot=badge]')?.textContent).toBe('已生效'), { timeout: 3000 })
+      await waitFor(() => expect(row('测试项目0829')?.querySelector('[data-slot=badge]')?.textContent).toBe('已生效'), { timeout: 3000 })
       expect(be.callsTo('/ctrl/device-summary-get')).toHaveLength(2)
       expect(be.callsTo('/ctrl/unified-ctrl-set')).toHaveLength(1)
     })
