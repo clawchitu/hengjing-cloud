@@ -145,11 +145,18 @@ describe('start：逐个下发，三种结果，不重试', () => {
     expect(done.rows[0].at).toBe('2026-11-24 10:00:00')
   })
 
-  it('运行模式 0 不是「不变」：prepare 按无效拒绝，不下发（11/25 事故回归）', async () => {
+  it('运行模式 -1 不在枚举里：prepare 按无效拒绝，不下发（#60 回归：传 -1 后端报 unknown enum、504）', async () => {
     const { batch, send } = setup([P('a', '240829001')])
-    expect(batch.prepare(['a'], { systemMode: 0 as never, roomSwitch: 1 }).phase).not.toBe('confirming')
+    expect(batch.prepare(['a'], { systemMode: -1 as never, roomSwitch: 1 }).phase).not.toBe('confirming')
     await batch.start()
     expect(send).not.toHaveBeenCalled()
+  })
+
+  it('运行模式 0（OPERATION_MODE_NONE）就是「不变」：只开房间照常下发，运行模式线上为 0', async () => {
+    const { batch, send } = setup([P('a', '240829001')])
+    expect(batch.prepare(['a'], { systemMode: 0 as never, roomSwitch: 1 }).phase).toBe('confirming')
+    await batch.start()
+    expect(send.mock.calls[0][1]).toEqual({ systemSwitch: -1, systemMode: 0, roomSwitch: 1, roomTemp: -1 })
   })
 
   it('控制屏拒绝 → 失败，只发一次，不重试；下一个项目照常', async () => {

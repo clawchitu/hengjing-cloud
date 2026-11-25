@@ -15,8 +15,9 @@ import { base64Decode, base64Encode, BinaryReader, WireType } from '@bufbuild/pr
 import { getCurrentUserId } from './auth'
 import { getConfig } from './config'
 import { ApiError } from './errors'
-import { assertNoImplicitZero, type WriteOp, type WriteProject } from './guard'
+import { assertEnumsDefined, assertNoImplicitZero, type WriteOp, type WriteProject } from './guard'
 import { request, requestWrite } from './http'
+import { MODE_UNCHANGED } from './values'
 import * as pb from './gen/ctrl200_pb.js'
 
 interface CtrlDef { route: string; query: DescMessage; reply: DescMessage; write?: WriteOp }
@@ -130,7 +131,8 @@ export function decodeReply(schema: DescMessage, body: string | undefined): unkn
 
 // ---------------------------------------------------------------------------
 // 写消息：每个字段都必须显式给出（类型必填 + 运行时校验），绝不依赖 proto3 默认值 0，
-// 因为 0 在这些字段上的含义是「关闭」「湿度控制」等真实指令。不改的标量（含 203 的运行模式枚举）一律传 -1，end_modes 不改传 []。
+// 因为 0 在这些字段上的含义是「关闭」「湿度控制」等真实指令。不改的数值标量一律传 -1，end_modes 不改传 []；
+// 枚举字段用该枚举里定义的「不变」值（ENUM_UNCHANGED：203 system_mode = 0 = OPERATION_MODE_NONE），绝不传 -1。
 
 export const WRITE_CTRL = [201, 203, 204, 206] as const
 export type WriteCtrlType = (typeof WRITE_CTRL)[number]
@@ -163,19 +165,30 @@ export function validateWriteQuery(schema: DescMessage, q: unknown, path = ''): 
   }
 }
 
-const U = -1 // 后端约定：不变
+const U = -1 // 后端约定：数值字段不变
 type Changes<T extends WriteCtrlType, Fixed extends string> = Partial<Omit<WriteQuery<T>, Fixed>>
 
 /**
- * 203 运行模式「不变」：-1（后端 11/25 答复「所有字段不变一律传 -1」）。proto 里 system_mode 是枚举，-1 不在枚举内，
- * 但 proto3 的枚举是开放的，在线格式就是 int32 varint，-1 编成 10 字节（10 ff ff ff ff ff ff ff ff ff 01），后端按 int32 解出 -1。
- * 不能传 0：proto3 里 0 不上线，后端解出 0；11/25 00:20 的 203 就是这样发出 system_mode=0，现场随后反馈系统模式变成「关闭」
+ * 203 运行模式「不变」：0 = OPERATION_MODE_NONE（定义在 values.ts，这里转出给组装方用）。
+ * 不能传 -1：-1 不在枚举里，后端 Java 解码报「Can't get the number of an unknown enum value」，网关等 10 秒回 504，指令没执行
+ * （#60 之后 11/25 15:19、15:31 真机）；15:35 真机传 0、其余字段 -1：HTTP 仍回 504（网关），但回读温度已生效、房间开关和房间模式没被带动；
+ * 15:36 传 0 改回原值回 200 success。
+ * proto3 里 0 不上线（字段 #2 省略），后端解出的就是 NONE。
  */
-export const MODE_UNCHANGED = U as pb.UnifiedCtrlSetQuery_OperatingMode
+export { MODE_UNCHANGED, assertEnumsDefined }
 
 /**
- * 写消息的「全部不变」底板：所有数值标量和枚举（含嵌套消息里的）填 -1，列表填 []（end_modes 不改传空列表）；
- * 字符串、布尔没有 -1，不在底板里，由组装函数显式给出（validateWriteQuery 会拦缺的）。
+ * 枚举字段的「不变」值，按枚举全名登记。只登记 proto 里明确写了「不变」的枚举值（docs/api/ctrlcb.proto）：
+ * - ctrlcb.v1.UnifiedCtrlSetQuery.OperatingMode：OPERATION_MODE_NONE = 0 「不变」
+ * 没登记的枚举字段不进「全部不变」底板：调用方不明确给值就缺字段（validateWriteQuery 拒发），不猜它的「不变」。
+ */
+export const ENUM_UNCHANGED: Readonly<Record<string, number>> = Object.freeze({
+  [pb.UnifiedCtrlSetQuery_OperatingModeSchema.typeName]: MODE_UNCHANGED,
+})
+
+/**
+ * 写消息的「全部不变」底板：所有数值标量（含嵌套消息里的）填 -1，枚举填 ENUM_UNCHANGED 登记的「不变」值，列表填 []（end_modes 不改传空列表）；
+ * 字符串、布尔、没登记「不变」的枚举不在底板里，由组装函数显式给出（validateWriteQuery 会拦缺的）。
  * 以后 proto 新增字段也会自动落在底板里（src/api/__tests__/writeEncode.test.ts 遍历字段描述钉住）
  */
 export function unchangedOf(schema: DescMessage): Record<string, unknown> {
@@ -183,7 +196,7 @@ export function unchangedOf(schema: DescMessage): Record<string, unknown> {
   for (const f of schema.fields) {
     if (f.fieldKind === 'list' || f.fieldKind === 'map') out[f.localName] = f.fieldKind === 'map' ? {} : []
     else if (f.fieldKind === 'message') out[f.localName] = unchangedOf(f.message)
-    else if (f.fieldKind === 'enum') out[f.localName] = U
+    else if (f.fieldKind === 'enum') { if (Object.hasOwn(ENUM_UNCHANGED, f.enum.typeName)) out[f.localName] = ENUM_UNCHANGED[f.enum.typeName] }
     else if (f.scalar !== ScalarType.STRING && f.scalar !== ScalarType.BOOL && f.scalar !== ScalarType.BYTES) out[f.localName] = U
   }
   return out
@@ -212,7 +225,7 @@ export function buildRoomTemperatureSet(equipmentId: number, changes: Changes<20
   return assemble(201, { ...changes, equipmentId })
 }
 
-/** 203 统一控制：没改的开关、运行模式、温度一律 -1（运行模式见 MODE_UNCHANGED） */
+/** 203 统一控制：没改的开关、温度为 -1，没改的运行模式为 0（OPERATION_MODE_NONE，见 MODE_UNCHANGED） */
 export function buildUnifiedCtrlSet(changes: Changes<203, never> = {}): WriteQuery<203> {
   return assemble(203, { ...changes })
 }
@@ -233,7 +246,8 @@ export function buildProjectRoomSwitchSet(on: boolean): WriteQuery<206> {
 
 /**
  * 写消息编码 + 最后防线：编码后再解码（proto3 里没上线的字段解出来就是 0，和后端看到的一样），
- * 交给 guard.ts 的 assertNoImplicitZero 检查：除了明确给出的字段，任何数值为 0 一律拒发；203 运行模式为 0 一律拒发
+ * 先查所有枚举字段都是枚举里定义过的值（assertEnumsDefined），再交给 guard.ts 的 assertNoImplicitZero：除了明确给出的字段，
+ * 任何数值为 0 一律拒发（203 运行模式例外：0 = NONE 是合法的「不变」）；203 运行模式只能是 0 或界面可选的模式，-1 拒发
  */
 export function encodeWrite(op: WriteOp, schema: DescMessage, query: object): string {
   let body: string
@@ -246,6 +260,7 @@ export function encodeWrite(op: WriteOp, schema: DescMessage, query: object): st
     if (e instanceof ApiError) throw e
     throw new ApiError('bad_request', `写消息编码失败，未下发：${e instanceof Error ? e.message : String(e)}`, { cause: e })
   }
+  assertEnumsDefined(schema, decoded)
   assertNoImplicitZero(op, decoded, explicitFieldsOf(query))
   return body
 }

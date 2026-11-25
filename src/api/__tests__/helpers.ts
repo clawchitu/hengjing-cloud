@@ -30,3 +30,4 @@ export function fakeBackend(routes: Record<string, Handler>) {
   vi.stubGlobal('fetch', fetchMock)
   return { calls, counts, fetchMock, callsTo: (p: string) => calls.filter((c) => c.url.endsWith(p)) }
 }
+

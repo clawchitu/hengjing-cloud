@@ -58,7 +58,7 @@ S10、S7 从 Claw 转给赤兔。这份文档写 Claw 这边踩过的坑和已�
 
 ### 204 运行设置下发
 - 字段（proto 1975 行起）：`id`、`name`、`control_type`、`dew_point`、`humidity_set`、`wind_speed`、`switch`（-1 不变）
-- 不变一律传 -1（后端 11/25 答复第 4 条，所有字段）
+- 不变：数值字段 -1（后端 11/25 答复第 4 条）；枚举字段用该枚举里的不变值（203 system_mode = 0，OPERATION_MODE_NONE；11/25 15:35 真机确认，传 -1 会 unknown enum、504）
 - 回读用 210，可核对字段：`control_type`、`dew_point`、`humidity_set`、`wind_speed`、`switch`
 - 坑：`control_type = 0`（湿度控制）、`switch = 0`、`wind_speed = 0`（低）在线上都会省略，回读缺省就是 0，按真实读数比对
 - 两个测试项目共用控制屏 667b7cc6…，写锁按屏加：S10 下发 260911001 时，240829001 的温控、统一控制也会被锁住

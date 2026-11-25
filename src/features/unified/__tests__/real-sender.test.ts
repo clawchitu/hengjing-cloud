@@ -24,7 +24,7 @@ describe('统一控制真实下发链路（defaultBatchSender + 假后端）', (
   })
   afterEach(() => { vi.unstubAllGlobals(); setConfig(null) })
 
-  it('系统开关「关闭」（0 是明确改动）：请求发出，线上解码 systemSwitch=0，其余（含运行模式）为 -1', async () => {
+  it('系统开关「关闭」（0 是明确改动）：请求发出，线上解码 systemSwitch=0，运行模式为 0（不变），其余为 -1', async () => {
     const be = fakeBackend({ '/ctrl/unified-ctrl-set': () => json({ body: encodeMessage(pb.UnifiedCtrlSetReplySchema, { success: true }) }) })
     const batch = createUnifiedBatch({
       getProjects: () => [P], send: defaultBatchSender, log: () => {},
@@ -37,6 +37,6 @@ describe('统一控制真实下发链路（defaultBatchSender + 假后端）', (
     expect(calls).toHaveLength(1)
     const body = calls[0].body as { project_id: string; body: string }
     expect(body.project_id).toBe(P.id)
-    expect(decodeReply(pb.UnifiedCtrlSetQuerySchema, body.body)).toEqual({ systemSwitch: 0, systemMode: -1, roomSwitch: -1, roomTemp: -1 })
+    expect(decodeReply(pb.UnifiedCtrlSetQuerySchema, body.body)).toEqual({ systemSwitch: 0, systemMode: 0, roomSwitch: -1, roomTemp: -1 })
   })
 })

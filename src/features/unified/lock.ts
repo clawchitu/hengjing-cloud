@@ -33,7 +33,8 @@ export function recordOf(q: WriteQuery<203>): SentRecord {
 
 /** 这次下发能不能回读核对：没改系统开关 / 运行模式，并且改了房间开关或温度 */
 export function verifiable203(t: { [k: string]: Scalar }): boolean {
-  if (t.systemSwitch !== -1 || t.systemMode !== -1) return false
+  // 运行模式不变是 0（MODE_UNCHANGED）；旧版本落盘的 -1 按「改了运行模式」处理（无法核对，锁到期释放）
+  if (t.systemSwitch !== -1 || t.systemMode !== MODE_UNCHANGED) return false
   return t.roomSwitch !== -1 || t.roomTemp !== -1
 }
 

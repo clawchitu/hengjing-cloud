@@ -141,22 +141,35 @@ describe('写操作防护', () => {
   })
 })
 
-describe('写消息最后防线 assertNoImplicitZero（不变一律 -1，0 只能来自明确的改动）', () => {
+describe('写消息最后防线 assertNoImplicitZero（数值字段不变 -1，0 只能来自明确的改动；203 运行模式枚举不变是 0）', () => {
   const none = new Set<string>()
-  it('203 / 批量统一控制：运行模式为 0 一律拒发，即使登记为明确给出', () => {
+  it('203 / 批量统一控制：运行模式为 -1（枚举外，#60 的写法）一律拒发，即使登记为明确给出', () => {
+    const q = { systemSwitch: -1, systemMode: -1, roomSwitch: 1, roomTemp: -1 }
+    for (const op of ['ctrl-203', 'unified-ctrls-send'] as const) {
+      expect(() => assertNoImplicitZero(op, q, new Set(['roomSwitch', 'systemMode']))).toThrow(/运行模式为 -1/)
+      expect(() => assertNoImplicitZero(op, q, new Set(['roomSwitch']))).toThrow(/运行模式为 -1/)
+    }
+  })
+  it('203 / 批量统一控制：运行模式为 0（OPERATION_MODE_NONE = 不变）放行，不论是否登记为明确给出', () => {
     const q = { systemSwitch: -1, systemMode: 0, roomSwitch: 1, roomTemp: -1 }
     for (const op of ['ctrl-203', 'unified-ctrls-send'] as const) {
-      expect(() => assertNoImplicitZero(op, q, new Set(['roomSwitch', 'systemMode']))).toThrow(/运行模式为 0/)
+      expect(() => assertNoImplicitZero(op, q, new Set(['roomSwitch']))).not.toThrow()
+      expect(() => assertNoImplicitZero(op, q, new Set(['roomSwitch', 'systemMode']))).not.toThrow()
     }
-    expect(() => assertNoImplicitZero('ctrl-203', { ...q, systemMode: -1 }, new Set(['roomSwitch']))).not.toThrow()
   })
-  it('203 / 批量统一控制：枚举外的运行模式（1、7、-2）拒发；-1 和界面可选的全部模式能发', () => {
+  it('运行模式的 0 例外只对 203 的 systemMode：203 其余字段、其他消息的 0 照旧拒发', () => {
+    expect(() => assertNoImplicitZero('ctrl-203', { systemSwitch: 0, systemMode: 0, roomSwitch: -1, roomTemp: -1 }, none)).toThrow(/systemSwitch/)
+    expect(() => assertNoImplicitZero('unified-ctrls-send', { systemSwitch: -1, systemMode: 0, roomSwitch: 0, roomTemp: -1 }, none)).toThrow(/roomSwitch/)
+    expect(() => assertNoImplicitZero('ctrl-201', { equipmentId: 1, systemMode: 0, temperature: 26, humidity: -1, windSpeed: -1, eco: -1, switch: -1, endModes: [] }, new Set(['equipmentId', 'temperature']))).toThrow(/systemMode/)
+  })
+  it('203 / 批量统一控制：枚举外的运行模式（1、7、-2）拒发；0 和界面可选的全部模式能发', () => {
     const q = (systemMode: number) => ({ systemSwitch: -1, systemMode, roomSwitch: -1, roomTemp: 26 })
     const given = new Set(['roomTemp', 'systemMode'])
     for (const op of ['ctrl-203', 'unified-ctrls-send'] as const) {
       for (const m of [1, 7, -2, 99, 101]) expect(() => assertNoImplicitZero(op, q(m), given), `${op} ${m}`).toThrow(/不是可选的模式/)
       for (const o of MODE_OPTIONS) expect(() => assertNoImplicitZero(op, q(o.value), given), `${op} ${o.label}`).not.toThrow()
-      expect(() => assertNoImplicitZero(op, q(-1), new Set(['roomTemp']))).not.toThrow()
+      expect(() => assertNoImplicitZero(op, q(0), new Set(['roomTemp']))).not.toThrow()
+      expect(() => assertNoImplicitZero(op, q(-1), new Set(['roomTemp']))).toThrow(/运行模式为 -1/)
     }
   })
   it('界面的 MODE_OPTIONS 与写入口的可选模式集合 OPERATING_MODES 完全一致', () => {

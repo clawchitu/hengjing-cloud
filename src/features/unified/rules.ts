@@ -1,11 +1,11 @@
 // 统一控制的规则与校验（纯函数，不发请求）。
 // - app_code 决定温度设定是否可用：1 可用；8、12 不可用；其他/缺失按不可用处理（白名单）。
 // - 项目离线不允许下发。
-// - 组装 203 Query 一律走 ctrl.ts 的 buildUnifiedCtrlSet()：不改的开关、运行模式、温度一律填 -1（后端 11/25「不变一律传 -1」）。
-//   运行模式 0 不是「不变」：界面没有这个选项，传进来按无效拒绝（11/25 00:20 的 203 传了 0，现场反馈系统模式变成「关闭」）。
+// - 组装 203 Query 一律走 ctrl.ts 的 buildUnifiedCtrlSet()：不改的开关、温度填 -1；不改的运行模式填 0（枚举 OPERATION_MODE_NONE「不变」，
+//   11/25 真机确认）。运行模式 -1 不在枚举里（传 -1 后端报 unknown enum、504、没执行），传进来按无效拒绝。
 import { buildUnifiedCtrlSet, MODE_UNCHANGED, type WriteQuery } from '@/api/ctrl'
 import { UnifiedCtrlSetQuery_OperatingMode as Mode } from '@/api/gen/ctrl200_pb.js'
-import { hasChanges, OPERATING_MODES, UNCHANGED } from '@/api/values'
+import { isSendableMode, OPERATING_MODES, UNCHANGED } from '@/api/values'
 import {
   DEFAULT_TEMP_RANGE, MODE_OPTIONS, SWITCH_OFF, SWITCH_ON, TEMP_DISABLED_APP_CODES, TEMP_ENABLED_APP_CODES, TEXT,
   type SwitchValue, type TempRange,
@@ -81,7 +81,7 @@ export interface Issue { code: IssueCode; message: string }
 
 export type Validation = { ok: true; query: WriteQuery<203> } | { ok: false; errors: string[]; issues: Issue[] }
 
-/** 下发前的完整校验，通过时给出组装好的 203 Query（不改的字段全是 -1） */
+/** 下发前的完整校验，通过时给出组装好的 203 Query（不改的开关、温度为 -1，运行模式为 0） */
 export function validateUnified(draft: UnifiedDraft, ctx: UnifiedContext | null | undefined): Validation {
   const issues: Issue[] = []
   const add = (code: IssueCode, message: string) => { issues.push({ code, message }) }
@@ -92,7 +92,7 @@ export function validateUnified(draft: UnifiedDraft, ctx: UnifiedContext | null 
   const d = draft ?? {}
   if (d.systemSwitch !== undefined && !isSwitch(d.systemSwitch)) add('BAD_SWITCH', TEXT.badSwitch(TEXT.systemSwitch))
   if (d.roomSwitch !== undefined && !isSwitch(d.roomSwitch)) add('BAD_SWITCH', TEXT.badSwitch(TEXT.roomSwitch))
-  // 不改运行模式就不给这一项（或给 -1）；0 不在可选模式里，按无效拒绝
+  // 不改运行模式就不给这一项（或给 0 = MODE_UNCHANGED）；-1 和其他枚举外的值按无效拒绝
   if (d.systemMode !== undefined && d.systemMode !== MODE_UNCHANGED && !MODE_VALUES.has(d.systemMode)) add('BAD_MODE', TEXT.badMode)
   if (d.roomTemp !== undefined) {
     const avail = tempAvailability(ctx.appCode)
@@ -111,8 +111,7 @@ export function validateUnified(draft: UnifiedDraft, ctx: UnifiedContext | null 
     roomSwitch: d.roomSwitch,
     roomTemp: d.roomTemp,
   })
-  const changed = hasChanges(query, ['systemSwitch', 'systemMode', 'roomSwitch', 'roomTemp'] as const)
-  if (!changed) add('NO_CHANGES', TEXT.noChanges)
+  if (!changedFields(query).length) add('NO_CHANGES', TEXT.noChanges)
 
   return issues.length ? fail() : { ok: true, query }
 }
@@ -155,9 +154,22 @@ export const ECHO_FIELDS: readonly EchoField[] = ['systemSwitch', 'systemMode', 
  */
 export interface EchoMismatch { field: EchoField; kind: 'missing' | 'differ' | 'unreadable'; message: string }
 
-/** 本次下发改了哪些字段（-1 的不算） */
+/** 203 某个字段是不是「不变」：运行模式是枚举，不变是 0（MODE_UNCHANGED）；开关、温度不变是 -1 */
+export const isUnchanged203 = (k: EchoField, v: number): boolean => v === (k === 'systemMode' ? MODE_UNCHANGED : UNCHANGED)
+
+/**
+ * 本标签页存下的 203 Query（统一控制结果行的锁引用）能不能用：四个字段都是有限数，运行模式只能是 0（不变）或可选模式。
+ * 旧版本（#60）存下的 systemMode = -1 按不合规丢掉
+ */
+export function isStoredQuery203(q: unknown): q is WriteQuery<203> {
+  if (!q || typeof q !== 'object') return false
+  const o = q as Record<string, unknown>
+  return ECHO_FIELDS.every((k) => typeof o[k] === 'number' && Number.isFinite(o[k])) && isSendableMode(o.systemMode)
+}
+
+/** 本次下发改了哪些字段（不变的不算：运行模式 0，其余 -1） */
 export function changedFields(q: WriteQuery<203>): EchoField[] {
-  return ECHO_FIELDS.filter((k) => q[k] !== UNCHANGED)
+  return ECHO_FIELDS.filter((k) => !isUnchanged203(k, q[k]))
 }
 
 const FIELD_LABEL: Record<EchoField, string> = { systemSwitch: TEXT.systemSwitch, systemMode: TEXT.systemMode, roomSwitch: TEXT.roomSwitch, roomTemp: TEXT.roomTemp }

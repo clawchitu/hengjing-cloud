@@ -30,7 +30,7 @@ import * as api from '../api'
 import { attachEvidence, endOf, lockKeysOf, lockOf, writeLockTtl, type VerifyResult, lockVersion, onForceReread, OTHER_ACCOUNT_TEXT, subscribe as subscribeLock } from '../api/writeLock'
 import {
   clampTemp, LOCK_BUSY_TEXT, lockTargetOf, rereadHits, MODE_OPTIONS, readUnifiedSnapshot, resolveTempRange, TEXT, tempAvailability, unifiedAppCode, useUnifiedBatch,
-  fieldResults, overallOf, resultTitle,
+  fieldResults, isStoredQuery203, overallOf, resultTitle,
   type BatchRow, type FieldStatus, type RowStatus, type UnifiedDraft, type UnifiedSnapshot,
 } from '../features/unified'
 
@@ -203,7 +203,8 @@ const isRow = (r: unknown): r is ResultRow => {
 const isLockRef = (l: unknown): l is ResultRow['lock'] => {
   const x = l as { key?: unknown; exp?: unknown; projectId?: unknown; query?: Record<string, unknown> | null; replied?: unknown } | null
   return !!x && typeof x.key === 'string' && Number.isFinite(x.exp) && typeof x.projectId === 'string' && typeof x.replied === 'boolean'
-    && !!x.query && ['systemSwitch', 'systemMode', 'roomSwitch', 'roomTemp'].every((k) => Number.isFinite(x.query![k]))
+    // 运行模式只认 0（不变）和可选模式：旧版本（#60）存下的 -1 丢掉锁引用，不按它显示「运行模式：-1」
+    && isStoredQuery203(x.query)
 }
 function readLast(key: string | null): ResultRow[] | null {
   if (!key) return null

@@ -255,7 +255,7 @@ export function createUnifiedBatch(deps: BatchDeps) {
     if (!got.ok) return Promise.reject(new ApiError('write_blocked', got.busy.owner === 'other-account' ? OTHER_ACCOUNT_TEXT : LOCK_BUSY_TEXT))
     const token = got.token
     e.token = token
-    // 核对数据发送前先查（203 运行模式为 0 等）：不合规就不发，放锁
+    // 核对数据发送前先查（203 运行模式为 -1 等枚举外的值）：不合规就不发，放锁
     const record = recordOf(q)
     const bad = checkSentRecord(record)
     if (bad) { settle(token, 'fail'); return Promise.reject(new ApiError('write_blocked', bad)) }
