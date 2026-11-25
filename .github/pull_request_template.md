@@ -23,6 +23,7 @@
 - [ ] `npm run e2e`（Playwright 官方镜像内截图对比）
 - [ ] CI 全绿，且已 rebase 到最新 main
 - [ ] 自审（新上下文子 agent 按 REVIEW.md 审过自己的 diff）
+- [ ] 本 PR 的验收标准已由哪些测试覆盖（列出测试名）：
 
 ## 真实环境记录（高风险 PR 必填）
 
