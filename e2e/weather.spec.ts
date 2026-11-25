@@ -201,6 +201,23 @@ test.describe('天气城市选择', () => {
     await expect(sel).toBeInViewport({ ratio: 1 })
   })
 
+  test('需要滚动的城市（凉山）：退格回省份列表高亮四川省（不是第一项）；进入最后一个省（新疆）高亮它的第一个市', async ({ page }) => {
+    await useLiangshan(page)
+    await trigger(page).focus()
+    await page.keyboard.press('ArrowDown')
+    await tick(page, 100)
+    await page.keyboard.press('Backspace')
+    await tick(page, 100)
+    const sel = page.locator('[cmdk-item][aria-selected="true"]')
+    await expect(page.locator('[cmdk-list]')).toHaveAccessibleName('省份')
+    await expect(sel).toHaveText('四川省')
+    await option(page, '新疆维吾尔自治区').click()
+    await tick(page, 100)
+    await expect(page.locator('[cmdk-list]')).toHaveAccessibleName('新疆维吾尔自治区')
+    await expect(sel).not.toHaveAccessibleName(/^返回省份列表/)
+    await expect(sel).toHaveText(/乌鲁木齐/)
+  })
+
   test('当前城市是直辖市：打开直接显示省份列表并高亮它；省份项标明直接选中 / 进入下一级；搜索后清空高亮恢复', async ({ page }) => {
     await page.evaluate(() => localStorage.setItem('hjc-weather-city:mock:cosyhome', '{"code":"310000"}'))
     await page.reload()

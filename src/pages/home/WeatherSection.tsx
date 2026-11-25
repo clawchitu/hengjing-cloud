@@ -58,6 +58,20 @@ export function CityPicker({ city, onPick }: { city: City; onPick: (code: string
   /** 不搜索时当前视图的默认高亮：省的城市列表里是当前城市（不在这个省就是第一个市），省份列表里是当前城市所在的省 */
   const defaultHl = prov ? (prov.cities.some((c) => c.code === city.code) ? city.code : prov.cities[0].code) : provinceHl
 
+  // 程序化换了视图后的高亮：被高亮的那项卸载时，cmdk 会把高亮改成新列表的第一项（本次提交的 layout 阶段，晚于 setHl）。
+  // 换视图后的两帧内（want 非空），高亮不是目标值就设回去；用户按键（含退格返回）、再输入搜索词、进入 / 返回都会重新设定或终止
+  const want = useRef<string | null>(null)
+  const wantGen = useRef(0)
+  const arm = (target: string) => {
+    want.current = target
+    setHl(target)
+    const gen = ++wantGen.current
+    requestAnimationFrame(() => requestAnimationFrame(() => { if (wantGen.current === gen) want.current = null }))
+  }
+  useEffect(() => {
+    if (want.current !== null && !searching && hl !== want.current) setHl(want.current)
+  }, [hl, searching])
+
   const show = () => {
     const p = provinceOf(city.code)
     lastView.current = ''; scrolled.current = ''; anchor.current = ''
@@ -67,27 +81,17 @@ export function CityPicker({ city, onPick }: { city: City; onPick: (code: string
   }
   const pick = (c: City) => { setOpen(false); if (c.code !== city.code) onPick(c.code) }
   const enter = (p: Province) => {
-    restore.current = false
     if (isSingleCity(p)) { pick(p.cities[0]); return }
     setProv(p)
-    setHl(p.cities.some((c) => c.code === city.code) ? city.code : p.cities[0].code)
+    arm(p.cities.some((c) => c.code === city.code) ? city.code : p.cities[0].code)
     inputRef.current?.focus()
   }
   const back = () => {
-    restore.current = false
     const from = prov
     setProv(null)
-    setHl(from ? PROV + from.code : '')
+    arm(from ? PROV + from.code : '')
     inputRef.current?.focus()
   }
-
-  // 搜索清空回到列表：搜索结果里被高亮的那项卸载时，cmdk 会把高亮改成第一项（在本次提交的 layout 阶段，晚于 onChange 里的 setHl）。
-  // 清空后的两帧内（restore 为真），高亮不是默认高亮就设回去；用户按键动了高亮就不再恢复
-  const restore = useRef(false)
-  const restoreGen = useRef(0)
-  useEffect(() => {
-    if (restore.current && !searching && hl !== defaultHl) setHl(defaultHl)
-  }, [hl, defaultHl, searching])
 
   const hlNow = useRef(hl)
   const viewNow = useRef(view)
@@ -189,16 +193,11 @@ export function CityPicker({ city, onPick }: { city: City; onPick: (code: string
               onChange={(e) => {
                 const v = e.target.value
                 setQ(v)
-                if (v.trim()) { restore.current = false; setHl(searchCities(v)[0]?.city.code ?? '') }
-                else {
-                  restore.current = true
-                  setHl(defaultHl)
-                  const gen = ++restoreGen.current
-                  requestAnimationFrame(() => requestAnimationFrame(() => { if (restoreGen.current === gen) restore.current = false }))
-                }
+                if (v.trim()) { want.current = null; setHl(searchCities(v)[0]?.city.code ?? '') }
+                else arm(defaultHl)
               }}
               onKeyDown={(e) => {
-                restore.current = false // 用户自己动了高亮（含退格返回），不再恢复
+                want.current = null // 用户自己动了高亮，不再恢复
                 if (e.key === 'Home' || e.key === 'End') e.stopPropagation()
                 if (e.key === 'Backspace' && !q && prov) { e.preventDefault(); back() }
               }}
