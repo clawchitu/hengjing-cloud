@@ -28,12 +28,14 @@ export interface RuntimeConfig {
 export interface Features {
   /** 'off'：新风运行设置面板只读（写防护照常生效，这个开关只管界面） */
   freshAirWrite: 'on' | 'off'
-  /** 204 里用户没改的字段怎么传：'echo' 带回确认后新读的 210；'minus1' 传 -1 */
-  freshAir204Unchanged: 'echo' | 'minus1'
-  /** 202 的 filter_life 与 filter_life_p 是否对调着读 */
-  freshAirFilterSwapped: boolean
-  /** 滤网寿命的红、橙色和「请尽快更换」提示 */
+  /** 滤网寿命的红、橙色和「请尽快更换」提示（阈值按 filter_life_p 的比例算，见 src/features/freshAir/filter.ts） */
   freshAirFilterWarn: boolean
+  /**
+   * 200 里的房间开关是否可信（后端 11/25 答复第 1 条：控制屏没上报房间状态，读到的是默认值 0，后端会修；修好后改成 true）。
+   * false 时：房间开关显示「未知」、核对开关一律无法核对、不拿它禁用温度和节能（温控「房间关着只能开房间」、统一控制「房间全关」）。
+   * 只管真实接口；演示数据的房间开关是真实的，按 true 处理（见 roomSwitchReported()）
+   */
+  roomSwitchReported: boolean
   /** 候选城市是否用 /wx/city-list 过滤：'auto' 调用成功且非空才取交集；'intersect' 严格取交集；'none' 不调 */
   weatherCityFilter: 'auto' | 'intersect' | 'none'
   /** /weather 失败时用 /weather24 最近一小时顶替实时数据 */
@@ -42,9 +44,8 @@ export interface Features {
 
 export const FEATURE_DEFAULTS: Readonly<Features> = Object.freeze({
   freshAirWrite: 'on',
-  freshAir204Unchanged: 'echo',
-  freshAirFilterSwapped: false,
-  freshAirFilterWarn: false,
+  freshAirFilterWarn: true,
+  roomSwitchReported: false,
   weatherCityFilter: 'auto',
   weatherNowFallback: true,
 })
@@ -53,9 +54,8 @@ const isBool = (v: unknown): v is boolean => typeof v === 'boolean'
 const oneOf = <T extends string>(...xs: T[]) => (v: unknown): v is T => typeof v === 'string' && (xs as string[]).includes(v)
 const FEATURE_VALID: { [K in keyof Features]: (v: unknown) => v is Features[K] } = {
   freshAirWrite: oneOf('on', 'off'),
-  freshAir204Unchanged: oneOf('echo', 'minus1'),
-  freshAirFilterSwapped: isBool,
   freshAirFilterWarn: isBool,
+  roomSwitchReported: isBool,
   weatherCityFilter: oneOf('auto', 'intersect', 'none'),
   weatherNowFallback: isBool,
 }
@@ -166,6 +166,11 @@ export function setConfig(patch: Input | null): RuntimeConfig {
   current = patch ? resolveConfig([patch]) : null
   return getConfig()
 }
+
+/**
+ * 200 的房间开关能不能用（features.roomSwitchReported；演示数据模式恒为 true）。核对、禁用规则、界面显示都只认这一个判断
+ */
+export const roomSwitchReported = () => isMockMode() || getConfig().features.roomSwitchReported === true
 
 /** 演示数据模式。交付包里恒为 false；需要在打包时剔除的演示代码另用 __HJC_MOCK__ 直接判断（函数调用不会被常量折叠） */
 export const isMockMode = () => __HJC_MOCK__ && getConfig().dataSource === 'mock'
