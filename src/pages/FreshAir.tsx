@@ -471,7 +471,9 @@ function SettingsPanel(props: PanelProps) {
   )
 }
 
-const CLEARED_TEXT = { gone: '已读不到这台设备的运行设置', blocked: '已不能设置（设备或项目离线、读取失败、该项已不可设置）', applied: '' }
+const CLEARED_TEXT = { gone: '已读不到这台设备的运行设置', blocked: '已不能设置（设备或项目离线、该项已不可设置）', applied: '' }
+/** 暂时没有新鲜读数（加载中、读取失败还没有读数、服务暂不可用）：不整理草稿，等下一次读取成功；读取失败但有旧读数（staleError）由 reconcileDraft 保留草稿 */
+const TRANSIENT = new Set<SettingsState['kind']>(['loading', 'error', 'unavailable'])
 
 export default function FreshAir() {
   const { project } = useCurrentProject()
@@ -521,7 +523,8 @@ export default function FreshAir() {
     prevLock.current = lockKey
   }, [lockKey, refetch])
 
-  // 草稿生命周期：回读后读不到 / 不能设置 / 已生效的草稿真正清除（只整理当前选中设备的草稿；待确认期间不整理）。
+  // 草稿生命周期：回读后读不到 / 不能设置 / 已生效的草稿真正清除（只整理当前选中设备的草稿；待确认期间不整理；
+  // 读取失败、加载中只禁用下发、保留草稿，见 TRANSIENT 与 reconcileDraft）。
   // 读数变化后在渲染时直接写回整理结果（React「随输入调整状态」的做法，有条件、只在草稿确实变化时），清除原因记在状态里，
   // 由下面的 effect 提示一次（effect 里不改状态）
   const draftOnSelected = !!rawDraft && u?.deviceId === rawDraft.deviceId
@@ -529,7 +532,7 @@ export default function FreshAir() {
     let next: FaDraft | null = rawDraft
     let note = ''
     if (view.kind === 'ready' && !units.some((x) => x.deviceId === rawDraft.deviceId)) { next = null; note = `新风设备${CLEARED_TEXT.gone}，未下发的修改已清除` }
-    else if (draftOnSelected && settings.kind !== 'loading') {
+    else if (draftOnSelected && !TRANSIENT.has(settings.kind)) {
       const r = reconcileDraft(rawDraft, s, ctx)
       next = r.draft
       if (r.cleared === 'gone' || r.cleared === 'blocked') note = `「${u?.name || '新风设备'}」${CLEARED_TEXT[r.cleared]}，未下发的修改已清除`

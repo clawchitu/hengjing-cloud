@@ -5,7 +5,7 @@ import { decodeReply, encodeMessage } from '@/api/ctrl'
 import { ApiError } from '@/api/errors'
 import * as pb from '@/api/gen/ctrl200_pb.js'
 import {
-  buildRoomSet, buildRoomSwitch, canStep, describeChanges, describeResult, draftChanges, editBlock, editDraft, endModesFor, newDraft, reconcileDraft,
+  buildRoomSet, buildRoomSwitch, canStep, describeChanges, describeResult, draftChanges, editBlock, editDraft, endModesFor, newDraft, reconcileDraft, STALE_TEXT,
   resolveTempRange, stepTemp, switchBlock, tempBlock, type RoomDraft,
 } from '../edit'
 import { classify } from '../writes'
@@ -69,7 +69,7 @@ describe('不能设置的情况', () => {
   it('面板未连接、项目离线、最近一次读取失败：都不能设置，开关也不行', () => {
     expect(editBlock(room({ connected: false }), OK)).toMatch(/面板离线/)
     expect(editBlock(room(), { online: false, fresh: true })).toMatch(/项目离线/)
-    expect(editBlock(room(), { online: true, fresh: false })).toMatch(/读取面板失败/)
+    expect(editBlock(room(), { online: true, fresh: false })).toBe(STALE_TEXT)
     expect(switchBlock(room({ connected: false }), OK)).toMatch(/面板离线/)
     expect(buildRoomSwitch(room(), true, { online: true, fresh: false }).ok).toBe(false)
   })
@@ -123,12 +123,23 @@ describe('节能模式下温度由系统设定', () => {
 })
 
 describe('草稿生命周期（回读后整理）', () => {
-  it('房间不在 / 关闭 / 面板离线 / 读取失败：清除', () => {
+  it('房间不在 / 关闭 / 面板离线 / 项目离线：清除', () => {
     const d = draft({ temp: 24 })
     expect(reconcileDraft(d, undefined, OK)).toMatchObject({ draft: null, cleared: 'gone' })
     expect(reconcileDraft(d, room({ on: false }), OK)).toMatchObject({ draft: null, cleared: 'blocked' })
     expect(reconcileDraft(d, room({ connected: false }), OK)).toMatchObject({ draft: null, cleared: 'blocked' })
-    expect(reconcileDraft(d, room(), { online: true, fresh: false })).toMatchObject({ draft: null, cleared: 'blocked' })
+    expect(reconcileDraft(d, room(), { online: false, fresh: true })).toMatchObject({ draft: null, cleared: 'blocked' })
+    expect(reconcileDraft(d, room(), { online: false, fresh: false })).toMatchObject({ draft: null, cleared: 'blocked' })
+  })
+  it('最近一次读取失败（暂时没有新鲜读数）：草稿保留，只是不能下发；真正不能设置的照旧清除', () => {
+    const d = draft({ temp: 24 })
+    const stale = { online: true, fresh: false }
+    expect(reconcileDraft(d, room(), stale)).toEqual({ draft: d, conflict: [] })
+    expect(buildRoomSet(room(), d, stale, R)).toEqual({ ok: false, reason: STALE_TEXT })
+    expect(reconcileDraft(d, room({ connected: false }), stale)).toMatchObject({ draft: null, cleared: 'blocked' })
+    expect(reconcileDraft(d, room({ on: false }), stale)).toMatchObject({ draft: null, cleared: 'blocked' })
+    expect(reconcileDraft(d, room(), OK)).toEqual({ draft: d, conflict: [] }) // 恢复后照常整理、可下发
+    expect(buildRoomSet(room(), d, OK, R).ok).toBe(true)
   })
   it('回读值与草稿一致的项去掉，全一致则清除', () => {
     const d = draft({ temp: 24, eco: 1 })

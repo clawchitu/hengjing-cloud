@@ -7,6 +7,7 @@
 // - 草稿与读数分开：草稿只记用户动过的项（values）和开始编辑时的读数（base，用于发现外部修改）。
 // 可改项（editBlock，逐项）：
 //   1. 面板整体只读（panelBlock）：features.freshAirWrite = 'off'、没有 204 权限、项目离线、最近一次读取失败、设备未连接；
+//      其中「最近一次读取失败」只禁用编辑和下发、不清草稿（见 reconcileDraft）；
 //   2. 读数上不能设置（fieldBlock：-1、无效读数、control_type 连带）；
 //   3. 设备开关为关（读数或草稿）：只能改开关（方案 A7，照 201）；开关读数不可设置 / 无效时不按关处理；
 //   4. can_change = false：控制类型不可切换；
@@ -31,7 +32,7 @@ export interface FaCtx { online: boolean; fresh: boolean; connected: boolean; wr
 export const TEXT_WRITE_OFF = '运行设置下发暂未开放，当前仅显示设备读到的设置'
 export const TEXT_WRITE_FORBIDDEN = '当前账号没有下发运行设置的权限，当前仅显示设备读到的设置'
 export const TEXT_OFFLINE = '项目离线，不能设置'
-export const TEXT_STALE = '最近一次读取运行设置失败，不能设置'
+export const TEXT_STALE = '运行设置读数暂时获取失败，恢复后可下发'
 export const TEXT_DISCONNECTED = '设备未连接，不能设置'
 export const TEXT_DEVICE_OFF = '设备已关闭，请先开启再设置'
 export const TEXT_CT_LOCKED = '该设备的控制类型不可切换'
@@ -119,11 +120,14 @@ export interface Reconciled {
 
 /**
  * 草稿生命周期（每次回读后调用）：设备不在 / 面板只读 / 改动项变得不能改 → 清除；读数已等于草稿的项去掉，全去掉则清除；
- * 剩下的项里读数与开始编辑时的基准不同 → 冲突
+ * 剩下的项里读数与开始编辑时的基准不同 → 冲突。
+ * 最近一次读取失败（ctx.fresh = false，读数是上一次成功的那份）只是暂时没有新鲜读数：不据此清草稿，
+ * 下发由 panelBlock / build204 拦住（TEXT_STALE）；下一次读取成功再按上面的规则整理
  */
 export function reconcileDraft(d: FaDraft | null, s: SettingsView | null | undefined, ctx: FaCtx): Reconciled {
   if (!d) return { draft: null, conflict: [] }
   if (!s || s.deviceId !== d.deviceId) return { draft: null, cleared: 'gone', conflict: [] }
+  ctx = { ...ctx, fresh: true }
   if (panelBlock(ctx)) return { draft: null, cleared: 'blocked', conflict: [] }
   const values: Values204 = {}
   for (const f of FIELDS_204) {

@@ -304,10 +304,10 @@ function RoomCard({ room: r, ctx, range, selected, onSelect, draft, conflict, on
         </div>
       ) : dirty ? (
         <div className="te-bar pending" onClick={(e) => e.stopPropagation()}>
-          <span>待下发：<b className="num">{describeChanges(changes)}</b></span>
+          <span>待下发：<b className="num">{describeChanges(changes)}</b>{block && <span className="faint" data-block="">（{block}）</span>}</span>
           <span className="row">
             <Button onClick={onDiscard} disabled={isBusy}>取消</Button>
-            <Button variant="primary" onClick={() => void send()} disabled={isBusy || !!block}>下发</Button>
+            <Button variant="primary" onClick={() => void send()} disabled={isBusy || !!block} title={block ?? undefined}>下发</Button>
           </span>
         </div>
       ) : null}
@@ -401,7 +401,7 @@ function Empty({ project, title, children, lockBar }: { project: Project; title:
   )
 }
 
-const CLEARED_TEXT = { gone: '已不在面板列表里', blocked: '已不能设置（房间关闭、面板或项目离线、读取失败）', applied: '' }
+const CLEARED_TEXT = { gone: '已不在面板列表里', blocked: '已不能设置（房间关闭、面板或项目离线）', applied: '' }
 
 export default function Thermostat() {
   const { project } = useCurrentProject()
