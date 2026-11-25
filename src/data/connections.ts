@@ -97,19 +97,6 @@ export function filterConn(rows: readonly ConnRow[], f: ConnFilter): ConnRow[] {
 /** 百分比（一位小数）；总数为 0 时为 null */
 export const pct = (part: number, total: number) => (total > 0 ? (part / total * 100).toFixed(1) : null)
 
-/**
- * 项目的连接端：控制屏（control_screen_id）、DTU（dtu_id），只列有值的。
- * 项目在线判定（接口文档 4）：有 DTU 且 DTU 在线，或控制屏在线。
- */
-export function linksOf(p: Pick<Project, 'controlScreenId' | 'dtuId'> | null | undefined): { label: string; id: string }[] {
-  const out: { label: string; id: string }[] = []
-  const cs = typeof p?.controlScreenId === 'string' ? p.controlScreenId.trim() : ''
-  const dtu = typeof p?.dtuId === 'string' ? p.dtuId.trim() : ''
-  if (cs) out.push({ label: '控制屏', id: cs })
-  if (dtu) out.push({ label: 'DTU', id: dtu })
-  return out
-}
-
 export interface DeviceSummary {
   rows: ConnRow[]
   /** loading：还没拿到过数据；error：从没拿到过数据就失败了；success：有数据（可能是上一次的） */

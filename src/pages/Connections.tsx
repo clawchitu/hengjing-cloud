@@ -2,7 +2,7 @@
 // 按方案 1.2：「类型」列改为型号（205 的 model）；KPI 由前端按 conn_status 统计，「最长离线时长」「丢包率」
 // 接口无此字段，去掉；网关 IP / 延迟 / 运行时长无来源，页头只显示项目的控制屏 / DTU 编号。
 // 「立即检测」就是立刻重新读一次 205（只读，与 30 秒轮询同一个请求），不触发任何下发。
-import { Fragment, useState, type ReactNode } from 'react'
+import { useState, type ReactNode } from 'react'
 import { faLock, faPlugCircleXmark, faSatelliteDish, faTriangleExclamation } from '@fortawesome/free-solid-svg-icons'
 import type { IconDefinition } from '@fortawesome/fontawesome-svg-core'
 import { Icon, Pager, Seg } from '../components/legacy'
@@ -13,7 +13,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { useApp } from '../app/store'
 import { defaultText } from '../api/errors'
 import { useCurrentProject } from '../data/org'
-import { CONN_STATUS_TEXT, connCounts, filterConn, linksOf, pct, useDeviceSummary, type ConnFilter, type ConnStatus } from '../data/connections'
+import { CONN_STATUS_TEXT, connCounts, filterConn, pct, useDeviceSummary, type ConnFilter, type ConnStatus } from '../data/connections'
 
 const SIZE = 7
 
@@ -53,7 +53,6 @@ export default function Connections() {
 
   const rows = sum.rows
   const c = connCounts(rows)
-  const links = linksOf(project)
   const offlineScreen = sum.error?.kind === 'unavailable'
 
   const checkNow = async () => {
@@ -69,9 +68,8 @@ export default function Connections() {
 
   const head = (
     <div className="page-head">
-      <div><h1>设备连接状态</h1><div className="sub">{project.name}
-        {links.map((l) => <Fragment key={l.label}><span className="sep">·</span>{l.label} <span className="num">{l.id}</span></Fragment>)}
-        <span className="sep">·</span>每 30 秒检测一次</div></div>
+      {/* 不显示 control_screen_id / dtu_id（S13 走查 P6：control_screen_id 是型号 id、不是屏号，多个项目共用同一个值） */}
+      <div><h1>设备连接状态</h1><div className="sub">{project.name}<span className="sep">·</span>每 30 秒检测一次</div></div>
       {sum.permitted && <Button variant="primary" onClick={checkNow} disabled={sum.fetching} aria-busy={sum.fetching}><Icon icon={faSatelliteDish} />立即检测</Button>}
     </div>
   )

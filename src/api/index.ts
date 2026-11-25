@@ -138,7 +138,7 @@ export async function applyFreshAir(projectId: string, id: string, patch: Partia
 // connections ------------------------------------------------------------
 /** 演示数据的设备连接明细；真实接口是 ctrl 205（src/data/connections.ts useDeviceSummary），不经过这里 */
 export const getConnections = (projectId: string): Promise<M.Conn[]> => delay(__HJC_MOCK__ ? G.connectionsFor(projectId) : [])
-// 网关 IP / 延迟 / 运行时长接口无此字段（方案 1.2），演示版的 getGateway 已去掉；控制屏 / DTU 编号取自项目（src/data/connections.ts linksOf）
+// 网关 IP / 延迟 / 运行时长接口无此字段（方案 1.2），演示版的 getGateway 已去掉；控制屏 / DTU 编号不上屏（S13 走查 P6）
 
 // unified control ----------------------------------------------------------------
 /** 最近一次执行结果（演示数据）。改动文档第 6 条：只有项目、项目 ID、状态、操作时间 */
