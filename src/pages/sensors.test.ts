@@ -44,7 +44,7 @@ const cst = (s: string) => Date.parse(s + '+08:00')
 const NOW = cst('2026-11-24T07:42:10')
 
 const PROJECTS = [
-  { id: 'p1-entity', code: '240829001', name: '测试项目0829', app_code: '1', online: true },
+  { id: 'p1-entity', code: '240829001', name: '测试项目0829', app_code: '1', app_version: '4.3.9', online: true },
   { id: 'p2-entity', code: '260911001', name: '独立空气系统测试', app_code: '12' },
 ]
 const GROUPS = [{ id: 'g1', code: '2', name: '五恒集成项目', distributor_id: 'D1', project_ids: ['p1-entity', 'p2-entity'] }]
@@ -105,13 +105,15 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.useRealTimers(); vi.unstubAllGlobals(); setConfig(null) })
 
 describe('请求', () => {
-  it('207 / 208 的 project_id 用项目的后端实体 id（界面显示 code）；208 的时间是毫秒、窗口为最近 24 个整点', async () => {
+  it('207 / 208 的 project_id 用项目的后端实体 id（界面不显示 code）；208 的时间是毫秒、窗口为最近 24 个整点', async () => {
     const b = backend({ '/ctrl/air-sensor-get': () => body207([KC2]), '/ctrl/air-sensor-data-hour-get': () => body208([hourRec(KC2.id, 0)]) })
     await signIn('u', 'pw', true)
     mount()
     await screen.findByText('KC2', { selector: 'b' })
     await waitFor(() => expect(b.callsTo('/ctrl/air-sensor-data-hour-get')).toHaveLength(1))
-    expect(within(document.querySelector('.page-head') as HTMLElement).getByText('240829001')).toBeTruthy()
+    expect(document.querySelector('.page-head')!.textContent).not.toContain('240829001') // S13：页头不显示项目 code 和版本号
+    expect(document.querySelector('.page-head')!.textContent).not.toContain('4.3.9')
+    expect(document.querySelector('.sensor .sh')!.textContent).not.toMatch(/\d{6,}/) // 卡片不显示传感器 ID
     const live = b.callsTo('/ctrl/air-sensor-get')[0]
     expect(live.body).toMatchObject({ project_id: 'p1-entity', body: '' })
     const hc = b.callsTo('/ctrl/air-sensor-data-hour-get')[0]
@@ -147,9 +149,9 @@ describe('数据与统计', () => {
     const card = (await screen.findByText('主卧', { selector: 'b' })).closest('.sensor') as HTMLElement
     expect(within(card).getByText('该型号无 PM2.5 / CO₂ 探头')).toBeTruthy()
     expect(within(card).queryByText('PM2.5')).toBeNull()
-    expect(screen.queryByText('平均 PM2.5')).toBeNull()
-    expect(screen.queryByText('平均 CO₂')).toBeNull()
-    expect(screen.getByText('平均 温度')).toBeTruthy()
+    expect(screen.queryByText(/^当前(平均)? PM2\.5$/)).toBeNull()
+    expect(screen.queryByText(/^当前(平均)? CO₂$/)).toBeNull()
+    expect(screen.getByText(/^当前(平均)? 温度$/)).toBeTruthy()
     await waitFor(() => expect(within(summaryTable()).getByText('温度 (°C)')).toBeTruthy())
     expect(within(summaryTable()).queryByText('PM2.5 (μg/m³)')).toBeNull()
     expect(screen.queryByRole('button', { name: 'PM2.5' })).toBeNull()
@@ -210,6 +212,8 @@ describe('数据与统计', () => {
     await screen.findByTestId('chart')
     const o = chartOption()
     expect(o.xAxis.data).toHaveLength(24)
+    // S13 P13：算出来的上下界（如 17.4）不画刻度字，免得压住「18」
+    expect((o as unknown as { yAxis: { axisLabel: object } }).yAxis.axisLabel).toMatchObject({ showMinLabel: false, showMaxLabel: false })
     expect(o.xAxis.data.at(-1)).toBe('07:00')
     const d = o.series[0].data
     expect(d.at(-1)).toMatchObject({ value: 25 })
@@ -582,9 +586,9 @@ describe('207 真实解码形状：-100 过滤，合法负值保留', () => {
     expect(within(card).queryByText('温度')).toBeNull()
     expect(within(card).queryByText('PM2.5')).toBeNull()
     expect(within(card).getByText('-3.5°')).toBeTruthy()
-    expect(screen.queryByText('平均 温度')).toBeNull()
-    expect(screen.queryByText('平均 PM2.5')).toBeNull()
-    const kpi = screen.getByText('平均 露点').closest('.kpi') as HTMLElement
+    expect(screen.queryByText(/^当前(平均)? 温度$/)).toBeNull()
+    expect(screen.queryByText(/^当前(平均)? PM2\.5$/)).toBeNull()
+    const kpi = screen.getByText(/^当前(平均)? 露点$/).closest('.kpi') as HTMLElement
     expect(kpi.querySelector('.k-val')!.textContent).toBe('-3.5°C')
     expect(document.body.textContent).not.toMatch(/-100/)
   })

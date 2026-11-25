@@ -95,8 +95,10 @@ describe('首页天气', () => {
     expect(wx().textContent).toContain('降水概率 0%')
     // 7 天：f1–f7；24 小时：只画温度
     expect(document.querySelectorAll('.week .wd')).toHaveLength(7)
-    const opt = JSON.parse(screen.getByTestId('chart').getAttribute('data-option')!) as { series: { name: string }[] }
+    const opt = JSON.parse(screen.getByTestId('chart').getAttribute('data-option')!) as { series: { name: string }[]; yAxis: { axisLabel: { showMinLabel?: boolean; showMaxLabel?: boolean } } }
     expect(opt.series.map((s) => s.name)).toEqual(['温度 °C'])
+    // S13 P13：上下界刻度字不画，免得「5°」压住「6°」
+    expect(opt.yAxis.axisLabel).toMatchObject({ showMinLabel: false, showMaxLabel: false })
   })
 
   it('/weather 500：实时块用最近一小时的小时预报顶替（隐藏湿度、露点、气压、紫外线），7 天显示不可用和重试，24 小时照常', async () => {

@@ -27,7 +27,7 @@ test.describe('新风运行设置：下发', () => {
     await p.getByRole('button', { name: '下发设置' }).click()
     await tick(page)
     const dlg = page.getByRole('alertdialog')
-    await expect(dlg).toContainText('（PRJ-10252）的「新风机 FA-01」下发：露点设定 12.0 °C → 12.5 °C，确定继续？')
+    await expect(dlg).toContainText('的「新风机 FA-01」下发：露点设定 12.0 °C → 12.5 °C，确定继续？')
     await dlg.getByRole('button', { name: '确认下发' }).click()
     await tick(page, 1500) // 演示接口的延时
     await expectToast(page, '新风机 FA-01 已生效：露点设定 12.5 °C')

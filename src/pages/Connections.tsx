@@ -15,7 +15,8 @@ import { defaultText } from '../api/errors'
 import { useCurrentProject } from '../data/org'
 import { CONN_STATUS_TEXT, connCounts, filterConn, pct, useDeviceSummary, type ConnFilter, type ConnStatus } from '../data/connections'
 
-const SIZE = 7
+// 每页 10 条：一个项目常见 8–10 台设备，一页看完（S13 走查 P9）
+const SIZE = 10
 
 function StatusBadge({ s }: { s: ConnStatus }) {
   const dot = (color?: string) => <span className="dot" style={{ width: 8, height: 8, ...(color ? { color } : {}) }} />
@@ -107,6 +108,8 @@ export default function Connections() {
           <Table>
             <TableHeader><TableRow><TableHead>设备名称</TableHead><TableHead>型号</TableHead><TableHead>地址</TableHead><TableHead>连接状态</TableHead></TableRow></TableHeader>
             <TableBody>
+              {/* 筛选后没有设备：表格里给一行空态，不只剩表头（S13 走查 P9） */}
+              {shown.length === 0 && <TableRow><TableCell colSpan={4} className="faint" style={{ textAlign: 'center', padding: '22px 0' }}>{f === '全部' ? '暂无设备' : `没有${f === '异常' ? '通讯异常' : f}的设备`}</TableCell></TableRow>}
               {shown.map((r) => (
                 <TableRow key={r.key} className={r.status === 'offline' ? 'st-off' : r.status === 'error' ? 'st-err' : ''}>
                   <TableCell style={{ fontWeight: 500 }} className="num">{r.name}</TableCell><TableCell>{r.model}</TableCell><TableCell className="num">{r.address}</TableCell>

@@ -33,22 +33,23 @@ export const SWITCH_ON = 1
 export const SWITCH_OFF = 0
 export type SwitchValue = typeof SWITCH_ON | typeof SWITCH_OFF
 
-/** 运行模式选项（不含 0「不变」）。Q6③ 还没答复开放哪些，先列全部 14 个 */
+/** 运行模式选项（不含 0「不变」）。Q6③ 还没答复开放哪些，先列全部 14 个。
+ * 名称去掉末尾「模式」二字，按钮里不换行（S13 走查 C）；13 是「冷热过渡」，proto 注释写的「过度」是错字（S13 走查 P8） */
 export const MODE_OPTIONS: ReadonlyArray<{ value: Mode; label: string }> = [
-  { value: Mode.OPERATION_MODE_SUMMER, label: '夏季模式' },
-  { value: Mode.OPERATION_MODE_WINTER, label: '冬季模式' },
-  { value: Mode.OPERATION_MODE_VENTILATION, label: '通风模式' },
+  { value: Mode.OPERATION_MODE_SUMMER, label: '夏季' },
+  { value: Mode.OPERATION_MODE_WINTER, label: '冬季' },
+  { value: Mode.OPERATION_MODE_VENTILATION, label: '通风' },
   { value: Mode.OPERATION_MODE_DEHUMIDIFY, label: '除湿' },
-  { value: Mode.OPERATION_MODE_FREE_COOLING, label: '免费制冷模式' },
-  { value: Mode.OPERATION_MODE_HEATING_DEHUMIDIFY, label: '制热除湿模式' },
-  { value: Mode.OPERATION_MODE_HEATING, label: '供热模式' },
-  { value: Mode.OPERATION_MODE_HEATING_HUMIDIFY, label: '供热加湿模式' },
-  { value: Mode.OPERATION_MODE_HUMIDIFY, label: '加湿模式' },
-  { value: Mode.OPERATION_MODE_REFRIGERATION, label: '供冷模式' },
-  { value: Mode.OPERATION_MODE_REFRIGERATION_HUMIDIFY, label: '供冷加湿模式' },
-  { value: Mode.OPERATION_MODE_REFRIGERATION_DEHUMIDIFY, label: '供冷除湿模式' },
-  { value: Mode.OPERATION_MODE_REFRIGERATION_HEATING, label: '冷热过度模式' },
-  { value: Mode.OPERATION_MODE_AUTO, label: '自动模式' },
+  { value: Mode.OPERATION_MODE_FREE_COOLING, label: '免费制冷' },
+  { value: Mode.OPERATION_MODE_HEATING_DEHUMIDIFY, label: '制热除湿' },
+  { value: Mode.OPERATION_MODE_HEATING, label: '供热' },
+  { value: Mode.OPERATION_MODE_HEATING_HUMIDIFY, label: '供热加湿' },
+  { value: Mode.OPERATION_MODE_HUMIDIFY, label: '加湿' },
+  { value: Mode.OPERATION_MODE_REFRIGERATION, label: '供冷' },
+  { value: Mode.OPERATION_MODE_REFRIGERATION_HUMIDIFY, label: '供冷加湿' },
+  { value: Mode.OPERATION_MODE_REFRIGERATION_DEHUMIDIFY, label: '供冷除湿' },
+  { value: Mode.OPERATION_MODE_REFRIGERATION_HEATING, label: '冷热过渡' },
+  { value: Mode.OPERATION_MODE_AUTO, label: '自动' },
 ]
 
 /** 页面文案 */

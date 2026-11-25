@@ -133,10 +133,11 @@ describe('设备连接状态页（ctrl 205）', () => {
     expect(kpi('离线')!.textContent).toContain('2')
     expect(kpi('通讯异常')!.textContent).toContain('2')
     expect(container.textContent).not.toMatch(/最长|丢包率|NaN|undefined|网关 GW/)
-    // 第 2 页（每页 7 条）：缺省名称的行和 65536 的行
-    await act(async () => { fireEvent.click(within(container.querySelector('.pager .pages') as HTMLElement).getByRole('button', { name: '2' })) })
+    // 每页 10 条（S13 P9）：10 台设备一页显示完，没有第 2 页；最后三行是缺省名称的行和 65536 的行
+    expect(within(container.querySelector('.pager') as HTMLElement).queryByRole('button', { name: '2' })).toBeNull()
     const cells = [...container.querySelectorAll('tbody tr')].map((tr) => [...tr.querySelectorAll('td')].map((td) => td.textContent))
-    expect(cells).toEqual([
+    expect(cells).toHaveLength(10)
+    expect(cells.slice(7)).toEqual([
       ['JMWG', '网关', '218', '在线'],
       ['--', '房间面板', '13', '离线'],
       ['未初始化', '--', '--', '未知'],
@@ -159,6 +160,17 @@ describe('设备连接状态页（ctrl 205）', () => {
     expect(tableNames()).toEqual(['KC2', '空调'])
     expect([...document.querySelectorAll('tbody tr')].every((tr) => tr.className.includes('st-err'))).toBe(true)
     expect(screen.queryByText('未初始化')).toBeNull()
+  })
+
+  it('筛选后为 0 条：表格里显示空态行，不只剩表头（S13 P9）', async () => {
+    backend({ '/ctrl/device-summary-get': () => reply([ROWS[0]]) })
+    await signIn('u', 'pw', true)
+    mountAt('/connections')
+    await screen.findByText('网络HUB')
+    await act(async () => { fireEvent.click(seg('离线')) })
+    expect(tableNames()).toEqual(['没有离线的设备'])
+    await act(async () => { fireEvent.click(seg('异常')) })
+    expect(tableNames()).toEqual(['没有通讯异常的设备'])
   })
 
   it('只有 DTU 的项目：页头也不显示编号', async () => {

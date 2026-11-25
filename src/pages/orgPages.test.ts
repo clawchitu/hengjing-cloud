@@ -118,6 +118,8 @@ describe('Groups（真实数据形状）', () => {
     await act(async () => { d.release() })
     await screen.findByText('测试项目0829')
     expect(screen.getByText(/科希家研发苏州main/, { selector: '.sub' })).toBeTruthy()
+    // S13 P14：「平台」虚拟分组不算经销商
+    expect(screen.getByText(/个经销商/).textContent).toMatch(/^1 个经销商/)
   })
 })
 
@@ -212,7 +214,7 @@ function mountLayout(path: string) {
 }
 
 describe('Layout（真实数据形状）', () => {
-  it('侧栏项目切换：一个项目属于两个集成项目时两组下都有它，显示 code', async () => {
+  it('侧栏项目切换：一个项目属于两个集成项目时两组下都有它，不显示 code', async () => {
     backend()
     await signIn('u', 'pw', true)
     mountLayout('/home')
@@ -222,7 +224,9 @@ describe('Layout（真实数据形状）', () => {
     const g2 = screen.getByRole('group', { name: /单机版/ })
     expect(within(g1).getByText('测试项目0829')).toBeTruthy()
     expect(within(g2).getByText('测试项目0829')).toBeTruthy()
-    expect(within(g1).getByText('240829001')).toBeTruthy() // 在线项目显示 code，不是后端 id
+    expect(within(g1).queryByText('240829001')).toBeNull() // S13：不显示项目 code / id
+    // 侧栏「当前项目」卡片只有名称和在线状态
+    expect(screen.getByText('当前项目').closest('[role="button"]')!.textContent).not.toContain('240829001')
     expect(screen.queryByText('p1')).toBeNull()
   })
 

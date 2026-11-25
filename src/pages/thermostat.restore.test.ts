@@ -74,7 +74,7 @@ describe('刷新恢复的锁：锁提示逐字段四态', () => {
   it('混合：总标题按优先级（未变化），带计数「1 项未生效，1 项无法核对」，并逐项列出；不发写请求', async () => {
     fakeClock()
     const be = await reloadWith('admin-1', { temperature: 26, eco: 1, switch: -1 }, () => reply200([{ ...ROOM, eco: 65536 }]))
-    await screen.findByText('客厅')
+    await screen.findByText('客厅', { selector: '.room-name' })
     await runRetries()
     const bar = await waitFor(async () => { const b = await lockBar(); expect(b.querySelector('[data-lock-fields]')).toBeTruthy(); return b })
     expect(bar.textContent).toContain('：指令已下发，设备状态暂未变化（1 项未生效，1 项无法核对）')
@@ -86,7 +86,7 @@ describe('刷新恢复的锁：锁提示逐字段四态', () => {
     fakeClock()
     const { RETRY_DELAYS_MS } = await import('../api/writeLock')
     const be = await reloadWith('admin-1', { temperature: 26, eco: -1, switch: -1 }, () => reply200([ROOM]))
-    await screen.findByText('客厅')
+    await screen.findByText('客厅', { selector: '.room-name' })
     const reads = () => be.callsTo('/ctrl/room-temperature-data-get').length
     await waitFor(() => expect(reads()).toBeGreaterThanOrEqual(2)) // 页面首次读取 + 恢复锁的首次核对
     await act(async () => { await new Promise((r) => setTimeout(r, 30)) })
@@ -122,7 +122,7 @@ describe('刷新恢复的锁：锁提示逐字段四态', () => {
 
   it('别的账号的恢复锁：只见泛化提示，不列字段、不带目标', async () => {
     await reloadWith('someone-else', { temperature: 26, eco: 1, switch: -1 }, () => reply200([{ ...ROOM, eco: 65536 }]))
-    await screen.findByText('客厅')
+    await screen.findByText('客厅', { selector: '.room-name' })
     const bar = await lockBar()
     await act(async () => { await new Promise((r) => setTimeout(r, 100)) })
     expect(bar.textContent).toContain('上一账号的下发结果未知，请稍后再试或联系有权限的账号')
@@ -132,7 +132,7 @@ describe('刷新恢复的锁：锁提示逐字段四态', () => {
 
   it('恢复锁核对一致放锁后：页面重读一次 200 刷新卡片（恢复锁的核对读数不写回缓存）', async () => {
     const be = await reloadWith('admin-1', { temperature: 26, eco: -1, switch: -1 }, () => reply200([{ ...ROOM, setTemp: 26 }]))
-    await screen.findByText('客厅')
+    await screen.findByText('客厅', { selector: '.room-name' })
     await waitFor(() => expect(document.querySelector('[data-lock]')).toBeNull())
     // 页面首次读取 + 核对器读取 + 放锁后的重读
     await waitFor(() => expect(be.callsTo('/ctrl/room-temperature-data-get').length).toBeGreaterThanOrEqual(3))

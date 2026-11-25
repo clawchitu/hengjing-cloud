@@ -212,7 +212,7 @@ describe('首页统计卡与常用项目', () => {
     await waitFor(() => expect(container.querySelectorAll('.proj-card').length).toBe(2))
     const [c3, c1] = [...container.querySelectorAll('.proj-card')]
     expect(c3.textContent).toContain('科希家办公室')
-    expect(c3.textContent).toContain('221031001')
+    expect(c3.textContent).not.toContain('221031001') // S13：不显示项目 code
     expect(c3.querySelector('.pc-loc')?.textContent).toBe('五恒')
     expect(c1.querySelector('.pc-loc')?.textContent).toBe('通用版') // 没有应用类别时用应用名称
     expect(container.textContent).not.toMatch(/undefined|NaN|最后在线|ppm/)
@@ -306,13 +306,14 @@ describe('侧栏项目菜单的提示', () => {
 })
 
 describe('顶栏搜索', () => {
-  it('项目属于两个同名集成项目时，组名后面带编码区分', async () => {
+  it('项目属于两个同名集成项目时，组名用序号区分，不带编码；结果里不显示项目 ID（仍可按 ID 搜）', async () => {
     backend({ '/integrated-projects': () => json({ entities: [...GROUPS, { id: 'g5', code: '1', name: '五恒集成项目', project_ids: ['p1'] }] }) })
     await signIn('u', 'pw', true)
     mountAt('/home')
     await screen.findAllByText('测试项目0829')
     await act(async () => { fireEvent.change(screen.getByPlaceholderText('搜索项目名称 / 项目ID'), { target: { value: '240829' } }) })
-    expect(await screen.findByText(/五恒集成项目（2）、五恒集成项目（1）/)).toBeTruthy()
+    expect(await screen.findByText('五恒集成项目、五恒集成项目 (2)')).toBeTruthy()
+    expect(document.querySelector('[role=listbox]')?.textContent ?? '').not.toContain('240829001')
   })
 })
 

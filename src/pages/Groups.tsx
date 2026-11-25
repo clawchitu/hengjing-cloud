@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { seqNames } from '@/lib/seqNames'
 import { useNavigate } from 'react-router-dom'
 import { faMagnifyingGlass, faHouse, faSliders, faBuilding, faArrowRight, faSpinner, faTriangleExclamation } from '@fortawesome/free-solid-svg-icons'
 import { Icon, Pager, Seg } from '../components/legacy'
@@ -77,6 +78,8 @@ export default function Groups() {
   const areas = ['全部区域', ...new Set(inG.map(areaOf))]
   // 下拉显示和列表过滤用同一个有效值：不在当前集成项目里的区域一律按「全部区域」
   const areaV = areas.includes(area) ? area : '全部区域'
+  // 同名集成项目用序号区分，不显示编码（S13 走查）
+  const gnames = seqNames(groups, (x) => x.name, (x) => x.id)
   const list = inG.filter((p) => (!pq || (p.name + p.code).toLowerCase().includes(pq.toLowerCase())) && (areaV === '全部区域' || areaOf(p) === areaV) && (st === '全部' || (st === '在线') === p.online))
   const SIZE = 6
   const shown = list.slice((page - 1) * SIZE, page * SIZE)
@@ -97,9 +100,9 @@ export default function Groups() {
             return (
               <Card key={x.id} className={'grp-card' + (x.id === gid ? ' on' : '')} pad={false}>
                 <div onClick={() => pickGroup(x.id)}>
-                  {/* 没有应用（平台建的集成项目可能没有 app_id）时不画空的标签，编码仍靠右 */}
-                  <div className="row" style={{ justifyContent: 'space-between' }}>{type ? <Badge variant={x.typeColor} style={{ fontSize: 12 }}>{type}</Badge> : <span />}<span className="faint num" style={{ fontSize: 11.5 }}>{x.code}</span></div>
-                  <h4>{x.name}</h4>
+                  {/* 没有应用（平台建的集成项目可能没有 app_id）时不画空的标签；卡片不显示编码（S13 走查：界面不显示 id） */}
+                  <div className="row" style={{ justifyContent: 'space-between' }}>{type ? <Badge variant={x.typeColor} style={{ fontSize: 12 }}>{type}</Badge> : <span />}</div>
+                  <h4>{gnames.get(x.id) ?? x.name}</h4>
                   <div className="gm"><span><Icon icon={faBuilding} /> {ps.length} 个项目</span><b className={pct === 100 ? 'green' : pct > 80 ? 'green' : 'orange'} style={{ fontWeight: 500 }}>{o} 在线</b></div>
                   <div className="bar" style={{ height: 5 }}><i style={{ width: pct + '%', background: pct < 80 ? '#f59e0b' : undefined }} /></div>
                 </div>
@@ -111,14 +114,14 @@ export default function Groups() {
           <Card style={{ marginBottom: 20, padding: '22px 22px' }}>
             <div className="grp-head">
               <div className="gi"><Icon icon={faHouse} /></div>
-              <div style={{ flex: 1 }}><h2>{g.name}</h2><p>{g.desc}</p></div>
+              <div style={{ flex: 1 }}><h2>{gnames.get(g.id) ?? g.name}</h2><p>{g.desc}</p></div>
               <div className="row" style={{ gap: 10 }}>
                 <Button variant="soft" onClick={() => nav('/control')}><Icon icon={faSliders} />统一控制</Button>
               </div>
             </div>
             <div className="info4">
               <div><span>集成项目编码</span><b className="num">{g.code}</b></div>
-              <div><span>应用类型</span><b>{typeOf(g) || '—'}</b></div>
+              <div><span>应用类型</span><b>{typeOf(g) || <span className="faint" style={{ fontWeight: 400 }}>未设置</span>}</b></div>
               <div><span>创建时间</span><b className="num">{g.created || '—'}</b></div>
               <div><span>在线率</span><b className="green num">{pctOf(on, inG.length).toFixed(1)}% <small className="faint" style={{ fontWeight: 400, fontSize: 12 }}>({on}/{inG.length})</small></b></div>
             </div>

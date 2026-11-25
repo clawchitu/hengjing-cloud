@@ -214,7 +214,7 @@
 | ~~`freshAir204Unchanged`~~ | — | — | 已撤掉：后端 11/25 答复第 4 条，不变一律传 -1 |
 | ~~`freshAirFilterSwapped`~~ | — | — | 已撤掉：后端 11/25 答复第 10 条，两个字段没反 |
 | `freshAirFilterWarn` | 布尔 | `false` | 滤网寿命的红、橙色和更换提示（阈值按比例）。字段没反，但 `filter_life_p` 是 int32，确认前保持关 |
-| `roomSwitchReported` | 布尔 | `false` | 200 的房间开关是否可信（后端 11/25 答复第 1 条：控制屏没上报房间状态，后端会修，修好后改 `true`）。`false` 时开关显示「未知」、核对开关记无法核对、不拿它禁用温度和节能。只管真实接口，演示数据按 `true` |
+| `roomSwitchReported` | 布尔 | `true`（11/25 10:17 起） | 200 的房间开关是否可信（后端 11/25 答复第 1 条：控制屏没上报房间状态，后端会修，修好后改 `true`）。`false` 时开关显示「未知」、核对开关记无法核对、不拿它禁用温度和节能。只管真实接口，演示数据按 `true` |
 | ~~`weatherCityFilter`~~ | — | — | 已撤掉：候选城市不再用 city-list 过滤 |
 | `weatherNowFallback` | 布尔 | `true` | `/weather` 失败时用小时预报顶替实时数据 |
 
