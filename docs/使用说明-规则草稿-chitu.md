@@ -198,6 +198,27 @@
 - 210 读到 -1 表示这一项不能设置（第 5 条）：界面上禁用这一项，其余项照常，不整次拦截；`control_type = -1` 时控制类型、露点设定、湿度设定禁用，风速、开关照常。规则在 `src/api/writeLockVerify.ts` 的 `settable204` / `blocked204`
 - 202 滤网：`filter_life` 是剩余天数，`filter_life_p` 是剩余比例（1 = 100%），显示乘 100；告警按比例：低于 15% 红、低于 50% 橙（`src/features/freshAir/filter.ts`）；proto 里 `filter_life_p` 是 int32，待后端确认，确认前告警开关 `freshAirFilterWarn` 保持关
 
+### 4.1 数据读取（S10a，只读）
+
+**【用户】**
+- 新风页的设备列表每 15 秒刷新一次；运行设置（只有独立空气系统，即程序编码 12 的项目才有）每 30 秒刷新一次。
+- 项目离线、控制屏未连接时不显示之前读到的数据，避免把旧读数当成当前值。某台设备未连接时，不读也不显示它的运行设置。
+- 控制屏回复「该软件类型不支持此控制」时，显示「该项目不支持新风控制」，这不是故障，也不会反复重试。
+- 运行设置里显示 `--` 的项不能设置：读到 -1 表示这一项不能设置，读到 -100 或 65536 表示没有有效读数。
+
+**【内部】**
+- 代码在 `src/features/freshAir/`：`model.ts`（202 → `UnitView`、210 → `SettingsView`）、`source.ts`（real / mock）、`hooks.ts`（`useUnits`、`useSettings`、`useFreshRead`）。这一段没有写函数，不发 204。
+- 202 的读数：65536、-100、-1 一律按没有数据（`null`，显示 `--`），0 是有效读数；滤网两项走 `filterOf`。
+- 设备 id 只从 202 取；202 里 id 不是正整数、或同一 id 出现多次的设备，`deviceId` 为 `null`，不读 210。
+- 202 里 `is_connected` 不是 true 的设备，`UnitView` 仍带着读数，`connected = false`；S10b 显示时要按 `connected` 隐藏这些读数或标明未连接，不能当成当前值。
+- 210 每一项标注三类：`settable`（可设置，0 是有效读数）、`unsettable`（读到 -1；`control_type = -1` 时露点、湿度连带不可设置，和 `settable204` 一致，但本身是无效读数的仍标 `invalid`）、`invalid`（-100、65536、非有限数、枚举外的值）。
+- `invalid` 的项界面也禁用（`fieldBlock`，没有有效读数就不让改）；`settable204` 对 65536、非有限数不禁用，发送前兜底的 `blocked204` 因此比界面宽，这是有意的：界面更严，不会多发。
+- `control_type` 为 -1（或无效）时，`SettingsView.writeBlock` 非空，整个写入口禁用（S10a 任务要求）。**注意**：这比上面「风速、开关照常」和 `docs/plan-s10-s7.md` 2.3 更严；`blocked204` 发送前兜底仍按 2.3。两者取哪一个，待负责人确认，确认前界面按更严的 `writeBlock`。
+- 210 回包 id 与请求的设备 id 不符（含空回包）算读取失败，不当成读数。
+- 「不支持」的识别：回包只有 #2 文案且含「不支持此控制」（11/25 实测 240829001，app_code 1）。其他 ctrl 文案照常算错误。
+- 不发请求：没有项目、项目离线、没有 `/v1/ctrl/fresh-dehumidifier-get` 或 `/v1/ctrl/running-ctrl-get` 权限（返回 `forbidden`）；210 另外要求 app_code 12、设备 id 有效、202 里该设备已连接。
+- 读取遇到 503 后返回 `unavailable`，该项目 202、210 之前的读数都作废；之后有序号更大的成功读取才再显示，中间遇到 500、超时只显示错误，不恢复旧读数（同 `src/data/sensors/hooks.ts`）。读取带递增序号，旧读数不覆盖新读数；`useFreshRead` 绑定会话代次。
+
 ## 5. S7 天气
 
 数据层已做（S7a），首页界面在 S7b 接入。口径按负责人和唐学未 11/25 的最终决定，代码在 `src/features/weather/`。
