@@ -29,3 +29,8 @@ compare/
 playwright-report/
 test-results/
 release/
+
+# H1 真实测试服 e2e：登录态（含令牌，运行结束即删）与报告
+e2e-live/.auth/
+playwright-report-live/
+test-results-live/
