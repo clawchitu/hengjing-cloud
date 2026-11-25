@@ -362,6 +362,8 @@ function LockBar({ lock, running }: { lock: LockInfo | null; running: Running | 
     const r = await verify(lock.key)
     if (r === 'released') showToast('核对一致，已恢复下发')
     // 还在自动核对（退避没用完）：不报结论
+    // none = 没发起核对（已有核对在途等），不提示
+    else if (r === 'none') return
     else if (lockOf(lock.key)?.settling && r !== 'send-pending' && r !== 'not-visible') showToast('暂未核对一致，稍后自动再核对，仍暂停下发', true)
     else if (r === 'send-pending') showToast('上一条指令尚未结束，暂不能核对', true)
     else if (r === 'mismatch') showToast('指令已下发，设备状态暂未变化，仍暂停下发', true)

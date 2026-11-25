@@ -33,7 +33,7 @@
 //    界面口径（11/25 赤兔定）：锁视图的 settling（只读派生，不影响放锁与退避）= 原写已结算、结论尚非已生效、自动退避还有剩余
 //    次数且来得及（或正在核对、退避定时器在等），并且没到期；一致但被否决（lastVetoed）也算。settling 期间界面只显示「正在核对…」，
 //    不报未变化 / 无法核对 / 结果未知；退避都用完（或来不及再排）、到期时才按最近一次结论显示四态。锁怎么结束的（一致放开 / 到期）
-//    另记在 endOf(主锁键)（带到期时间认是哪一把），供一次性结果卡片（统一控制）在锁放开后改显示。
+//    另记在 endOf(主锁键)（带到期时间认是哪一把，以及结束时最近一次核对的结论），供一次性结果卡片（统一控制）在锁放开后改显示。
 // 7. 持久化：markSent 时就写 localStorage（键 = STORAGE_PREFIX + 主锁键），放锁时删（核对一致、确定失败、未认领、到期）；刷新后读到的记录一律按「结果未知」
 //    恢复（原 Promise 已不存在，视为已结算），靠 registerVerifier(消息号, fn) 注册的核对器重建核对，注册时若已有该消息号的锁就立刻
 //    核对一次。记录只存：锁键、projectId、消息号、设备 id、目标字段与值、206 的目标房间 id 集合、userId、sentAt（不存 label、项目名、
@@ -277,7 +277,7 @@ const verifierOf = (e: Entry): VerifyFn | undefined => {
 function settlingOf(e: Entry): boolean {
   if (e.phase !== 'unknown' || !e.sendSettled || e.origin === 'synced' || !verifierOf(e) || isExpired(e)) return false
   if (e.lastVetoed || e.verifying || e.retryTimer) return true
-  const delay = retryDelays[e.retries]
+  const delay = RETRY_DELAYS_MS[e.retries]
   return delay !== undefined && (e.sentAt === undefined || Date.now() + delay < e.sentAt + ttlMs)
 }
 const view = (e: Entry): LockInfo => {
@@ -404,15 +404,17 @@ function removeStored(e: Entry) {
 
 /** 锁怎么结束的：applied = 核对一致放开；expired = 到期；other = 确定失败、没认领、主动放弃等。按主锁键只留最近一条 */
 export type LockEnd = 'applied' | 'expired' | 'other'
-let ends = new Map<string, { expiresAt: number; how: LockEnd }>()
-/** 主锁键上最近结束的那把锁：到期时间（发出时间 + 有效期，用来认是哪一把）与结束方式；没有返回 null */
-export function endOf(key: string): { expiresAt: number; how: LockEnd } | null {
+/** 结束记录：到期时间（发出时间 + 有效期，用来认是哪一把）、结束方式、结束时最近一次核对的结论 */
+export interface LockEndInfo { expiresAt: number; how: LockEnd; lastVerify?: VerifyResult; lastFields?: Record<string, FieldResult> }
+let ends = new Map<string, LockEndInfo>()
+/** 主锁键上最近结束的那把锁；没有返回 null */
+export function endOf(key: string): LockEndInfo | null {
   return ends.get(key) ?? null
 }
 
 function drop(e: Entry, how: LockEnd = 'other') {
   if (!isLive(e)) return
-  if (e.sentAt !== undefined) ends.set(e.token.key, { expiresAt: e.sentAt + ttlMs, how })
+  if (e.sentAt !== undefined) ends.set(e.token.key, { expiresAt: e.sentAt + ttlMs, how, lastVerify: e.lastVerify, lastFields: e.lastFields })
   for (const k of e.keys) if (byKey.get(k) === e) byKey.delete(k)
   if (e.expiryTimer) clearTimeout(e.expiryTimer)
   if (e.retryTimer) clearTimeout(e.retryTimer)
@@ -527,11 +529,6 @@ export function claim(token: LockToken): boolean {
 }
 
 /** 自动退避再核对的结果：这些都还不是一致，按节奏继续 */
-/** 退避间隔（只有测试会换：__setRetryDelaysForTests） */
-let retryDelays: readonly number[] = RETRY_DELAYS_MS
-/** 仅供测试：换退避间隔（[] = 没有自动再核对，首次核对的结论即最终显示）；__resetWriteLockForTests 恢复默认 */
-export function __setRetryDelaysForTests(d: readonly number[]) { retryDelays = d }
-
 const RETRYABLE = new Set<VerifyResult>(['mismatch', 'unverifiable', 'failed', 'offline', 'not-visible', 'aborted', 'account-changed'])
 
 /**
@@ -546,7 +543,7 @@ function autoVerify(e: Entry) {
     if (!isLive(e)) return
     if (isExpired(e)) { expire(e); return }
     if (!RETRYABLE.has(r)) return
-    const delay = retryDelays[e.retries]
+    const delay = RETRY_DELAYS_MS[e.retries]
     if (e.retryTimer) return
     // 退避用完 / 到期前来不及（交给到期）：不再排，通知订阅者（settling 结束，界面改显示最近一次结论）
     if (delay === undefined || (e.sentAt !== undefined && Date.now() + delay >= e.sentAt + ttlMs)) { emit(); return }
@@ -793,7 +790,6 @@ export function __resetWriteLockForTests(account?: () => Account) {
   for (const e of new Set(byKey.values())) { if (e.expiryTimer) clearTimeout(e.expiryTimer); if (e.retryTimer) clearTimeout(e.retryTimer) }
   byKey = new Map()
   ends = new Map()
-  retryDelays = RETRY_DELAYS_MS
   verifiers.clear()
   rereadSubs.clear()
   unsub = null

@@ -21,7 +21,7 @@ import { __resetSessionViewForTests } from '../data/session'
 import { __resetMockUnifiedForTests, mockUnifiedRead, mockUnifiedSend } from '../api'
 import Control, { lastResultKey } from './Control'
 import { setCurrentUserId } from '../api/auth'
-import { __resetWriteLockForTests, __setRetryDelaysForTests, OTHER_ACCOUNT_TEXT, STORAGE_PREFIX } from '../api/writeLock'
+import { __resetWriteLockForTests, OTHER_ACCOUNT_TEXT, RETRY_DELAYS_MS, STORAGE_PREFIX } from '../api/writeLock'
 import { TEXT } from '../features/unified/constants'
 
 beforeAll(() => {
@@ -86,6 +86,14 @@ function expectFourCells(badge: HTMLElement) {
   expect(cells[2].textContent).toBe(badge.textContent)
 }
 const tick = (ms: number) => act(() => new Promise((r) => setTimeout(r, ms)))
+/**
+ * 假时钟（跟着真实时间走，waitFor、假后端照常用），需要时快进。写锁下发后回读不是已生效时按 5 / 20 / 60 秒自动再核对，
+ * 卡片在退避用完前显示「正在核对」：断言最终结论的用例先 fakeClock()，再 runRetries() 把退避真跑完
+ */
+const fakeClock = () => vi.useFakeTimers({ shouldAdvanceTime: true, toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'] })
+const advance = (ms: number) => act(async () => { await vi.advanceTimersByTimeAsync(ms) })
+/** 把自动再核对（5 / 20 / 60 秒）跑完：每次退避到点后等那次核对读完 */
+async function runRetries() { await tick(30); for (const d of RETRY_DELAYS_MS) { await advance(d); await tick(30) } }
 const slider = () => screen.getByRole('slider', { name: '房间温度设定' })
 const shown = () => screen.getByTestId('temp-box').querySelector('.tv b')!.textContent
 const keep = () => screen.getByRole('checkbox', { name: '保持不变' })
@@ -115,14 +123,12 @@ async function expectTempLocked() {
 
 beforeEach(() => {
   __resetWriteLockForTests()
-  // 现有用例断言退避用完后的结论：默认不排自动再核对。正在核对期间的显示见「下发」里的「正在核对」两条，用短退避间隔
-  __setRetryDelaysForTests([])
   setConfig({ apiBase: '/api', dataSource: 'real', apiEnv: 'test', features: { roomSwitchReported: true } })
   localStorage.clear(); sessionStorage.clear()
   __resetHttpForTests(); __resetSessionForTests(); __resetSessionViewForTests(); __resetCurrentForTests(); clearTokens()
   vi.spyOn(console, 'info').mockImplementation(() => {})
 })
-afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.restoreAllMocks(); setConfig(null) })
+afterEach(() => { cleanup(); vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks(); setConfig(null) })
 
 describe('温度区', () => {
   it('默认「保持不变」：温度区真正禁用，键盘和 ± 都改不了', async () => {
@@ -376,8 +382,10 @@ describe('下发', () => {
 
   // 下发结果口径（Fable 11/24 裁定）：success=true 只算「已下发」，以回读为准
   it('203 success=true 但回读房间开关仍是关 → 未变化（不报成功），说明里给出不一致字段', async () => {
+    fakeClock()
     const be = backend({ '/ctrl/room-temperature-data-get': () => rooms(0, 26), '/ctrl/unified-ctrl-set': () => reply(true) })
     await click(okIn(await prepare()))
+    await runRetries() // 把自动再核对（5 / 20 / 60 秒）跑完，再断言最终显示
     const badge = await screen.findByText('未变化', { selector: '[data-slot=badge]' }, { timeout: 3000 })
     expectFourCells(badge)
     expect(screen.queryByText('已生效', { selector: '[data-slot=badge]' })).toBeNull()
@@ -389,10 +397,12 @@ describe('下发', () => {
   })
 
   it('部分字段一致：房间开关已开、温度没变 → 总结果未变化；卡片状态列显示计数标题，逐字段明细在「下发核对」，只有温度带不一致说明', async () => {
+    fakeClock()
     let be!: ReturnType<typeof backend>
     be = backend({ '/ctrl/room-temperature-data-get': room200(() => be, [0, 26], [1, 26]), '/ctrl/unified-ctrl-set': () => reply(true) })
     await click(okIn(await prepare()))
     // Fable 11/25：混合时状态列写计数，不压成一个词；卡片仍是四列
+    await runRetries() // 把自动再核对（5 / 20 / 60 秒）跑完，再断言最终显示
     const badge = await screen.findByText('1 项未生效，1 项已生效', { selector: '[data-slot=badge]' }, { timeout: 3000 })
     expectFourCells(badge)
     const notes = await openNotes()
@@ -402,17 +412,21 @@ describe('下发', () => {
   })
 
   it('200 里房间没有 switch 字段（0 值不编码）→ 按「关」核对：下发开启 → 未变化（测试服 240829001 那次）', async () => {
+    fakeClock()
     const noSwitch = () => json({ body: encodeMessage(pb.RoomTemperatureDataGetReplySchema, { data: [{ id: 1, name: '房间11', setTemp: 26, isConnected: true }, { id: 2, name: '房间13', setTemp: 26, isConnected: true }] }) })
     backend({ '/ctrl/room-temperature-data-get': noSwitch, '/ctrl/unified-ctrl-set': () => reply(true) })
     await click(okIn(await prepare()))
+    await runRetries() // 把自动再核对（5 / 20 / 60 秒）跑完，再断言最终显示
     await screen.findByText('未变化', { selector: '[data-slot=badge]' }, { timeout: 3000 })
     expect(await openNotes()).toContain('房间开关下发 开启，回读 关闭')
   })
 
   it('下发后 200 回包为空（{}，没有房间条目）→ 无法核对', async () => {
+    fakeClock()
     let be!: ReturnType<typeof backend>
     be = backend({ '/ctrl/room-temperature-data-get': () => (be.callsTo('/ctrl/unified-ctrl-set').length ? json({ body: '' }) : rooms(0, 26)), '/ctrl/unified-ctrl-set': () => reply(true) })
     await click(okIn(await prepare()))
+    await runRetries() // 把自动再核对（5 / 20 / 60 秒）跑完，再断言最终显示
     await screen.findByText('无法核对', { selector: '[data-slot=badge]' }, { timeout: 3000 })
     const notes = await openNotes()
     expect(notes).toContain(TEXT.unverifiable)
@@ -420,7 +434,6 @@ describe('下发', () => {
   })
 
   describe('首次回读不一致：正在核对（赤兔 11/25）', () => {
-    const FAST = [60, 60, 60] as const
     /** 203 之后第 n 次读 200（1 = 批次的下发后回读，之后是写锁的自动再核对） */
     function after203(nth: (n: number) => Response) {
       let be!: ReturnType<typeof backend>
@@ -437,13 +450,14 @@ describe('下发', () => {
       return { all: () => { grab(); return seen }, stop: () => mo.disconnect() }
     }
     it('批次回读旧值、写锁首次自动核对仍旧值、第一次退避读到新值：状态列只出现「正在核对」和「已生效」，不出现「未变化」；刷新后仍是已生效', async () => {
-      __setRetryDelaysForTests([300, 300, 300])
+      fakeClock()
       const { be, reads } = after203((n) => (n <= 2 ? rooms(0, 26) : rooms(1, 26.5)))
       const dlg = await prepare()
       const rec = recordBadges()
       await click(okIn(dlg))
       await screen.findByText(TEXT.verifying, { selector: '[data-slot=badge]' }, { timeout: 3000 })
       expect(await openNotes()).toContain(TEXT.verifying)
+      await advance(RETRY_DELAYS_MS[0]) // 第一次退避（5 秒）读到新值
       await screen.findByText('已生效', { selector: '[data-slot=badge]' }, { timeout: 3000 })
       expect(reads()).toBeGreaterThanOrEqual(3)
       const all = rec.all()
@@ -459,7 +473,6 @@ describe('下发', () => {
       expect(screen.getByText('已生效', { selector: '[data-slot=badge]' })).toBeTruthy()
     })
     it('批次结束前写锁的自动核对已一致放开：直接「已生效」，不出现「未变化」', async () => {
-      __setRetryDelaysForTests(FAST)
       after203((n) => (n === 1 ? rooms(0, 26) : rooms(1, 26.5)))
       const dlg = await prepare()
       const rec = recordBadges()
@@ -470,7 +483,6 @@ describe('下发', () => {
       expect(all.filter((t) => t !== TEXT.verifying && t !== '已生效')).toEqual([])
     })
     it('两个项目：第一个的写锁在批次结束前（第二个还在下发）就自动核对一致放开 → 第一个直接「已生效」，不留「未变化」（第二个的结果不在本用例范围）', async () => {
-      __setRetryDelaysForTests(FAST)
       const P5 = { id: 'p5', code: '240829005', name: '测试项目0905', app_code: '1', online: true }
       const sentTo = new Set<string>()
       let p1Reads = 0
@@ -511,25 +523,87 @@ describe('下发', () => {
       expect(all).not.toContain('结果未知')
     })
     it('退避都不一致：退避用完前是「正在核对」，用完才显示「未变化」', async () => {
-      __setRetryDelaysForTests([300, 300, 300])
+      fakeClock()
       const { reads } = after203(() => rooms(0, 26))
       const dlg = await prepare()
       const rec = recordBadges()
       await click(okIn(dlg))
+      await screen.findByText(TEXT.verifying, { selector: '[data-slot=badge]' }, { timeout: 3000 })
+      await advance(RETRY_DELAYS_MS[0] + RETRY_DELAYS_MS[1])
+      await tick(30)
+      expect(screen.queryByText('未变化', { selector: '[data-slot=badge]' })).toBeNull() // 第三次退避（60 秒）之前不报结论
+      await runRetries()
       await screen.findByText('未变化', { selector: '[data-slot=badge]' }, { timeout: 3000 })
-      expect(reads()).toBeGreaterThanOrEqual(2 + FAST.length) // 批次回读 + 写锁首次自动核对 + 三次退避（之后页面会再刷新一次房间状态）
+      expect(reads()).toBeGreaterThanOrEqual(2 + RETRY_DELAYS_MS.length) // 批次回读 + 写锁首次自动核对 + 三次退避（之后页面会再刷新一次房间状态）
       const all = rec.all()
       rec.stop()
       expect(all.indexOf(TEXT.verifying)).toBeGreaterThanOrEqual(0)
       expect(all.indexOf(TEXT.verifying)).toBeLessThan(all.indexOf('未变化'))
       expect(await openNotes()).toContain(TEXT.unapplied)
     })
+    it('最终结论以写锁最后一次核对为准：批次回读「未变化」，最后一次自动再核对回读失败 → 卡片最终显示「结果未知」（不是批次的未变化），到期后存下', async () => {
+      fakeClock()
+      let fail = false
+      const { reads } = after203(() => (fail ? json({ code: 13, message: 'internal' }, 500) : rooms(0, 26)))
+      const dlg = await prepare()
+      await click(okIn(dlg))
+      await screen.findByText(TEXT.verifying, { selector: '[data-slot=badge]' }, { timeout: 3000 })
+      await advance(RETRY_DELAYS_MS[0] + RETRY_DELAYS_MS[1])
+      await tick(30)
+      fail = true // 第三次退避（60 秒）读失败
+      await advance(RETRY_DELAYS_MS[2])
+      await tick(30)
+      await screen.findByText('结果未知', { selector: '[data-slot=badge]' }, { timeout: 3000 })
+      expect(screen.queryByText('未变化', { selector: '[data-slot=badge]' })).toBeNull()
+      expect(await openNotes()).toContain('最后一次自动再核对回读失败')
+      expect(reads()).toBeGreaterThanOrEqual(5)
+      // 锁到期放开：结论定下并存进本标签页，重新进入仍是结果未知
+      await advance(2 * 60_000)
+      await tick(30)
+      cleanup()
+      await mount(false)
+      expect(screen.getByText('结果未知', { selector: '[data-slot=badge]' })).toBeTruthy()
+    })
+    it('最终结论以写锁最后一次核对为准：批次回读「未变化」，退避核对读到部分一致（房间开关已开、温度没变）→ 按那次读数逐字段显示', async () => {
+      fakeClock()
+      const { reads } = after203((n) => (n <= 2 ? rooms(0, 26) : rooms(1, 26)))
+      const dlg = await prepare()
+      await click(okIn(dlg))
+      await screen.findByText(TEXT.verifying, { selector: '[data-slot=badge]' }, { timeout: 3000 })
+      await runRetries()
+      await screen.findByText('1 项未生效，1 项已生效', { selector: '[data-slot=badge]' }, { timeout: 3000 })
+      const notes = await openNotes()
+      expect(notes).toContain('回读（最后一次自动再核对）：房间开 · 26.0°C')
+      expect(reads()).toBeGreaterThanOrEqual(5)
+    })
+    it('批次截止时还没收到应答（锁仍在 sent）：应答之后写锁核对一致 → 卡片最终显示「已生效」', async () => {
+      fakeClock()
+      setConfig({ apiBase: '/api', dataSource: 'real', apiEnv: 'test', requestTimeoutMs: 120_000, features: { roomSwitchReported: true } } as never)
+      let release = () => {}
+      const gate = new Promise<void>((r) => { release = r })
+      let be!: ReturnType<typeof backend>
+      be = backend({
+        '/ctrl/room-temperature-data-get': () => (be.callsTo('/ctrl/unified-ctrl-set').length && sent ? rooms(1, 26.5) : rooms(0, 26)),
+        '/ctrl/unified-ctrl-set': async () => { await gate; sent = true; return reply(true) },
+      })
+      let sent = false
+      const dlg = await prepare()
+      await click(okIn(dlg))
+      await waitFor(() => expect(be.callsTo('/ctrl/unified-ctrl-set')).toHaveLength(1))
+      await advance(36_000) // 过 35 秒批次截止：这一行按结果未知冻结，锁还在 sent（没收到应答）
+      await screen.findByText('结果未知', { selector: '[data-slot=badge]' }, { timeout: 3000 })
+      await act(async () => { release(); await new Promise((r) => setTimeout(r, 30)) }) // 应答 success 才到：写锁按结果未知待核对，自动核对读到一致
+      await screen.findByText('已生效', { selector: '[data-slot=badge]' }, { timeout: 3000 })
+      expect(be.callsTo('/ctrl/unified-ctrl-set')).toHaveLength(1)
+    })
   })
 
   it('下发后回读请求失败（500）→ 结果未知，提示回读失败、刷新核对；不列「设备未回报」，不算无法核对', async () => {
+    fakeClock()
     let be!: ReturnType<typeof backend>
     be = backend({ '/ctrl/room-temperature-data-get': () => (be.callsTo('/ctrl/unified-ctrl-set').length ? text('oops', 500) : rooms(0, 26)), '/ctrl/unified-ctrl-set': () => reply(true) })
     await click(okIn(await prepare()))
+    await runRetries() // 把自动再核对（5 / 20 / 60 秒）跑完，再断言最终显示
     await screen.findByText('结果未知', { selector: '[data-slot=badge]' }, { timeout: 3000 })
     expect(screen.queryByText('无法核对', { selector: '[data-slot=badge]' })).toBeNull()
     const notes = await openNotes()
@@ -540,17 +614,21 @@ describe('下发', () => {
   })
 
   it('下发后回读时房间离线（is_connected=false）、旧值碰巧一致 → 结果未知，不报已生效', async () => {
+    fakeClock()
     const off = () => json({ body: encodeMessage(pb.RoomTemperatureDataGetReplySchema, { data: [{ id: 1, name: '客厅', switch: 1, setTemp: 26.5, isConnected: false }, { id: 2, name: '主卧', switch: 1, setTemp: 26.5, isConnected: true }] }) })
     let be!: ReturnType<typeof backend>
     be = backend({ '/ctrl/room-temperature-data-get': () => (be.callsTo('/ctrl/unified-ctrl-set').length ? off() : rooms(0, 26)), '/ctrl/unified-ctrl-set': () => reply(true) })
     await click(okIn(await prepare()))
+    await runRetries() // 把自动再核对（5 / 20 / 60 秒）跑完，再断言最终显示
     await screen.findByText('结果未知', { selector: '[data-slot=badge]' }, { timeout: 3000 })
     expect(await openNotes()).toContain(TEXT.roomsOffline)
   })
 
   it('500 且回读不一致 → 结果未知，提示刷新查看，不重试', async () => {
+    fakeClock()
     const be = backend({ '/ctrl/room-temperature-data-get': () => rooms(0, 26), '/ctrl/unified-ctrl-set': () => text('oops', 500) })
     await click(okIn(await prepare()))
+    await runRetries() // 把自动再核对（5 / 20 / 60 秒）跑完，再断言最终显示
     const badge = await screen.findByText('结果未知', { selector: '[data-slot=badge]' }, { timeout: 3000 })
     expectFourCells(badge)
     expect(await openNotes()).toContain('已下发，结果未知，请刷新查看')

@@ -22,15 +22,15 @@ import { useQueries, useQueryClient } from '@tanstack/react-query'
 import { isMockMode, roomSwitchReported } from '../api/config'
 import { getCurrentUserId } from '../api/auth'
 import { ApiError } from '../api/errors'
-import { MODE_UNCHANGED } from '../api/ctrl'
+import { MODE_UNCHANGED, type WriteQuery } from '../api/ctrl'
 import { WRITE_RECHECK_TEXT } from '../api/http'
 import { jwtSub, readTokens } from '../api/tokens'
 import { UnifiedCtrlSetQuery_OperatingMode as Mode } from '../api/gen/ctrl200_pb.js'
 import * as api from '../api'
-import { endOf, lockKeysOf, lockOf, writeLockTtl, lockVersion, onForceReread, OTHER_ACCOUNT_TEXT, subscribe as subscribeLock } from '../api/writeLock'
+import { endOf, lockKeysOf, lockOf, writeLockTtl, type VerifyResult, lockVersion, onForceReread, OTHER_ACCOUNT_TEXT, subscribe as subscribeLock } from '../api/writeLock'
 import {
   clampTemp, LOCK_BUSY_TEXT, lockTargetOf, rereadHits, MODE_OPTIONS, readUnifiedSnapshot, resolveTempRange, TEXT, tempAvailability, unifiedAppCode, useUnifiedBatch,
-  fieldResults, resultTitle,
+  fieldResults, overallOf, resultTitle,
   type BatchRow, type FieldStatus, type RowStatus, type UnifiedDraft, type UnifiedSnapshot,
 } from '../features/unified'
 
@@ -66,31 +66,71 @@ export interface ResultRow {
   title?: string
   fields?: Array<{ label: string; status: FieldStatus; messages: string[] }>
   /**
-   * 批次结束时这一行还没核对一致、写锁仍在自动再核对：记下那把锁（主锁键 + 到期时间，不是凭据）。锁还在自动核对（settling）
-   * 时这一行只显示「已下发，正在核对…」；锁核对一致放开后改显示已生效；退避用完 / 到期后显示批次的结论（赤兔 11/25）
+   * 批次结束时这一行还没核对一致、写锁仍在自动再核对：记下那把锁（主锁键 + 到期时间，不是凭据）和这次下发的内容（项目 id、
+   * 下发的四个值、应答是否 success）。最终结论以写锁最后一次核对为准（赤兔 11/25），批次回读的结论只作过程：
+   * 锁还在自动核对（settling）→ 只显示「已下发，正在核对…」；锁核对一致放开 → 已生效；退避用完 / 到期 → 按锁最后一次核对的读数逐字段重算
    */
-  lock?: { key: string; exp: number }
+  lock?: { key: string; exp: number; projectId: string; query: WriteQuery<203>; replied: boolean }
 }
 
 /** 批次里没核对一致、写锁会接着自动再核对的结论 */
 const SETTLE_STATUSES: ReadonlySet<ResultRow['status']> = new Set(['unapplied', 'unverifiable', 'unknown'])
-/** 这一行此刻怎么显示：写锁还在自动核对 → 正在核对；写锁已核对一致放开 → 已生效；其余按批次结论 */
-type Live = 'settling' | 'applied' | null
+
+/**
+ * 每个项目最近一次 200 读数（批次的下发前后读、写锁的自动再核对都走同一个 readBack）。写锁最后一次核对就是这个项目最后一次读，
+ * 用它逐字段重算最终结论；读失败记 null。只在本标签页内存里（刷新后没有，退回批次结论）
+ */
+const lastSnaps = new Map<string, UnifiedSnapshot | null>()
+function trackRead(projectId: string, p: Promise<UnifiedSnapshot>): Promise<UnifiedSnapshot> {
+  return p.then((s) => { lastSnaps.set(projectId, s); return s }, (e: unknown) => { lastSnaps.set(projectId, null); throw e })
+}
+
+/** 这一行此刻怎么显示：正在核对 / 已生效 / 按锁最后一次核对的结论（lastVerify）/ 按批次结论（null） */
+type Live = { kind: 'settling' } | { kind: 'applied' } | { kind: 'final'; lastVerify?: VerifyResult; ended: boolean } | null
 function liveOf(r: ResultRow): Live {
   if (!r.lock) return null
   const l = lockOf(r.lock.key)
-  if (l) return l.expiresAt === r.lock.exp && l.settling ? 'settling' : null
+  if (l) return l.expiresAt !== r.lock.exp ? null : l.settling ? { kind: 'settling' } : { kind: 'final', lastVerify: l.lastVerify, ended: false }
   const end = endOf(r.lock.key)
-  return end && end.expiresAt === r.lock.exp && end.how === 'applied' ? 'applied' : null
+  if (!end || end.expiresAt !== r.lock.exp) return null
+  return end.how === 'applied' ? { kind: 'applied' } : end.how === 'expired' ? { kind: 'final', lastVerify: end.lastVerify, ended: true } : null
 }
 /** 写锁自动再核对一致、已放开：这一行定为已生效 */
 const appliedRow = (r: ResultRow): ResultRow => ({ ...r, lock: undefined, status: 'success', title: undefined, fields: undefined, detail: `${TEXT.success}（自动再核对一致）` })
+const FINAL_STATUS: Record<FieldStatus, ResultRow['status'] | null> = { applied: null, unchanged: 'unapplied', unverifiable: 'unverifiable', unknown: 'unknown' }
+const FINAL_TEXT: Record<FieldStatus, string> = { applied: TEXT.success, unchanged: TEXT.unapplied, unverifiable: TEXT.unverifiable, unknown: TEXT.sentUnknown }
+/**
+ * 退避用完 / 到期：按写锁最后一次核对重算这一行。回读失败（failed、offline 等）→ 每个下发了的字段结果未知；
+ * 读到了但不一致 → 用那次读数逐字段算（与批次同一套 fieldResults）。没有可用的读数（刷新过）或锁还没核对过 → 按批次结论
+ */
+function finalRow(r: ResultRow, lastVerify: VerifyResult | undefined): ResultRow {
+  const lk = r.lock
+  if (!lk || !lastVerify) return r
+  const snap = lastVerify === 'mismatch' || lastVerify === 'unverifiable' ? lastSnaps.get(lk.projectId) : null
+  if (snap === undefined) return r
+  const fs = fieldResults(lk.query, snap, { replied: lk.replied })
+  const status = FINAL_STATUS[overallOf(fs)]
+  if (!status) return r // 读数一致但锁没放（被否决等）：不在这里判已生效，按批次结论
+  return {
+    ...r, status, title: resultTitle(fs), fields: fs.map(({ label, status: st, messages }) => ({ label, status: st, messages })),
+    // 结论按最后一次核对；批次那次的说明与前后回读留作过程
+    detail: [FINAL_TEXT[overallOf(fs)], snap ? `回读（最后一次自动再核对）：${fmtSnap(snap)}` : '最后一次自动再核对回读失败', r.detail ? `过程（下发后第一次回读）：${r.detail}` : TEXT.retryHint].join('；'),
+  }
+}
 interface ShownRow extends ResultRow { badge: { label: string; variant: 'green' | 'red' | 'orange' | 'amber' | 'gray' } }
 function shown(r: ResultRow): ShownRow {
   const live = liveOf(r)
-  if (live === 'settling') return { ...r, title: undefined, fields: undefined, detail: TEXT.verifying, badge: { label: TEXT.verifying, variant: 'gray' } }
-  if (live === 'applied') return { ...appliedRow(r), badge: STATUS.success }
-  return { ...r, badge: { label: r.notExecuted ? '失败（未执行）' : r.title ?? STATUS[r.status].label, variant: STATUS[r.status].variant } }
+  if (live?.kind === 'settling') return { ...r, title: undefined, fields: undefined, detail: TEXT.verifying, badge: { label: TEXT.verifying, variant: 'gray' } }
+  if (live?.kind === 'applied') return { ...appliedRow(r), badge: STATUS.success }
+  const x = live?.kind === 'final' ? finalRow(r, live.lastVerify) : r
+  return { ...x, badge: { label: x.notExecuted ? '失败（未执行）' : x.title ?? STATUS[x.status].label, variant: STATUS[x.status].variant } }
+}
+/** 锁已结束：定下这一行（已生效，或按锁最后一次核对），去掉锁引用，存进本标签页 */
+function settledRow(r: ResultRow): ResultRow | null {
+  const live = liveOf(r)
+  if (live?.kind === 'applied') return appliedRow(r)
+  if (live?.kind === 'final' && live.ended) return { ...finalRow(r, live.lastVerify), lock: undefined }
+  return null
 }
 
 const FIELD_BADGE: Record<FieldStatus, 'green' | 'orange' | 'amber'> = { applied: 'green', unchanged: 'orange', unverifiable: 'amber', unknown: 'orange' }
@@ -162,7 +202,11 @@ const isRow = (r: unknown): r is ResultRow => {
   const x = r as Partial<ResultRow> | null
   return !!x && typeof x.name === 'string' && typeof x.code === 'string' && typeof x.at === 'string' && typeof x.status === 'string' && Object.hasOwn(STATUS, x.status)
 }
-const isLockRef = (l: unknown): l is ResultRow['lock'] => !!l && typeof (l as { key?: unknown }).key === 'string' && Number.isFinite((l as { exp?: unknown }).exp)
+const isLockRef = (l: unknown): l is ResultRow['lock'] => {
+  const x = l as { key?: unknown; exp?: unknown; projectId?: unknown; query?: Record<string, unknown> | null; replied?: unknown } | null
+  return !!x && typeof x.key === 'string' && Number.isFinite(x.exp) && typeof x.projectId === 'string' && typeof x.replied === 'boolean'
+    && !!x.query && ['systemSwitch', 'systemMode', 'roomSwitch', 'roomTemp'].every((k) => Number.isFinite(x.query![k]))
+}
 function readLast(key: string | null): ResultRow[] | null {
   if (!key) return null
   try {
@@ -219,7 +263,8 @@ export default function Control() {
   const { batch, state: run } = useUnifiedBatch({
     getProjects: () => projects,
     mock,
-    readBack: readSnap,
+    // 写锁的自动再核对也走这里：记下每个项目最后一次读数，退避用完后按它定最终结论
+    readBack: (id, signal) => trackRead(id, readSnap(id, signal)),
     // 演示下发同写入口一样，先过 beforeSend
     send: mock ? (p, q, o) => (o.beforeSend() ? api.mockUnifiedSend(p, q) : Promise.reject(new ApiError('write_blocked', WRITE_RECHECK_TEXT))) : undefined,
     // 确认后、整批开始前强制重新拉一次项目列表（每批一次，直接调数据源，不经 S6a 的 hooks 缓存）
@@ -232,10 +277,10 @@ export default function Control() {
   // 写锁：订阅锁的变化；不在下发中时，已选项目里有被占的（同一块屏上一条还没有结论）就提示并置灰下发按钮
   const lockV = useSyncExternalStore(subscribeLock, lockVersion, lockVersion)
   const shownLast = last?.map(shown) ?? null
-  // 写锁自动再核对一致、放开了：把这一行定为已生效并存下（刷新后也是已生效）
+  // 写锁结束了（核对一致放开 / 到期）：把这一行定下来并存进本标签页（刷新后也是最终结论）
   useEffect(() => {
-    if (!last?.some((r) => liveOf(r) === 'applied')) return
-    const rows = last.map((r) => (liveOf(r) === 'applied' ? appliedRow(r) : r))
+    if (!last?.some((r) => settledRow(r))) return
+    const rows = last.map((r) => settledRow(r) ?? r)
     setLastRun({ key: lastKey, rows })
     writeLast(lastKey, rows)
   }, [lockV, last, lastKey])
@@ -312,7 +357,12 @@ export default function Control() {
       if (!p || !SETTLE_STATUSES.has(row.status) || row.notExecuted) return row
       const target = lockTargetOf(p)
       const l = lockOf(target)
-      if (l) return l.mine && l.phase === 'unknown' && l.expiresAt !== undefined ? { ...row, lock: { key: l.key, exp: l.expiresAt } } : row
+      const s = br.state
+      // 应答是否 success：结果未知的看状态机；截止时还在下发中（没收到应答）的看批次记的 replyOk
+      const replied = s.status === 'unknown' ? s.replied : s.status === 'sending' ? br.replyOk === true : true
+      const ref = 'query' in s && s.query ? { projectId: p.id, query: s.query, replied } : null
+      // 待核对（unknown），以及截止时还没收到应答、锁仍在 sent 的：都记锁引用，应答到达后按写锁的最终结论显示
+      if (l) return ref && l.mine && (l.phase === 'unknown' || l.phase === 'sent') && l.expiresAt !== undefined ? { ...row, lock: { key: l.key, exp: l.expiresAt, ...ref } } : row
       const end = lockKeysOf(target).map(endOf).find(Boolean)
       return end && end.how === 'applied' && end.expiresAt - writeLockTtl() >= startedAt ? appliedRow(row) : row
     })
@@ -323,8 +373,9 @@ export default function Control() {
     if (rows.some((r) => r.status !== 'not-sent' && !r.notExecuted)) void queryClient.invalidateQueries({ queryKey: ['unified-snap'] })
     batch.reset()
     // 还在自动核对的行不报结论，单独计「正在核对」
-    const settlingN = rows.filter((r) => liveOf(r) === 'settling').length
-    const n = (st: ResultRow['status']) => rows.filter((r) => r.status === st && liveOf(r) !== 'settling').length
+    const isSettling = (r: ResultRow) => liveOf(r)?.kind === 'settling'
+    const settlingN = rows.filter(isSettling).length
+    const n = (st: ResultRow['status']) => rows.map(shown).filter((r, i) => r.status === st && !isSettling(rows[i])).length
     // 只有全部回读一致（已生效）才弹成功提示
     if (n('success') === rows.length) toast(`${TEXT.success}（${rows.length} 个项目）`)
     else if (n('success') + settlingN === rows.length) toast([n('success') && `已生效 ${n('success')} 个`, `正在核对 ${settlingN} 个`].filter(Boolean).join('，') + '。已下发，正在自动核对')

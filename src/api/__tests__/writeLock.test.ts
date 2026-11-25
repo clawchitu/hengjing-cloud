@@ -573,7 +573,7 @@ describe('自动重新核对（退避）', () => {
     expect(L.endOf(KEY)).toBeNull()
     await vi.advanceTimersByTimeAsync(30_000)
     expect(lockOf(PA)).toBeNull()
-    expect(L.endOf(KEY)).toEqual({ expiresAt: exp, how: 'expired' })
+    expect(L.endOf(KEY)).toMatchObject({ expiresAt: exp, how: 'expired', lastVerify: 'failed' })
     void t
   })
   it('settling：第二次核对一致即放锁，endOf 记 applied；没有核对方式的锁不算 settling', async () => {
@@ -584,7 +584,7 @@ describe('自动重新核对（退避）', () => {
     expect(lockOf(PA)?.settling).toBe(true)
     await vi.advanceTimersByTimeAsync(5_000)
     expect(lockOf(PA)).toBeNull()
-    expect(L.endOf(KEY)).toEqual({ expiresAt: exp, how: 'applied' })
+    expect(L.endOf(KEY)).toMatchObject({ expiresAt: exp, how: 'applied' })
     const t = take()
     claim(t)
     markSent(t, Promise.resolve(), REC)
