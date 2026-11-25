@@ -3,12 +3,13 @@
 //
 // - 每次下发前现查 ctrl 205（DeviceSummaryGet，读路由与解码同 S11 的 src/data/connections.ts），不缓存、不复用连接页的查询；
 // - 单独 5 秒超时；返回 503、超时或任何失败 → 不是 online，调用方按「控制屏未连接，暂不能下发」拦下、不发写请求（S9/S10c 预检期间短暂占锁、没通过立即释放；S12 不取锁），界面给「重试」；
-//   本地 permission_paths 没有 205（can(CONN_ROUTE)）时直接 'forbidden'、不发请求；返回 403（kind forbidden）→ 'forbidden'：同样拦下，但单独文案（赤兔 11/25），不给重试；
+//   会话 authed 且本地 permission_paths 没有 205（can(CONN_ROUTE)）时直接 'forbidden'、不发请求；返回 403（kind forbidden）→ 'forbidden'：同样拦下，但单独文案（赤兔 11/25），不给重试；
 // - 205 只用于提前拦截：通过之后照常走原来的预检、下发与四态核对，判法不变（205 通过不代表一定能写成功）。
 // 演示数据模式不发请求，直接按 online（演示数据的写本身也不发请求）。
 import { CONN_ROUTE, toConnRows } from '@/data/connections'
 import { can } from '@/data/session'
 import { isMockMode } from './config'
+import { getSession } from './session'
 import { callCtrl } from './ctrl'
 import { ApiError, isApiError } from './errors'
 
@@ -30,8 +31,9 @@ export const NO_REPLY_504_NOTE = '控制屏 10 秒内没有应答，可能离线
 /** 现查一次 ctrl 205：成功（能解码）→ online；超过 5 秒 → timeout；403 无权限 → forbidden；503 / 其他失败 / 调用方取消 → offline */
 export async function preflightScreen(projectId: string, signal?: AbortSignal): Promise<ScreenState> {
   if (isMockMode()) return 'online'
-  // 本地按 permission_paths 判断没有 205 权限（网关同样会回 403）：直接 forbidden，不发请求
-  if (!can(CONN_ROUTE)) return 'forbidden'
+  // 会话已就绪（authed）且本地 permission_paths 没有 205（网关同样会回 403）：直接 forbidden，不发请求；
+  // 会话还在加载等其他状态时权限列表不可信，照常请求 205，由网关的应答判断
+  if (getSession().status === 'authed' && !can(CONN_ROUTE)) return 'forbidden'
   if (signal?.aborted) return 'offline'
   const ac = new AbortController()
   const onAbort = () => ac.abort()

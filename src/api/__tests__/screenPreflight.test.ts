@@ -10,12 +10,15 @@ import { fakeBackend, json, text } from './helpers'
 
 // 账号的 permission_paths 里有没有 205（本地 can(CONN_ROUTE)）
 let canConn = true
+let sessionStatus = 'authed'
 vi.mock('@/data/session', () => ({ can: () => canConn }))
+vi.mock('../session', async (orig) => ({ ...(await orig<typeof import('../session')>()), getSession: () => ({ status: sessionStatus }) }))
 
 const R205 = '/ctrl/device-summary-get'
 
 beforeEach(() => {
   canConn = true
+  sessionStatus = 'authed'
   __resetHttpForTests(); clearTokens()
   writeTokens({ accessToken: `h.${btoa(JSON.stringify({ sub: 'u1' }))}.s`, refreshToken: 'R1', expiresAt: Date.now() + 3600_000 })
   setCurrentUserId('u1')
@@ -51,6 +54,15 @@ describe('preflightScreen（ctrl 205）', () => {
     const be = fakeBackend({ [R205]: () => json({ body: '' }) })
     expect(await preflightScreen('P1')).toBe('forbidden')
     expect(be.calls).toHaveLength(0)
+  })
+  it('会话还没就绪（loading、anon，权限列表不可信）：不按本地权限判 forbidden，照常请求 205', async () => {
+    canConn = false
+    for (const st of ['loading', 'anon']) {
+      sessionStatus = st
+      const be = fakeBackend({ [R205]: () => json({ body: '' }) })
+      expect(await preflightScreen('P1')).toBe('online')
+      expect(be.callsTo(R205)).toHaveLength(1)
+    }
   })
   it('5 秒后 205 才返回成功 → 结果仍是 timeout（迟到的成功不算）', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
