@@ -2,7 +2,7 @@
 // registerAllVerifiers 由 AppProvider 在原来调 setupUnifiedWriteLock 的位置调用（渲染期、按 QueryClient 只做一次，时机不比原来晚）：
 // 1. configureWriteLock({ resolveProject })（经 setupUnifiedWriteLock，只调一次）；
 // 2. 注册 203（统一控制 S12）核对器；201 / 206（温控 S9）仍在 OrgGate 的组织数据就绪后注册（时机同原来，见 registerThermostatVerifiersOnce），核对函数留在各自的 features 里；
-// 204（新风 S10c）的核对器到 S10c 再加，同样只在本文件注册（和 201 / 206 同一个位置）；P0 只提供比对函数 matchRunningCtrl。
+// 204（新风 S10c）的核对器同样只在本文件注册，和 201 / 206 同一个位置（OrgGate 在组织数据就绪后调，见 registerFreshAirVerifiersOnce）。
 // 3. 注册后补核对恢复的锁（项目列表 / 集成项目列表加载成功时的触发路径由 setupUnifiedWriteLock 的订阅保留）。
 import { useEffect } from 'react'
 import { useQueryClient, type QueryClient } from '@tanstack/react-query'
@@ -13,6 +13,7 @@ import { mockUnifiedRead } from '../api'
 import { readUnifiedSnapshot } from '../features/unified/batch'
 import { recheckRestoredLocks, setupUnifiedWriteLock, verifier203 } from '../features/unified/lock'
 import { verifier201, verifier206 } from '../features/thermostat/lockVerify'
+import { verifier204 } from '../features/freshAir/lockVerify'
 
 const registered = new WeakSet<QueryClient>()
 
@@ -38,10 +39,22 @@ export function registerThermostatVerifiersOnce(qc: QueryClient): void {
   registerVerifier(206, verifier206)
 }
 
-/** OrgGate 调用：组织数据就绪后注册温控核对器 */
+const freshAirRegistered = new WeakSet<QueryClient>()
+
+/**
+ * 新风 204：照 201 / 206 的方式，由 OrgGate 在组织数据就绪后调用；按 QueryClient 幂等，注册后不随就绪状态注销。
+ * 刷新恢复的 204 锁由它核对（新读 202 + 210，只比对改了的字段）
+ */
+export function registerFreshAirVerifiersOnce(qc: QueryClient): void {
+  if (freshAirRegistered.has(qc)) return
+  freshAirRegistered.add(qc)
+  registerVerifier(204, verifier204)
+}
+
+/** OrgGate 调用：组织数据就绪后注册温控（201 / 206）与新风（204）核对器 */
 export function useWriteLockSetup(): void {
   const qc = useQueryClient()
   const ready = useOrgScope().status === 'success'
-  useEffect(() => { if (ready) registerThermostatVerifiersOnce(qc) }, [qc, ready])
+  useEffect(() => { if (ready) { registerThermostatVerifiersOnce(qc); registerFreshAirVerifiersOnce(qc) } }, [qc, ready])
 }
 

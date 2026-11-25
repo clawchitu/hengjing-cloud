@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 // 新风页（S10b）：真实接口模式 + 假后端（ctrl 202 / 210 按 protobuf 编码，部分用 11/25 实测原文），不连任何真实服务。
-// 覆盖：只读（afterEach 对每个用例断言不发任何写请求，下发按钮是禁用的占位）；非 12 项目没有设置面板也不发 210；control_type = -1 只禁用控制类型、
+// 覆盖：只读（afterEach 对每个用例断言不发任何写请求；本文件的账号没有 204 权限，面板是只读形态、下发按钮禁用）；非 12 项目没有设置面板也不发 210；control_type = -1 只禁用控制类型、
 // 露点、湿度，风速、开关照常；-1 / -100 显示 --，0 是有效值；210「不支持」友好提示；未连接设备不显示读数、不读 210；
 // 切换设备后 210 跟着换；各状态（无权限、失败可重试、空）；滤网告警受 freshAirFilterWarn 控制。
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
@@ -23,9 +23,9 @@ import { AppProvider } from '../app/store'
 import Layout from '../components/Layout'
 import { __resetCurrentForTests } from '../data/org/current'
 import { __resetSessionViewForTests } from '../data/session'
-import { __resetFreshAirForTests, FRESH_ROUTES, TEXT_CT_INVALID, TEXT_UNSUPPORTED } from '../features/freshAir'
+import { __resetFreshAirForTests, FRESH_ROUTES, TEXT_CT_INVALID, TEXT_UNSUPPORTED, TEXT_WRITE_FORBIDDEN } from '../features/freshAir'
 import { ID_260911001, R202_240829001, R202_260911001, R210_240829001, R210_260911001 } from '../features/freshAir/__tests__/fixtures'
-import FreshAir, { TEXT_UNSUPPORTED_PANEL, TEXT_WRITE_PENDING } from './FreshAir'
+import FreshAir, { TEXT_UNSUPPORTED_PANEL } from './FreshAir'
 
 beforeAll(() => {
   const proto = Element.prototype as unknown as Record<string, unknown>
@@ -126,10 +126,10 @@ describe('实测回包', () => {
     expect(valueOf('windSpeed')).toBe('自动')
     expect(valueOf('switch')).toBe('关')
     for (const f of ['controlType', 'dewPoint', 'windSpeed', 'switch']) expect(lockOf(f)).toBeNull()
-    // 写入口是禁用的占位
+    // 本文件的账号没有 204 权限（PERMS 只有 202 / 210）：保留 S10b 的只读形态，下发按钮禁用并写明原因（S10c 的下发见 freshAirWrite.test.ts）
     const send = within(panel()).getByRole('button', { name: '下发设置' }) as HTMLButtonElement
     expect(send.disabled).toBe(true)
-    expect(within(panel()).getByText(TEXT_WRITE_PENDING)).toBeTruthy()
+    expect(within(panel()).getByText(TEXT_WRITE_FORBIDDEN)).toBeTruthy()
   })
 
   it('210 回「该软件类型不支持此控制」：面板友好提示，不是错误态，不重试', async () => {

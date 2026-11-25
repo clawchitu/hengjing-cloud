@@ -57,12 +57,13 @@ test.describe('新风单机版 运行模式', () => {
       await tick(page)
       const panel = page.getByLabel('运行设置')
       await expect(panel).toBeVisible()
-      // S10b 起只读：没有步进和控制类型按钮，下发按钮是禁用的占位
-      await expect(panel.locator('.stepper button')).toHaveCount(0)
+      // S10c：露点 / 湿度各一组步进；没有改动时下发按钮禁用
+      await expect(panel.locator('.stepper button')).toHaveCount(4)
       await expect(panel.getByRole('button', { name: '下发设置' })).toBeDisabled()
       if (m === 5) {
         // 模式 5 不在露点可控模式里：演示数据 can_change = false，湿度控制生效
         await expect(panel.getByText('该设备的控制类型不可切换')).toBeVisible()
+        await expect(panel.getByRole('group', { name: '控制类型' }).getByRole('button', { name: '露点控制' })).toBeDisabled()
         await expect(panel.locator('.setbox.on', { hasText: '湿度设定' })).toBeVisible()
       } else if (m === 2) {
         await expect(panel.getByText('该设备的控制类型不可切换')).toHaveCount(0)

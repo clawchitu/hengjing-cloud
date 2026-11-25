@@ -93,16 +93,19 @@ test.describe('确认弹窗', () => {
     await shotView(page, 'confirm-control-send')
   })
 
-  // S10b 起新风运行设置只读、下发按钮是禁用的占位；S10c 接入 204 后恢复本用例并重录 confirm-fresh-air-send
-  test.skip('新风下发确认', async ({ page, login }) => {
+  // S10c：改控制类型（露点 → 湿度）后点下发，确认弹窗写明项目、设备和逐项「原值 → 新值」
+  test('新风下发确认', async ({ page, login }) => {
     await login('dealer', 'PRJ-10252')
     await page.goto('/fresh-air')
     await tick(page, 1500)
-    await page.getByRole('button', { name: '下发设置' }).click()
+    // 用 dispatchEvent 点击：不把页面滚到按钮处（可视区截图要求停在顶部）
+    await page.getByRole('group', { name: '控制类型' }).getByRole('button', { name: '湿度控制' }).dispatchEvent('click')
+    await tick(page)
+    await page.getByRole('button', { name: '下发设置' }).dispatchEvent('click')
     await tick(page)
     const dlg = dialog(page, '确认下发设置')
     await expect(dlg).toBeVisible()
-    await expect(dlg.getByText('控制类型')).toBeVisible()
+    await expect(dlg).toContainText('控制类型 露点控制 → 湿度控制')
     await expect(dlg.getByRole('button', { name: '确认下发' })).toBeVisible()
     await shotView(page, 'confirm-fresh-air-send')
   })

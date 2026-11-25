@@ -381,7 +381,7 @@ test.describe('文字提示', () => {
     await expect(tip(page)).toHaveCount(0)
   })
 
-  test('新风运行设置「不可设置」：锁图标可用 Tab 聚焦，聚焦显示原因、Esc 关闭；下发按钮是禁用的占位', async ({ page, login }) => {
+  test('新风运行设置「不可设置」：锁图标可用 Tab 聚焦，聚焦显示原因、Esc 关闭；没有改动时下发按钮禁用', async ({ page, login }) => {
     await login('dealer', 'PRJ-10252')
     await page.goto('/fresh-air')
     await settle(page)
