@@ -8,9 +8,12 @@
 // - 项目白名单 writeProjectCodes 按项目 code 比对（任何环境都生效）：只放行名单里的 code，
 //   名单为空则拒绝所有写操作；code 缺失、为空串、不是字符串一律拒绝。请求里用的是后端实体 id。
 // 判断不出环境时 config.ts 按生产处理，所以「不确定」等于「拦截」。
+import { fromBinary, type DescMessage } from '@bufbuild/protobuf'
+import { base64Decode } from '@bufbuild/protobuf/wire'
 import { getConfig, type RuntimeConfig } from './config'
 import { ApiError } from './errors'
 import { isSendableMode } from './values'
+import * as pb from './gen/ctrl200_pb.js'
 
 /** 写接口 → 路径（相对 apiBase） */
 export const WRITE_ROUTES = {
@@ -141,4 +144,59 @@ export function assertNoImplicitZero(op: WriteOp, decoded: Readonly<Record<strin
     }
   }
   walk(decoded, '', true)
+}
+
+/**
+ * 写消息里所有枚举字段（含嵌套消息、列表）的值都必须是该枚举里定义过的值；-1 等枚举外的值一律拒发（write_blocked）。
+ * proto3 枚举是开放的，编码不拦枚举外的值，但后端 Java 解码会报 unknown enum（11/25 203 传 -1 → 504、没执行）。
+ * 对解码后的值检查（和后端看到的一致：没上线的枚举字段解出 0）。map 字段写消息里没有，出现就拒发
+ */
+export function assertEnumsDefined(schema: DescMessage, decoded: Readonly<Record<string, unknown>>, path = ''): void {
+  const check = (x: unknown, e: { typeName: string; values: readonly { number: number }[] }, at: string) => {
+    if (typeof x !== 'number' || !e.values.some((ev) => ev.number === x)) {
+      throw new ApiError('write_blocked', `写消息字段 ${at} 的值 ${String(x)} 不在枚举 ${e.typeName} 里，未下发`)
+    }
+  }
+  for (const f of schema.fields) {
+    const name = path + f.localName
+    const v = decoded[f.localName]
+    if (f.fieldKind === 'enum') check(v, f.enum, name)
+    else if (f.fieldKind === 'message') { if (v && typeof v === 'object') assertEnumsDefined(f.message, v as Record<string, unknown>, name + '.') }
+    else if (f.fieldKind === 'list') {
+      if (!Array.isArray(v)) continue
+      if (f.listKind === 'enum') v.forEach((x, i) => check(x, f.enum, `${name}[${i}]`))
+      else if (f.listKind === 'message') v.forEach((x, i) => assertEnumsDefined(f.message, x as Record<string, unknown>, `${name}[${i}].`))
+    } else if (f.fieldKind === 'map') throw new ApiError('write_blocked', `写消息字段 ${name} 是 map，未核对过，未下发`)
+  }
+}
+
+/** 写接口 → 请求体里 body 的 Query schema（批量统一控制与 203 同一个 Query） */
+export const WRITE_QUERY_SCHEMAS: Readonly<Record<WriteOp, DescMessage>> = Object.freeze({
+  'ctrl-201': pb.RoomTemperatureSetQuerySchema,
+  'ctrl-203': pb.UnifiedCtrlSetQuerySchema,
+  'ctrl-204': pb.RunningCtrlSetQuerySchema,
+  'ctrl-206': pb.ProjectRoomSwitchSetQuerySchema,
+  'unified-ctrls-send': pb.UnifiedCtrlSetQuerySchema,
+})
+
+/**
+ * 发送边界的枚举检查（http.ts requestWrite 在发出前调用，绕不过）：把请求体里的 body（Query 的 base64）按该写接口的 schema 解码，
+ * 所有枚举字段必须在枚举里；203 / 批量统一控制的运行模式只能是 0（不变）或界面可选的模式。body 缺失、不是字符串、解不出来一律拒发。
+ * 「隐式 0」检查需要知道哪些字段是明确给出的，仍在 ctrl.ts encodeWrite 里做
+ */
+export function assertWriteBodyEnums(op: WriteOp, body: unknown): void {
+  const schema = WRITE_QUERY_SCHEMAS[op]
+  if (!schema) throw new ApiError('write_blocked', `未登记的写操作：${op}`)
+  if (typeof body !== 'string') throw new ApiError('write_blocked', '写请求体缺少 body，未下发')
+  let decoded: Record<string, unknown>
+  try {
+    const b64 = body.replace(/\s+/g, '')
+    decoded = fromBinary(schema, b64 ? base64Decode(b64) : new Uint8Array()) as unknown as Record<string, unknown>
+  } catch (e) {
+    throw new ApiError('write_blocked', '写请求体无法按 proto 解码，未下发', { cause: e })
+  }
+  assertEnumsDefined(schema, decoded)
+  if ((op === 'ctrl-203' || op === 'unified-ctrls-send') && !isSendableMode(decoded.systemMode)) {
+    throw new ApiError('write_blocked', `运行模式 ${String(decoded.systemMode)} 不是可选的模式，未下发`)
+  }
 }

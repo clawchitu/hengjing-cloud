@@ -15,7 +15,7 @@ import { base64Decode, base64Encode, BinaryReader, WireType } from '@bufbuild/pr
 import { getCurrentUserId } from './auth'
 import { getConfig } from './config'
 import { ApiError } from './errors'
-import { assertNoImplicitZero, type WriteOp, type WriteProject } from './guard'
+import { assertEnumsDefined, assertNoImplicitZero, type WriteOp, type WriteProject } from './guard'
 import { request, requestWrite } from './http'
 import { MODE_UNCHANGED } from './values'
 import * as pb from './gen/ctrl200_pb.js'
@@ -171,10 +171,11 @@ type Changes<T extends WriteCtrlType, Fixed extends string> = Partial<Omit<Write
 /**
  * 203 运行模式「不变」：0 = OPERATION_MODE_NONE（定义在 values.ts，这里转出给组装方用）。
  * 不能传 -1：-1 不在枚举里，后端 Java 解码报「Can't get the number of an unknown enum value」，网关等 10 秒回 504，指令没执行
- * （#60 之后 11/25 15:19、15:31 真机）；15:35 真机传 0、其余字段 -1：温度生效，开关和模式都没被带动。
+ * （#60 之后 11/25 15:19、15:31 真机）；15:35 真机传 0、其余字段 -1：HTTP 仍回 504（网关），但回读温度已生效、房间开关和房间模式没被带动；
+ * 15:36 传 0 改回原值回 200 success。
  * proto3 里 0 不上线（字段 #2 省略），后端解出的就是 NONE。
  */
-export { MODE_UNCHANGED }
+export { MODE_UNCHANGED, assertEnumsDefined }
 
 /**
  * 枚举字段的「不变」值，按枚举全名登记。只登记 proto 里明确写了「不变」的枚举值（docs/api/ctrlcb.proto）：
@@ -241,31 +242,6 @@ export function buildRunningCtrlSet(id: number, name: string, changes: Changes<2
 export function buildProjectRoomSwitchSet(on: boolean): WriteQuery<206> {
   if (typeof on !== 'boolean') throw new ApiError('bad_request', `206 全部房间开关须明确传 true 或 false，收到：${on === null ? 'null' : typeof on}`)
   return assemble(206, { switch: on ? 1 : 0 })
-}
-
-/**
- * 写消息里所有枚举字段（含嵌套消息、列表）的值都必须是该枚举里定义过的值；-1 等枚举外的值一律拒发（write_blocked）。
- * proto3 枚举是开放的，编码不拦枚举外的值，但后端 Java 解码会报 unknown enum（11/25 203 传 -1 → 504、没执行）。
- * 对解码后的值检查（和后端看到的一致：没上线的枚举字段解出 0）。
- */
-export function assertEnumsDefined(schema: DescMessage, decoded: Readonly<Record<string, unknown>>, path = ''): void {
-  for (const f of schema.fields) {
-    const name = path + f.localName
-    const v = decoded[f.localName]
-    const check = (x: unknown, e: { typeName: string; values: readonly { number: number }[] }, at: string) => {
-      if (typeof x !== 'number' || !e.values.some((ev) => ev.number === x)) {
-        throw new ApiError('write_blocked', `写消息字段 ${at} 的值 ${String(x)} 不在枚举 ${e.typeName} 里，未下发`)
-      }
-    }
-    if (f.fieldKind === 'enum') check(v, f.enum, name)
-    else if (f.fieldKind === 'message' && v && typeof v === 'object') assertEnumsDefined(f.message, v as Record<string, unknown>, name + '.')
-    else if (f.fieldKind === 'list' && Array.isArray(v)) {
-      if (f.listKind === 'enum') v.forEach((x, i) => check(x, f.enum, `${name}[${i}]`))
-      else if (f.listKind === 'message') v.forEach((x, i) => assertEnumsDefined(f.message, x as Record<string, unknown>, `${name}[${i}].`))
-    } else if (f.fieldKind === 'map') {
-      throw new ApiError('write_blocked', `写消息字段 ${name} 是 map，未核对过，未下发`)
-    }
-  }
 }
 
 /**

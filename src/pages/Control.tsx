@@ -24,6 +24,7 @@ import { getCurrentUserId } from '../api/auth'
 import { ApiError } from '../api/errors'
 import { MODE_UNCHANGED, type WriteQuery } from '../api/ctrl'
 import { WRITE_RECHECK_TEXT } from '../api/http'
+import { isSendableMode } from '../api/values'
 import { jwtSub, readTokens } from '../api/tokens'
 import { UnifiedCtrlSetQuery_OperatingMode as Mode } from '../api/gen/ctrl200_pb.js'
 import * as api from '../api'
@@ -204,6 +205,8 @@ const isLockRef = (l: unknown): l is ResultRow['lock'] => {
   const x = l as { key?: unknown; exp?: unknown; projectId?: unknown; query?: Record<string, unknown> | null; replied?: unknown } | null
   return !!x && typeof x.key === 'string' && Number.isFinite(x.exp) && typeof x.projectId === 'string' && typeof x.replied === 'boolean'
     && !!x.query && ['systemSwitch', 'systemMode', 'roomSwitch', 'roomTemp'].every((k) => Number.isFinite(x.query![k]))
+    // 运行模式只认 0（不变）和可选模式：旧版本（#60）存下的 -1 丢掉锁引用，不按它显示「运行模式：-1」
+    && isSendableMode(x.query.systemMode)
 }
 function readLast(key: string | null): ResultRow[] | null {
   if (!key) return null

@@ -333,4 +333,23 @@ describe('通用：所有写消息的枚举字段，线上编码值都必须是�
     expect(unchangedOf(fake)).toEqual({})
     expect(() => validateWriteQuery(fake, unchangedOf(fake))).toThrow(expect.objectContaining({ kind: 'bad_request', message: expect.stringContaining('mode') }))
   })
+  it('assertEnumsDefined 覆盖嵌套消息、列表里的枚举与 map（模拟以后新增的写消息）', () => {
+    const E = { typeName: 'ctrlcb.v1.FakeMode', values: [{ number: 0 }, { number: 1 }] }
+    const inner = { typeName: 'ctrlcb.v1.Inner', fields: [{ localName: 'mode', fieldKind: 'enum', enum: E }] }
+    const fake = {
+      typeName: 'ctrlcb.v1.FakeSetQuery',
+      fields: [
+        { localName: 'items', fieldKind: 'list', listKind: 'message', message: inner },
+        { localName: 'modes', fieldKind: 'list', listKind: 'enum', enum: E },
+        { localName: 'one', fieldKind: 'message', message: inner },
+      ],
+    } as unknown as DescMessage
+    const ok = { items: [{ mode: 0 }, { mode: 1 }], modes: [1, 0], one: { mode: 1 } }
+    expect(() => assertEnumsDefined(fake, ok)).not.toThrow()
+    expect(() => assertEnumsDefined(fake, { ...ok, items: [{ mode: 1 }, { mode: -1 }] })).toThrow(/items\[1\]\.mode.*-1.*不在枚举/)
+    expect(() => assertEnumsDefined(fake, { ...ok, modes: [1, -1] })).toThrow(/modes\[1\].*不在枚举/)
+    expect(() => assertEnumsDefined(fake, { ...ok, one: { mode: 2 } })).toThrow(/one\.mode.*不在枚举/)
+    const withMap = { typeName: 'ctrlcb.v1.M', fields: [{ localName: 'm', fieldKind: 'map' }] } as unknown as DescMessage
+    expect(() => assertEnumsDefined(withMap, { m: {} })).toThrow(expect.objectContaining({ kind: 'write_blocked' }))
+  })
 })

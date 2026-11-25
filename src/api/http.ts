@@ -16,7 +16,7 @@
 // 收到未认证直接结束这次下发（WRITE_AUTH_TEXT），绝不重放；真正调用 fetch 前同步执行一次 beforeSend 复核。
 import { getConfig } from './config'
 import { ApiError, errorFromResponse, errorFromThrown } from './errors'
-import { assertWriteAllowed, isNonCanonicalPath, isWritePath, WRITE_ROUTES, type WriteOp, type WriteProject } from './guard'
+import { assertWriteAllowed, assertWriteBodyEnums, isNonCanonicalPath, isWritePath, WRITE_ROUTES, type WriteOp, type WriteProject } from './guard'
 import { clearTokens, jwtSub, readTokens, tokensFromResponse, writeTokens, type Tokens } from './tokens'
 
 export interface RequestOptions {
@@ -252,6 +252,8 @@ export async function requestWrite<T>(op: WriteOp, projects: readonly WriteProje
   if (op === 'unified-ctrls-send') target = { project_ids: allowed.map((p) => p.id) }
   else if (allowed.length === 1) target = { project_id: allowed[0].id }
   else throw new ApiError('write_blocked', '单项目写消息只能指定一个项目')
+  // 发送边界的枚举检查：直接调 requestWrite 也绕不过（201/203/204/206 与批量都经这里）
+  assertWriteBodyEnums(op, copy.body)
   const payload = { ...copy, ...target }
   try {
     return await writeOnce<T>(WRITE_ROUTES[op], { ...opts, method: 'POST', body: payload })

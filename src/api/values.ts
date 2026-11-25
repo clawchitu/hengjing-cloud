@@ -13,7 +13,7 @@ import { UnifiedCtrlSetQuery_OperatingMode as Mode } from './gen/ctrl200_pb.js'
 export const UNCHANGED = -1
 
 /**
- * 203 运行模式「不变」：0 = OPERATION_MODE_NONE（docs/api/ctrlcb.proto 枚举注释「不变」；11/25 15:35 真机确认）。
+ * 203 运行模式「不变」：0 = OPERATION_MODE_NONE（docs/api/ctrlcb.proto 枚举注释「不变」；11/25 15:35 真机：回 504 但温度已生效，15:36 回 200 success）。
  * 不是 -1：-1 不在枚举里，后端 Java 报「Can't get the number of an unknown enum value」，网关 504，指令没执行（11/25 15:19、15:31）
  */
 export const MODE_UNCHANGED: Mode = Mode.OPERATION_MODE_NONE
@@ -66,5 +66,5 @@ export function withUnchanged<K extends string>(fields: readonly K[], changes: P
   return out
 }
 
-/** fields 里是否有不是 -1 的项（全是 -1 的请求不应发出）。只看给出的可改字段，不看设备 ID 等 */
+/** fields 里是否有不是 -1 的项（全是 -1 的请求不应发出）。只看给出的可改字段，不看设备 ID 等。只适用于数值字段：枚举字段（203 运行模式不变是 0）不能用它判断，见 unified/rules.ts isUnchanged203 */
 export const hasChanges = <K extends string>(q: Record<K, number>, fields: readonly K[]) => fields.some((f) => q[f] !== UNCHANGED)
