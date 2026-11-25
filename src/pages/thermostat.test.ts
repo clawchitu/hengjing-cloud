@@ -303,6 +303,31 @@ describe('修改设定温度与节能（ctrl 201）', () => {
     expect(body201(writes(be)[0])).toMatchObject({ temperature: 26 })
   })
 
+  it('基准 21.5、草稿 21.0 → 读取失败 → 恢复时面板 22.0：草稿保留、提示外部变化，没有下发按钮（靠草稿冲突检测拦，0 个 201）', async () => {
+    let fail = false
+    const be = backend({
+      '/ctrl/room-temperature-data-get': () => (fail ? json({ code: 13, message: 'x' }, 500) : reply200(rooms)),
+      '/ctrl/room-temperature-set': ok201,
+    })
+    rooms = rooms.map((r) => ((r as { name?: string }).name === '客厅' ? { ...r, setTemp: 21.5 } : r))
+    const c = await openRooms()
+    await waitFor(() => expect(card('客厅').textContent).toContain('21.5'))
+    fireEvent.click(btn(c, '客厅 设定温度降低'))
+    expect(card('客厅').textContent).toContain('21.5 → 21.0')
+    fail = true
+    await act(async () => { await client.refetchQueries({ type: 'active' }).catch(() => {}) })
+    await waitFor(() => expect(btn(card('客厅'), '下发').disabled).toBe(true))
+    rooms = rooms.map((r) => ((r as { name?: string }).name === '客厅' ? { ...r, setTemp: 22.0 } : r))
+    fail = false
+    await act(async () => { await client.refetchQueries({ type: 'active' }) })
+    await waitFor(() => expect(card('客厅').textContent).toContain('面板设定温度已在外部变化'))
+    expect(within(card('客厅')).getByRole('button', { name: '放弃修改' })).toBeTruthy() // 草稿保留，只能放弃
+    expect(within(card('客厅')).queryByRole('button', { name: '下发' })).toBeNull()
+    await new Promise((r) => setTimeout(r, 100))
+    expect(writes(be)).toHaveLength(0)
+    expect(toastLog.join()).not.toContain('未下发的修改已清除')
+  })
+
   it('有草稿时读取失败、随后房间真正离线（面板未连接）：照旧清草稿并提示一次', async () => {
     let fail = false
     backend({ '/ctrl/room-temperature-data-get': () => (fail ? json({ code: 13, message: 'x' }, 500) : reply200(rooms)) })

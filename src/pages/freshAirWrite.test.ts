@@ -336,6 +336,47 @@ describe('210 读取失败时保留草稿', () => {
     await waitFor(() => expect(within(panel()).queryByRole('group', { name: '风速' })).toBeTruthy())
     expect(panel().textContent).not.toContain('待下发')
   })
+
+  it('湿度基准 55、草稿 56 → 读取失败 → 恢复时读数 57：草稿保留、提示外部变化，不能下发（靠草稿冲突检测拦，0 个 204）', async () => {
+    const be = backend({ [R210]: flaky })
+    await signIn('u', 'pw', true)
+    const client = mount(P12.id)
+    await waitFor(() => expect(within(panel()).queryByRole('group', { name: '风速' })).toBeTruthy())
+    fireEvent.click(stepBtn('湿度设定升高'))
+    expect(panel().textContent).toContain('待下发：湿度设定 55 %RH → 56 %RH')
+    fail = true
+    await act(async () => { await client.refetchQueries({ type: 'active' }).catch(() => {}) })
+    await waitFor(() => expect(panel().textContent).toContain('刷新失败'))
+    r210 = S210({ humiditySet: 57 })
+    fail = false
+    await act(async () => { await client.refetchQueries({ type: 'active' }) })
+    await waitFor(() => expect(panel().textContent).toContain('湿度设定已在外部变化，未下发的修改需要重新核对'))
+    expect(within(panel()).getByRole('button', { name: '放弃修改' })).toBeTruthy() // 草稿保留，只能放弃
+    const b = within(panel()).queryByRole('button', { name: '下发设置' }) as HTMLButtonElement | null
+    expect(b === null || b.disabled).toBe(true)
+    if (b) fireEvent.click(b)
+    await flush(100)
+    expect(writes(be)).toHaveLength(0)
+    expect(toasts()).not.toContain('未下发的修改已清除')
+  })
+
+  it('210 读取失败且还没有读数（error）：草稿保留，占位写「未下发的修改已保留」；恢复后草稿仍在', async () => {
+    backend({ [R210]: flaky })
+    await signIn('u', 'pw', true)
+    const client = mount(P12.id)
+    await waitFor(() => expect(within(panel()).queryByRole('group', { name: '风速' })).toBeTruthy())
+    fireEvent.click(opt('风速', '高'))
+    fail = true
+    await act(async () => { await client.resetQueries({ type: 'active' }).catch(() => {}) }) // 清掉旧读数再读：没有读数的失败
+    await waitFor(() => expect(panel().textContent).toContain('运行设置读取失败'))
+    expect(panel().textContent).toContain('未下发的修改已保留')
+    expect(within(panel()).queryByRole('group', { name: '风速' })).toBeNull()
+    expect(toasts()).not.toContain('未下发的修改已清除')
+    fail = false
+    await act(async () => { await client.refetchQueries({ type: 'active' }) })
+    await waitFor(() => expect(panel().textContent).toContain('待下发：风速 自动 → 高'))
+    expect(panel().textContent).not.toContain('未下发的修改已保留')
+  })
 })
 
 describe('确认：取消 / 离开 / 切项目', () => {
