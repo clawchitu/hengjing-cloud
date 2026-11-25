@@ -12,6 +12,16 @@ async function expectFocus(el: Locator, ring: boolean) {
   else expect(await outline(el)).toBe('none')
 }
 /** 真实键盘导航到 el（从顶栏搜索框起按 Tab） */
+/** 首页天气城市选择：打开、输入、回车（同 e2e/weather.spec.ts） */
+async function pickCity(page: Page, q: string) {
+  await page.getByRole('button', { name: /^天气城市：/ }).click()
+  await page.clock.runFor(100)
+  await page.getByRole('combobox', { name: '搜索城市' }).fill(q)
+  await page.clock.runFor(50)
+  await page.keyboard.press('Enter')
+  await page.clock.runFor(50)
+}
+
 async function tabTo(page: Page, el: Locator) {
   await page.getByPlaceholder('搜索项目名称 / 项目ID').focus()
   for (let i = 0; i < 200; i++) {
@@ -398,35 +408,34 @@ test.describe('轻提示', () => {
     await login('dealer')
     await page.goto('/home')
     await settle(page)
-    // 两条不同的提示：先点「刷新天气」（800ms 后提示「天气已更新」），再点城市按钮（立即提示）
-    await page.locator('.page-head .actions button').nth(1).click()
+    // 两条不同的提示：先用城市选择换城市（立即提示），100ms 后点「刷新天气」（800ms 后提示「天气已更新」）
+    await pickCity(page, '苏州')
+    await tick(page, 100)
+    await page.getByRole('button', { name: '刷新天气' }).click()
     await tick(page, 800)
     await expectToast(page, '天气已更新')
-    await tick(page, 100) // 第二条晚 100ms 出现
-    await page.getByRole('button', { name: '上海市 · 浦东新区' }).click()
-    await tick(page, 100)
     const toasts = page.locator('[data-sonner-toast]')
     await expect(toasts).toHaveCount(2)
     const [a, b] = await Promise.all([
+      page.locator('[data-sonner-toast]', { hasText: '天气城市已切换为 苏州市' }).boundingBox(),
       page.locator('[data-sonner-toast]', { hasText: '天气已更新' }).boundingBox(),
-      page.locator('[data-sonner-toast]', { hasText: '演示环境仅提供上海市浦东新区天气' }).boundingBox(),
     ])
     expect(a!.y).toBe(72) // 旧的在上
     expect(b!.y - (a!.y + a!.height)).toBe(8)
-    // 推进到 2400ms，再每次 10ms，记下各自消失的时刻：第一条约 2600ms 后消失，第二条（晚点出现的）晚于第一条
+    // 第一条出现后已过约 900ms；推进到 2400ms，再每次 10ms，记下各自消失的时刻：第一条约 2600ms 后消失，第二条晚约 900ms
     const visible = (t: string) => page.locator('[data-sonner-toast]:visible', { hasText: t }).count()
-    await tick(page, 2200)
+    await tick(page, 1500)
     let elapsed = 2400, goneA = 0, goneB = 0
-    while ((!goneA || !goneB) && elapsed < 4000) {
+    while ((!goneA || !goneB) && elapsed < 4400) {
       await tick(page, 10)
       elapsed += 10
-      if (!goneA && !(await visible('天气已更新'))) goneA = elapsed
-      if (!goneB && !(await visible('演示环境'))) goneB = elapsed
+      if (!goneA && !(await visible('天气城市已切换'))) goneA = elapsed
+      if (!goneB && !(await visible('天气已更新'))) goneB = elapsed
     }
     expect(goneA).toBeGreaterThanOrEqual(2550)
-    expect(goneA).toBeLessThanOrEqual(2700)
-    expect(goneB - goneA).toBeGreaterThanOrEqual(80)
-    expect(goneB - goneA).toBeLessThanOrEqual(120)
+    expect(goneA).toBeLessThanOrEqual(2750)
+    expect(goneB - goneA).toBeGreaterThanOrEqual(850)
+    expect(goneB - goneA).toBeLessThanOrEqual(950)
     await expect(page.locator('[data-sonner-toast]:visible')).toHaveCount(0)
   })
 })
@@ -437,7 +446,7 @@ test.describe('轻提示（不减少动态效果）', () => {
     await login('dealer')
     await page.goto('/home')
     await settle(page)
-    await page.getByRole('button', { name: '上海市 · 浦东新区' }).click()
+    await pickCity(page, '苏州')
     await tick(page, 1)
     const t = page.locator('[data-sonner-toast]')
     await expect(t).toHaveCount(1)

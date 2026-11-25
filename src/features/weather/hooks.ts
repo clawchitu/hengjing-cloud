@@ -59,7 +59,8 @@ function useWeatherQuery<T>(route: '/v1/weather' | '/v1/weather24', which: 'now'
   const query = useQuery({
     queryKey: weatherKeys[which](userKey, src.kind, q),
     queryFn: ({ signal }) => fetch(q, signal),
-    enabled: authed && permitted,
+    // 会话视图可能先是 authed、账号键还没到（userKey 为 null）：这时不请求，免得先按默认城市、不带账号的键多发一次
+    enabled: authed && !!userKey && permitted,
     staleTime: src.kind === 'real' ? WEATHER_STALE_MS : Infinity,
   })
   const qRefetch = query.refetch
