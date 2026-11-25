@@ -31,7 +31,8 @@ export interface Features {
   /** 滤网寿命的红、橙色和「请尽快更换」提示（阈值按 filter_life_p 的比例算，见 src/features/freshAir/filter.ts） */
   freshAirFilterWarn: boolean
   /**
-   * 200 里的房间开关是否可信（后端 11/25 答复第 1 条：控制屏没上报房间状态，读到的是默认值 0，后端会修；修好后改成 true）。
+   * 200 里的房间开关是否可信（后端 11/25 答复第 1 条：控制屏曾没上报房间状态，读到的是默认值 0；11/25 10:17 复核已真实上报，默认改为 true）。
+   * 再出问题时在测试站 config.js 写 false 即可回到「开关未知」，不用改代码。
    * false 时：房间开关显示「未知」、核对开关一律无法核对、不拿它禁用温度和节能（温控「房间关着只能开房间」、统一控制「房间全关」）。
    * 只管真实接口；演示数据的房间开关是真实的，按 true 处理（见 roomSwitchReported()）
    */
@@ -46,7 +47,7 @@ export const FEATURE_DEFAULTS: Readonly<Features> = Object.freeze({
   freshAirWrite: 'on',
   // 后端 11/25 答复字段没反，但 proto 里 filter_life_p 是 int32（按比例只能是 0 或 1），确认前告警保持关，避免 0.72 截成 0 误报
   freshAirFilterWarn: false,
-  roomSwitchReported: false,
+  roomSwitchReported: true,
   weatherCityFilter: 'auto',
   weatherNowFallback: true,
 })

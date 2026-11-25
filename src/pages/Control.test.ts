@@ -605,8 +605,8 @@ describe('房间都关着（后端 11/25 答复第 16 条：温度照样生效�
     expect(screen.getByTestId('temp-box').hasAttribute('disabled')).toBe(false)
   })
 
-  it('开关未上报（默认）：不读 200 判断房间状态，不禁用也不提示房间状态', async () => {
-    setConfig({ apiBase: '/api', dataSource: 'real', apiEnv: 'test' })
+  it('开关未上报（config 写 false）：不读 200 判断房间状态，不禁用也不提示房间状态', async () => {
+    setConfig({ apiBase: '/api', dataSource: 'real', apiEnv: 'test', features: { roomSwitchReported: false } } as never)
     const be = backend({ '/ctrl/room-temperature-data-get': () => rooms(0, 26) })
     await mount()
     await click(keep())
