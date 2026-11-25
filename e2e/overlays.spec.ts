@@ -197,36 +197,49 @@ test.describe('toast', () => {
 })
 
 test.describe('项目切换菜单展开', () => {
-  for (const role of ['dealer', 'admin'] as const) {
-    test(role === 'dealer' ? '经销商' : '管理员（按经销商分组）', async ({ page, login }) => {
-      await login(role)
-      await page.goto('/home')
-      await tick(page, 1500)
-      await page.getByText('当前项目', { exact: true }).click()
-      await tick(page)
-      const menu = projectMenu(page)
-      await expect(menu).toBeVisible()
-      await expect(menu.locator('[data-current]')).toHaveCount(1)
-      if (role === 'admin') await expect(menu.getByText('上海恒境暖通', { exact: true })).toBeVisible()
-      await shotView(page, `${role}-project-menu`)
-    })
-  }
-
-  // 当前项目在菜单很靠后（第 3 个经销商）：锁定旧版「打开时停在菜单顶部、不滚到当前项」的行为
-  test('管理员：当前项目不在菜单首屏', async ({ page, login }) => {
-    await login('admin', 'PRJ-60012')
+  test('经销商：全部项目（当前项目高亮）', async ({ page, login }) => {
+    await login('dealer')
     await page.goto('/home')
     await tick(page, 1500)
     await page.getByText('当前项目', { exact: true }).click()
     await tick(page)
     const menu = projectMenu(page)
     await expect(menu).toBeVisible()
-    const cur = menu.locator('[data-current]')
-    await expect(cur).toHaveCount(1)
-    await expect(cur).toContainText('河西府 2栋')
-    await expect(cur).not.toBeInViewport()
-    expect(await menu.evaluate((m) => m.scrollTop)).toBe(0)
-    await shotView(page, 'admin-project-menu-cur-below')
+    await expect(menu.locator('[data-current]')).toHaveCount(1)
+    await shotView(page, 'dealer-project-menu')
+  })
+
+  test('管理员：已置顶 + 最近使用，副标题是经销商名', async ({ page, login }) => {
+    await page.addInitScript(() => {
+      localStorage.setItem('hjc-pinned-projects:mock:hjadmin', JSON.stringify(['PRJ-50102']))
+      localStorage.setItem('hjc-recent-projects:mock:hjadmin', JSON.stringify(['PRJ-60012', 'PRJ-30056', 'PRJ-10241']))
+    })
+    await login('admin')
+    await page.goto('/home')
+    await tick(page, 1500)
+    await page.getByText('当前项目', { exact: true }).click()
+    await tick(page)
+    const menu = projectMenu(page)
+    await expect(menu.getByRole('option')).toHaveCount(4)
+    await expect(menu.getByText('杭州暖居环境', { exact: true })).toBeVisible()
+    await shotView(page, 'admin-project-menu')
+  })
+
+  test('管理员：搜索结果与搜不到', async ({ page, login }) => {
+    await login('admin')
+    await page.goto('/home')
+    await tick(page, 1500)
+    await page.getByText('当前项目', { exact: true }).click()
+    await tick(page)
+    const input = page.getByRole('combobox', { name: '搜索要切换的项目' })
+    await input.fill('河西府')
+    await tick(page)
+    await expect(projectMenu(page).getByRole('option')).toHaveCount(4)
+    await shotView(page, 'admin-project-menu-search')
+    await input.fill('不存在')
+    await tick(page)
+    await expect(projectMenu(page).getByText('没有匹配“不存在”的项目')).toBeVisible()
+    await shotView(page, 'admin-project-menu-empty')
   })
 })
 

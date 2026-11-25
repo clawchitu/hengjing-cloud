@@ -282,14 +282,14 @@ describe('首页：组织范围失败与数据不完整', () => {
 describe('侧栏项目菜单的提示', () => {
   const openMenu = async () => { await act(async () => { fireEvent.click(screen.getByText('当前项目').closest('[role="button"]')!) }) }
 
-  it('/distributors 失败：集成项目归到「其他」，菜单里不丢项目，并提示可重试', async () => {
+  it('/distributors 失败：提示可重试，项目照常能搜到、不丢', async () => {
     backend({ '/distributors': () => text('no permission', 403) })
     await signIn('u', 'pw', true)
     mountAt('/home')
     await screen.findAllByText('测试项目0829')
-    await waitFor(async () => { await openMenu(); expect(screen.getByText(/经销商列表加载失败，部分分组暂按「其他」显示/)).toBeTruthy() })
-    expect(screen.getByRole('group', { name: '其他 · 五恒集成项目' })).toBeTruthy()
-    expect(screen.getByRole('group', { name: '其他 · 南京集成项目' })).toBeTruthy()
+    await waitFor(async () => { await openMenu(); expect(screen.getByText('经销商列表加载失败，部分项目暂不显示经销商名')).toBeTruthy() })
+    await act(async () => { fireEvent.change(screen.getByRole('combobox', { name: '搜索要切换的项目' }), { target: { value: '测试项目0829' } }) })
+    expect(screen.getAllByRole('option').map((o) => o.textContent)).toEqual([expect.stringContaining('测试项目0829')])
   })
 
   it('后台刷新失败（有旧数据）：菜单顶部提示数据可能已过期', async () => {

@@ -1,6 +1,7 @@
 // Popover + Command（S3b）的交互与键盘行为：项目切换菜单、顶栏项目搜索。只做行为断言，不截图
 // （打开态外观由 overlays.spec.ts / states.spec.ts 的基线锁定）。
 // 共同约定：鼠标打开时没有高亮（同旧版）；上下键移动高亮、回车选中；Esc 关闭；点外部关闭。
+// 项目切换器打开后焦点在弹层顶部的搜索框（combobox），搜索 / 最近 / 置顶等行为见 switcher.spec.ts。
 import type { Locator, Page } from '@playwright/test'
 import { expect, test } from './fixtures'
 
@@ -44,11 +45,11 @@ test.describe('项目切换菜单', () => {
     await expect(menu(page)).toBeVisible()
     await expect(trigger(page)).toHaveAttribute('aria-expanded', 'true')
     await expect(highlighted(menuOptions(page))).toHaveCount(0)
-    // 弹层是有名称的 dialog，触发器声明的弹出类型与之一致；焦点在列表上，没有活动项
+    // 弹层是有名称的 dialog，触发器声明的弹出类型与之一致；焦点在搜索框上，没有活动项
     await expect(page.getByRole('dialog', { name: '切换当前项目' })).toBeVisible()
     await expect(trigger(page)).toHaveAttribute('aria-haspopup', 'dialog')
     expect(await trigger(page).getAttribute('aria-controls')).toBe(await menu(page).getAttribute('id'))
-    expect(await focusedActive(page)).toEqual({ role: 'listbox', active: null })
+    expect(await focusedActive(page)).toEqual({ role: 'combobox', active: null })
     await page.keyboard.press('Escape')
     await tick(page)
     await expect(menu(page)).toHaveCount(0)
@@ -63,11 +64,11 @@ test.describe('项目切换菜单', () => {
     await tick(page)
     await expect(menu(page)).toBeVisible()
     await expect(highlighted(menuOptions(page))).toHaveText(/朝阳壹号院 A栋/)
-    expect(await focusedActive(page)).toEqual({ role: 'listbox', active: expect.stringContaining('朝阳壹号院 A栋') })
+    expect(await focusedActive(page)).toEqual({ role: 'combobox', active: expect.stringContaining('朝阳壹号院 A栋') })
     await page.keyboard.press('ArrowDown')
     await tick(page)
     await expect(highlighted(menuOptions(page))).toHaveText(/朝阳壹号院 B栋/)
-    expect(await focusedActive(page)).toEqual({ role: 'listbox', active: expect.stringContaining('朝阳壹号院 B栋') })
+    expect(await focusedActive(page)).toEqual({ role: 'combobox', active: expect.stringContaining('朝阳壹号院 B栋') })
     await page.keyboard.press('ArrowDown')
     await tick(page)
     await page.keyboard.press('ArrowUp')
@@ -169,9 +170,9 @@ test.describe('项目切换菜单', () => {
   }
 
   for (const height of [560, 420]) {
-    test(`矮窗口（高 ${height}）：菜单整个在屏内，能滚到最后一项`, async ({ page, login }) => {
+    test(`矮窗口（高 ${height}）：弹层整个在屏内，列表能滚到最后一项，底部链接始终可见`, async ({ page, login }) => {
       await page.setViewportSize({ width: 1440, height })
-      await open(page, login, 'admin')
+      await open(page, login, 'dealer')
       await page.getByText('当前项目', { exact: true }).click()
       await tick(page)
       const box = (await menu(page).boundingBox())!
@@ -179,13 +180,9 @@ test.describe('项目切换菜单', () => {
       expect(box.y + box.height).toBeLessThanOrEqual(height)
       const last = menuOptions(page).last()
       await expect(last).not.toBeInViewport()
-      await menu(page).evaluate((m) => { m.scrollTop = m.scrollHeight })
+      await page.getByRole('listbox', { name: '切换当前项目' }).evaluate((m) => { m.scrollTop = m.scrollHeight })
       await expect(last).toBeInViewport({ ratio: 1 })
-      // 键盘 End 也能到最后一项
-      await page.keyboard.press('Home')
-      await page.keyboard.press('End')
-      await tick(page)
-      await expect(highlighted(menuOptions(page))).toHaveText(await last.textContent() ?? '')
+      await expect(menu(page).getByRole('link', { name: '查看全部项目 →' })).toBeInViewport({ ratio: 1 })
     })
   }
 
@@ -203,29 +200,30 @@ test.describe('项目切换菜单', () => {
   })
 
   test('鼠标打开后按上下键：先高亮当前项目并滚进可视区', async ({ page, login }) => {
-    // 当前项目在菜单很靠后（同 overlays 的 admin-project-menu-cur-below）
-    await open(page, login, 'admin', 'PRJ-60012')
+    // 当前项目在列表很靠后（经销商的最后几个演示项目）
+    await open(page, login, 'dealer', 'PRJ-40012')
     await page.getByText('当前项目', { exact: true }).click()
     await tick(page)
-    const cur = menu(page).locator('[data-current]')
+    const list = page.getByRole('listbox', { name: '切换当前项目' })
+    const cur = list.locator('[data-current]')
     await expect(cur).not.toBeInViewport()
-    expect(await menu(page).evaluate((m) => m.scrollTop)).toBe(0)
-    // 鼠标打开时没有高亮，回车不选任何项
+    expect(await list.evaluate((m) => m.scrollTop)).toBe(0)
+    // 鼠标打开时没有高亮、没有搜索词，回车不选任何项
     await page.keyboard.press('Enter')
     await tick(page)
     await expect(menu(page)).toBeVisible()
-    await expect(currentName(page)).toContainText('河西府 2栋')
+    await expect(currentName(page)).toContainText('湖畔公寓 2号楼')
     await page.keyboard.press('ArrowDown')
     await tick(page)
-    await expect(highlighted(menuOptions(page))).toHaveText(/河西府 2栋/)
+    await expect(highlighted(menuOptions(page))).toHaveText(/湖畔公寓 2号楼/)
     await expect(cur).toBeInViewport()
-    expect(await focusedActive(page)).toEqual({ role: 'listbox', active: expect.stringContaining('河西府 2栋') })
+    expect(await focusedActive(page)).toEqual({ role: 'combobox', active: expect.stringContaining('湖畔公寓 2号楼') })
     await page.keyboard.press('ArrowDown')
     await tick(page)
-    await expect(highlighted(menuOptions(page))).toHaveText(/河西府 3栋/)
+    await expect(highlighted(menuOptions(page))).toHaveText(/湖畔公寓 3号楼/)
     await page.keyboard.press('Enter')
     await tick(page)
-    await expect(currentName(page)).toContainText('河西府 3栋')
+    await expect(currentName(page)).toContainText('湖畔公寓 3号楼')
   })
 
   test('鼠标移动清掉键盘高亮', async ({ page, login }) => {
@@ -236,18 +234,18 @@ test.describe('项目切换菜单', () => {
     await page.keyboard.press('ArrowDown')
     await tick(page)
     await expect(highlighted(menuOptions(page))).toHaveText(/朝阳壹号院 B栋/)
-    expect(await focusedActive(page)).toEqual({ role: 'listbox', active: expect.stringContaining('朝阳壹号院 B栋') })
+    expect(await focusedActive(page)).toEqual({ role: 'combobox', active: expect.stringContaining('朝阳壹号院 B栋') })
     const box = (await menuOptions(page).nth(3).boundingBox())!
     await page.mouse.move(box.x + 20, box.y + 10)
     await page.mouse.move(box.x + 30, box.y + 12)
     await tick(page)
     await expect(highlighted(menuOptions(page))).toHaveCount(0)
-    expect(await focusedActive(page)).toEqual({ role: 'listbox', active: null })
+    expect(await focusedActive(page)).toEqual({ role: 'combobox', active: null })
     // 再按方向键：从当前项目重新开始，焦点元素上的活动项与高亮一致（不残留清除前的旧值）
     await page.keyboard.press('ArrowDown')
     await tick(page)
     await expect(highlighted(menuOptions(page))).toHaveText(/朝阳壹号院 A栋/)
-    expect(await focusedActive(page)).toEqual({ role: 'listbox', active: expect.stringContaining('朝阳壹号院 A栋') })
+    expect(await focusedActive(page)).toEqual({ role: 'combobox', active: expect.stringContaining('朝阳壹号院 A栋') })
   })
 
   test('点选项切换项目；点外部关闭且不抢焦点', async ({ page, login }) => {
@@ -264,8 +262,8 @@ test.describe('项目切换菜单', () => {
     await page.getByText('当前项目', { exact: true }).click()
     await tick(page)
     await expect(menu(page)).toBeVisible()
-    // 菜单里点非选项处（分组标题）不关闭
-    await menu(page).getByText('朝阳壹号院住宅组', { exact: true }).click()
+    // 弹层里点非选项处（分段标题）不关闭
+    await menu(page).getByText('全部项目', { exact: true }).click()
     await tick(page)
     await expect(menu(page)).toBeVisible()
     await page.locator('h1').first().click()

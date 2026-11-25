@@ -214,17 +214,20 @@ function mountLayout(path: string) {
 }
 
 describe('Layout（真实数据形状）', () => {
-  it('侧栏项目切换：一个项目属于两个集成项目时两组下都有它，不显示 code', async () => {
+  it('侧栏项目切换：一个项目属于两个集成项目时只出现一次，不显示 code，但能按 code 搜到', async () => {
     backend()
     await signIn('u', 'pw', true)
     mountLayout('/home')
     await screen.findByText('首页页内容')
     await act(async () => { fireEvent.click(screen.getByText('当前项目').closest('[role="button"]')!) })
-    const g1 = await screen.findByRole('group', { name: /五恒集成项目/ })
-    const g2 = screen.getByRole('group', { name: /单机版/ })
-    expect(within(g1).getByText('测试项目0829')).toBeTruthy()
-    expect(within(g2).getByText('测试项目0829')).toBeTruthy()
-    expect(within(g1).queryByText('240829001')).toBeNull() // S13：不显示项目 code / id
+    const input = await screen.findByRole('combobox', { name: '搜索要切换的项目' })
+    expect(document.activeElement).toBe(input) // 打开即聚焦搜索框
+    await act(async () => { fireEvent.change(input, { target: { value: '科希家' } }) }) // 按经销商名搜
+    const list = screen.getByRole('listbox', { name: '切换当前项目' })
+    expect(within(list).getAllByText('测试项目0829')).toHaveLength(1) // p1 在 g1、g2 里，只列一次
+    expect(list.textContent).not.toContain('240829001') // S13：不显示项目 code / id
+    await act(async () => { fireEvent.change(input, { target: { value: '240829001' } }) })
+    expect(within(list).getAllByRole('option').map((o) => o.textContent)).toEqual([expect.stringContaining('测试项目0829')])
     // 侧栏「当前项目」卡片只有名称和在线状态
     expect(screen.getByText('当前项目').closest('[role="button"]')!.textContent).not.toContain('240829001')
     expect(screen.queryByText('p1')).toBeNull()
@@ -311,38 +314,36 @@ describe('Home（真实平台账号、组织范围为空）', () => {
   })
 })
 
-describe('侧栏菜单键盘导航（多组重复项）', () => {
+describe('侧栏菜单键盘导航（重复项去重）', () => {
   const highlighted = () => document.querySelector<HTMLElement>('[cmdk-item][aria-selected="true"]')
-  const groupOf = (el: Element | null) => el?.closest('[role="group"]')?.getAttribute('aria-label') ?? ''
   const key = async (k: string) => { await act(async () => { fireEvent.keyDown(document.activeElement!, { key: k }) }) }
 
-  it('从第一组导航到第二组的重复项、继续导航、回车选中：高亮与 aria-activedescendant 指向正确的那一项', async () => {
+  it('键盘打开 → 搜索 → 方向键 → 回车：高亮与 aria-activedescendant 一致，重复项只经过一次', async () => {
     localStorage.setItem('hjc-project', 'p3')
     backend()
     await signIn('u', 'pw', true)
     const { client } = mountLayout('/home')
     await screen.findByText('首页页内容')
-    // 侧栏按经销商分组，等经销商列表也到了再开菜单
     await waitFor(() => expect(client.getQueryState(['org', 'user:admin-1', 'dealers'])?.status).toBe('success'))
     const trigger = screen.getByText('当前项目').closest<HTMLElement>('[role="button"]')!
     trigger.focus()
     await act(async () => { fireEvent.keyDown(trigger, { key: 'Enter' }) })
-    // 菜单顺序：g1: p1, p3；g2: p1, p2。键盘打开先高亮当前项目 p3（在第一组）
-    await waitFor(() => expect(highlighted()?.textContent).toContain('科希家办公室'))
-    expect(groupOf(highlighted())).toContain('五恒集成项目')
-    await key('ArrowDown') // → 第二组里重复出现的 p1
-    expect(highlighted()?.textContent).toContain('测试项目0829')
-    expect(groupOf(highlighted())).toContain('单机版')
-    const list = document.querySelector('[cmdk-list]')!
-    expect(list.getAttribute('aria-activedescendant')).toBe(highlighted()!.id)
-    await key('ArrowDown') // → p2
+    const input = await screen.findByRole('combobox', { name: '搜索要切换的项目' })
+    expect(document.activeElement).toBe(input)
+    await act(async () => { fireEvent.change(input, { target: { value: '科希家' } }) })
+    // 项目列表顺序 p1, p2, p3，每个只一次；输入时高亮第一条命中
+    await waitFor(() => expect(highlighted()?.textContent).toContain('测试项目0829'))
+    expect(screen.getAllByRole('option')).toHaveLength(3)
+    expect(input.getAttribute('aria-activedescendant')).toBe(highlighted()!.id)
+    await key('ArrowDown')
     expect(highlighted()?.textContent).toContain('独立空气系统测试')
-    await key('ArrowUp') // ← 回到第二组的 p1，不会跳到第一组的同名项
-    expect(groupOf(highlighted())).toContain('单机版')
-    expect(highlighted()?.textContent).toContain('测试项目0829')
-    expect(list.getAttribute('aria-activedescendant')).toBe(highlighted()!.id)
+    await key('ArrowDown')
+    expect(highlighted()?.textContent).toContain('科希家办公室')
+    await key('ArrowUp')
+    expect(highlighted()?.textContent).toContain('独立空气系统测试')
+    expect(input.getAttribute('aria-activedescendant')).toBe(highlighted()!.id)
     await key('Enter')
-    expect(localStorage.getItem('hjc-project')).toBe('p1') // 选中时传的仍是项目 id
+    expect(localStorage.getItem('hjc-project')).toBe('p2')
   })
 })
 

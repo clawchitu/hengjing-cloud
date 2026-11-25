@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { seqNames } from '@/lib/seqNames'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { faMagnifyingGlass, faHouse, faSliders, faBuilding, faArrowRight, faSpinner, faTriangleExclamation } from '@fortawesome/free-solid-svg-icons'
 import { Icon, Pager, Seg } from '../components/legacy'
 import { Badge } from '@/components/ui/badge'
@@ -40,7 +40,11 @@ export default function Groups() {
   const [gidRaw, setGid] = useState('')
   const gid = groups.some((g) => g.id === gidRaw) ? gidRaw : groups[0]?.id ?? ''
   const [gq, setGq] = useState('')
-  const [pq, setPq] = useState('')
+  // 侧栏切换器搜不到时「去集成项目页搜索 →」带来的关键词（?q=），填进项目搜索框；已在本页时再跳过来也跟着变
+  const [params] = useSearchParams()
+  const qParam = params.get('q') ?? ''
+  const [pq, setPq] = useState(qParam)
+  useEffect(() => { if (qParam) setPq(qParam) }, [qParam])
   const [area, setArea] = useState('全部区域')
   const [st, setSt] = useState<'全部' | '在线' | '离线'>('全部')
   const [page, setPage] = useState(1)

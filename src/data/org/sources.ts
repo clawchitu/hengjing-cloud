@@ -39,10 +39,37 @@ function mockView(user: User) {
     // 演示项目没有控制屏编号，沿用演示版的网关编号（GW-xxxxx）作控制屏编号，连接状态页与离线横幅显示它
     const projects: Project[] = s.projects.map((p) => ({ ...p, code: p.id, controlScreenId: gatewayOf(p.id) }))
     const groups: Group[] = s.groups.map((g) => ({ ...g, code: g.id, projectIds: s.projects.filter((p) => p.groupId === g.id).map((p) => p.id) }))
-    v = { dealers: s.dealers.map((d) => ({ ...d })), groups, projects }
+    v = withMockExtra(user, { dealers: s.dealers.map((d) => ({ ...d })), groups, projects })
     viewCache.set(key, v)
   }
   return v
+}
+
+/**
+ * 只给 e2e 用（演示数据模式）：页面加载前在 window.__HJC_MOCK_ORG_EXTRA__ 放额外的经销商、集成项目、项目
+ * （视图模型，原样追加），用来造大量项目或「同一项目属于两个经销商的集成项目」这类演示数据里没有的情况。
+ * 按账号过滤：经销商账号只追加 dealerId 是它自己的集成项目（以及其中的项目）。没有设置时什么都不做
+ */
+interface MockExtra { dealers?: Dealer[]; groups?: Group[]; projects?: Project[] }
+function withMockExtra(user: User, v: { dealers: Dealer[]; groups: Group[]; projects: Project[] }) {
+  const x = (globalThis as { __HJC_MOCK_ORG_EXTRA__?: MockExtra }).__HJC_MOCK_ORG_EXTRA__
+  if (!x) return v
+  const mine = (g: Group) => user.role === 'admin' || g.dealerId === user.dealerId
+  const groups = (x.groups ?? []).filter(mine)
+  // 已有的集成项目也可以追加项目（同 id 的集成项目合并 projectIds）
+  const merged = v.groups.map((g) => {
+    const add = (x.groups ?? []).find((e) => e.id === g.id)
+    return add ? { ...g, projectIds: [...new Set([...g.projectIds, ...add.projectIds])] } : g
+  })
+  const newGroups = groups.filter((g) => !v.groups.some((o) => o.id === g.id))
+  const visible = new Set([...merged, ...newGroups].flatMap((g) => g.projectIds))
+  const known = new Set(v.projects.map((p) => p.id))
+  return {
+    dealers: [...v.dealers, ...(user.role === 'admin' ? x.dealers ?? [] : [])],
+    groups: [...merged, ...newGroups],
+    // 只追加落在本账号可见集成项目里的项目（经销商账号看不到别家的额外项目）
+    projects: [...v.projects, ...(x.projects ?? []).filter((p) => !known.has(p.id) && visible.has(p.id))],
+  }
 }
 
 export const mockOrg = {
