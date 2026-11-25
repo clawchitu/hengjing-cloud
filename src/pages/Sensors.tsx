@@ -107,7 +107,8 @@ function chartOption(m: MetricDef, l: Limits, s: ChartSeries) {
       // keep the comfort thresholds inside the plotted range so the dashed lines are always visible
       min: (v: { min: number; max: number }) => { const lo = Math.min(v.min, l.lo ?? v.min); const pad = (Math.max(v.max, l.hi) - lo) * 0.08; return +(lo - pad).toFixed(m.digits) },
       max: (v: { min: number; max: number }) => { const hi = Math.max(v.max, l.hi); const pad = (hi - Math.min(v.min, l.lo ?? v.min)) * 0.08; return +(hi + pad).toFixed(m.digits) },
-      axisLabel: axis.label, axisLine: { show: false }, axisTick: { show: false }, splitLine: { show: false } },
+      // 上下界是算出来的非整刻度（如 17.4），不画它的刻度字，免得压住相邻的整刻度（S13 走查 P13）
+      axisLabel: { ...axis.label, showMinLabel: false, showMaxLabel: false }, axisLine: { show: false }, axisTick: { show: false }, splitLine: { show: false } },
     series: s.daily ? [
       line('日均值', s.daily.avg, '#f28c38', 2.6),
       line('日最高', s.daily.max, '#f43f5e', 1.2, true),
@@ -122,7 +123,7 @@ function PageHead({ project, right }: { project: Project | null; right?: ReactNo
   return (
     <div className="page-head">
       <div><h1>室内空气传感器</h1>
-        {project && <div className="sub" style={{ gap: 14 }}><span><Icon icon={faBuilding} /> {project.name}</span>{project.code && <span className="num">{project.code}</span>}{where && <span><Icon icon={faLocationDot} /> {where}</span>}{project.online ? <span className="green"><span className="dot" /> 在线</span> : <span className="red"><span className="dot" /> 离线</span>}{project.version && <span className="num">{project.version}</span>}</div>}
+        {project && <div className="sub" style={{ gap: 14 }}><span><Icon icon={faBuilding} /> {project.name}</span>{where && <span><Icon icon={faLocationDot} /> {where}</span>}{project.online ? <span className="green"><span className="dot" /> 在线</span> : <span className="red"><span className="dot" /> 离线</span>}</div>}
       </div>
       {right}
     </div>
@@ -217,7 +218,7 @@ export default function Sensors() {
       {kpis.length > 0 && <div className="hj-grid" style={{ gridTemplateColumns: `repeat(${Math.max(3, kpis.length)}, minmax(0, 1fr))`, marginBottom: 20 }}>
         {kpis.map(({ m, s }) => (
           <Card key={m.key} className="kpi">
-            <div className="k-label">平均 {m.tab}<span className="k-ico" style={{ background: m.bg, color: m.color }}><Icon icon={m.icon} /></span></div>
+            <div className="k-label">{s.n > 1 ? '当前平均' : '当前'} {m.tab}<span className="k-ico" style={{ background: m.bg, color: m.color }}><Icon icon={m.icon} /></span></div>
             <div className="k-val num">{fmtN(s.avg, m.digits)}<small>{m.kpiUnit}</small></div>
             <div className="k-foot" style={{ color: 'var(--text-2)' }}>最高 <span className={s.max > limitsOf(m.key, liveAt).hi ? 'red' : ''}>{fmtN(s.max, m.digits)}</span> · 最低 {fmtN(s.min, m.digits)}{s.n < on.length && <span className="faint"> · {s.n}/{on.length} 台具备</span>}</div>
           </Card>
@@ -233,7 +234,7 @@ export default function Sensors() {
             return (
               <div key={s.key} role="button" tabIndex={0} aria-pressed={s.key === cur?.key} className={'sensor' + (s.key === cur?.key ? ' on' : '') + (!s.online ? ' off' : '')}
                 onClick={pick} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pick() } }}>
-                <div className="sh"><div><b>{s.name}</b>{s.id > 0 && <small className="num">{s.id}</small>}</div><Badge variant={tag(t)}>{t}</Badge></div>
+                <div className="sh"><div><b>{s.name}</b></div><Badge variant={tag(t)}>{t}</Badge></div>
                 <div className="sv num">
                   {s.online ? <>
                     {s.temp !== null && <div><span>温度</span><b>{s.temp.toFixed(1)}°</b></div>}

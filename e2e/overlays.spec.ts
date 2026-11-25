@@ -83,7 +83,7 @@ test.describe('确认弹窗', () => {
     await tick(page, 1500)
     // 各项默认「不变」：选上系统开关和运行模式才有可下发的内容
     await page.getByRole('group', { name: '系统开关' }).getByRole('button', { name: '开启' }).click()
-    await page.getByRole('group', { name: '运行模式' }).getByRole('button', { name: '自动模式' }).click()
+    await page.getByRole('group', { name: '运行模式' }).getByRole('button', { name: '自动', exact: true }).click()
     await page.getByRole('button', { name: '确认下发' }).click()
     await tick(page)
     const dlg = dialog(page, '确认下发统一控制指令')
@@ -131,7 +131,7 @@ test.describe('确认弹窗', () => {
     await tick(page)
     const dlg = dialog(page, '全部关闭')
     await expect(dlg).toBeVisible()
-    await expect(dlg).toContainText('将向 朝阳壹号院 A栋（PRJ-10241）的 6 个温控面板下发「关闭」指令，确定继续？')
+    await expect(dlg).toContainText('将向 朝阳壹号院 A栋的 6 个温控面板下发「关闭」指令，确定继续？')
     await expect(dlg.getByRole('button', { name: '取消' })).toBeVisible()
     await expect(dlg.getByRole('button', { name: '确认下发' })).toBeVisible()
   })

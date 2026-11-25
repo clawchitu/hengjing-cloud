@@ -26,6 +26,9 @@ export interface AirSensorData {
 
 export function toAirSensors(data: readonly AirSensorData[]): AirSensor[] {
   const seen = new Set<string>()
+  // 界面不显示传感器 ID（S13 走查）：同名的第 2 个起在名称后加「 (2)」「 (3)」区分
+  const names = new Map<string, number>()
+  const uniq = (name: string) => { const n = (names.get(name) ?? 0) + 1; names.set(name, n); return n > 1 ? `${name} (${n})` : name }
   return data.map((d, i) => {
     const id = typeof d.id === 'number' && Number.isFinite(d.id) ? d.id : 0
     let key = String(id)
@@ -36,7 +39,7 @@ export function toAirSensors(data: readonly AirSensorData[]): AirSensor[] {
     const v = (x: number | undefined) => (online ? hourlyReading(x) : null)
     return {
       id, key, online,
-      name: d.name?.trim() || `传感器 ${id || i + 1}`,
+      name: uniq(d.name?.trim() || '未命名传感器'), // 不拿 ID 当名称（S13：界面不显示 id）
       // 有效性同 208，见 stats.ts validReading
       temp: validReading('temp', v(d.temperature)), hum: validReading('hum', v(d.humidity)), dew: validReading('dew', v(d.dewPoint)),
       pm25: validReading('pm25', v(d.pm25)), co2: validReading('co2', v(d.co2)),

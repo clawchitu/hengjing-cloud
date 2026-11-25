@@ -401,7 +401,7 @@ test.describe('文字提示', () => {
     await page.goto('/home')
     await settle(page)
     const name = await page.locator('.proj-card').first().getAttribute('aria-label')
-    expect(name).toMatch(/^.+，(在线|离线)，PRJ-\d+$/)
+    expect(name).toMatch(/^.+，(在线|离线)$/) // S13：不读项目 id
     await expect(page.getByRole('button', { name: name! })).toHaveCount(1)
   })
 })

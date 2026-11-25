@@ -109,6 +109,8 @@ describe('实测回包', () => {
     expect(screen.getAllByText('除湿').length).toBeGreaterThan(0)
     expect(screen.getByTestId('filter-text').textContent).toBe('剩余 100 天')
     expect(screen.queryByRole('region', { name: '运行设置' })).toBeNull()
+    // S13 P5：没有面板时页头说明原因，不让人以为加载失败
+    expect(document.querySelector('.page-head .sub')!.textContent).toContain('该应用类型不支持在平台上设置运行参数，仅显示运行数据')
     expect((b.callsTo(R202)[0].body as { project_id: string }).project_id).toBe(P1.id)
     expect(b.callsTo(R210)).toHaveLength(0)
   })
@@ -119,6 +121,10 @@ describe('实测回包', () => {
     mount(P12.id)
     await waitFor(() => expect(row('humiditySet')).toBeTruthy())
     expect(Number(q210(b.callsTo(R210)[0]))).toBe(ID_260911001)
+    // S13 P10：202 没带名称时用 210 的名称 TXFS500（与确认框、下发请求一致），不写「新风设备 1」
+    expect(screen.getAllByRole('tab')[0].textContent).toContain('TXFS500')
+    expect(document.body.textContent).not.toContain('新风设备 1')
+    expect(document.querySelector('.page-head .sub')!.textContent).toContain('新风单机版')
     expect(valueOf('humiditySet')).toBe('--')
     expect(lockOf('humiditySet')!.getAttribute('aria-label')).toContain(BLOCK_204_NOT_SETTABLE)
     expect(valueOf('dewPoint')).toBe('13.0 °C')

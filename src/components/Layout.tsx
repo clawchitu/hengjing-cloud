@@ -15,6 +15,7 @@ import { cn } from '@/lib/utils'
 import { useApp } from '../app/store'
 import { useCancelConfirmOnLeave, useConfirm } from '../app/feedback'
 import { useIsFetching } from '@tanstack/react-query'
+import { seqNames } from '@/lib/seqNames'
 import { dealerSections, orgKeys, projectsInGroup, useOrgScope, whenProjectSet } from '../data/org'
 import type { Project } from '../api'
 import { OFFLINE_RECHECK_MS } from '../data/connections'
@@ -49,6 +50,7 @@ function ProjectSwitch() {
   const { project, setProjectId, toast, user } = useApp()
   const org = useOrgScope()
   const scope = org.data
+  const pname = seqNames(scope.projects, (p) => p.name, (p) => p.id)
   const [open, setOpen] = useState(false)
   const [value, setValue] = useState('')
   const listRef = useRef<HTMLDivElement>(null)
@@ -129,7 +131,6 @@ function ProjectSwitch() {
           <div className="name">{project.name}<Icon className="chev" icon={faChevronDown} /></div>
           <div className="st">
             {!project.id ? <span>暂无可用项目</span> : project.online ? <span className="on"><span className="dot" /> 在线</span> : <span className="off"><span className="dot" /> 离线</span>}
-            <span className="num">{project.code}</span>
           </div>
         </div>
       </PopoverTrigger>
@@ -187,7 +188,7 @@ function ProjectSwitch() {
                           data-current={p.id === project.id || undefined}
                           className={cn('rounded-[7px] text-[13px]', p.id === project.id ? 'bg-primary-soft font-semibold text-primary' : 'hover:bg-background')}
                         >
-                          <span>{p.name}</span><small className="num text-[11px] text-faint">{p.online ? p.code : '离线'}</small>
+                          <span>{pname.get(p.id) ?? p.name}</span>{!p.online && <small className="text-[11px] text-faint">离线</small>}
                         </CommandItem>
                       ))}
                     </div>
@@ -220,11 +221,10 @@ function ProjectSearch() {
   const s = q.trim().toLowerCase()
   const hits = s ? scope.projects.filter((p) => (p.name + ' ' + p.code).toLowerCase().includes(s)).slice(0, 8) : []
   // 一个项目可能属于多个集成项目：列出全部所属组名
-  // 同名的集成项目（测试环境就有两个「五恒集成项目」）后面带上编码区分
-  const gname = (p: Project) => {
-    const gs = scope.groups.filter((g) => projectsInGroup(g, [p]).length)
-    return gs.map((g) => (gs.some((x) => x !== g && x.name === g.name) ? `${g.name}（${g.code}）` : g.name)).join('、')
-  }
+  // 同名的集成项目（测试环境就有两个「五恒集成项目」）用序号区分，不显示编码（S13 走查：界面不显示 id）
+  const gnames = seqNames(scope.groups, (g) => g.name, (g) => g.id)
+  const pnames = seqNames(scope.projects, (p) => p.name, (p) => p.id)
+  const gname = (p: Project) => scope.groups.filter((g) => projectsInGroup(g, [p]).length).map((g) => gnames.get(g.id) ?? g.name).join('、')
   const shown = open && !!s
   const active = shown && value && hits.some((p) => p.id === value) ? itemId : undefined
   // 关闭（Esc、Tab 离开、点外部、选中）和重新打开都清掉高亮：重开后回车只会选第一条，不会选到之前高亮过的项
@@ -305,7 +305,7 @@ function ProjectSearch() {
                     data-current={p.id === project.id || undefined}
                     className={cn('gap-2.5 rounded-md text-foreground', p.id === project.id ? 'bg-primary-soft' : 'hover:bg-background')}
                   >
-                    <div><b className="block text-[13px] font-semibold">{p.name}</b><small className="mt-0.5 block text-[11.5px] text-faint">{gname(p)} · <span className="num">{p.code}</span></small></div>
+                    <div><b className="block text-[13px] font-semibold">{pnames.get(p.id) ?? p.name}</b><small className="mt-0.5 block text-[11.5px] text-faint">{gname(p)}</small></div>
                     <Badge variant={p.online ? 'green' : 'gray'}>{p.online ? '在线' : '离线'}</Badge>
                   </CommandItem>
                 ))}

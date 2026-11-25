@@ -8,7 +8,7 @@ import { buildProjectRoomSwitchSet, callCtrl, writeCtrl, type CtrlReply, type Wr
 import { ApiError } from '@/api/errors'
 import { isMockMode } from '@/api/config'
 import type { WriteProject } from '@/api/guard'
-import { roomsAsReply, WIND_AUTO, toRoomViews, type RoomView } from './model'
+import { orderRooms, roomsAsReply, WIND_AUTO, toRoomViews, type RoomView } from './model'
 import { statsWindow, toChartData, type ChartData, type StatsRange } from './stats'
 
 export interface ThermostatSource {
@@ -82,9 +82,9 @@ function mockBeforeSend(beforeSend?: () => boolean) {
 
 const mockSource: ThermostatSource = {
   kind: 'mock',
-  rooms: async (projectId) => (await api.getRooms(projectId)).map(fromMockRoom),
+  rooms: async (projectId) => orderRooms((await api.getRooms(projectId)).map(fromMockRoom)),
   roomsRaw: async (projectId) => {
-    const list = (await api.getRooms(projectId)).map(fromMockRoom)
+    const list = orderRooms((await api.getRooms(projectId)).map(fromMockRoom))
     return { list, raw: roomsAsReply(list) }
   },
   stats: async (projectId, room, range) => {

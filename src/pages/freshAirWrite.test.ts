@@ -166,7 +166,8 @@ describe('204 组装（经真实写入口，解码实际请求体）', () => {
     expect(writes(be)).toHaveLength(0)
     fireEvent.click(sendBtn())
     const dlg = await dialog()
-    for (const t of ['独立空气系统测试', '260911001', 'TXFS500', '风速 自动 → 高']) expect(dlg.textContent).toContain(t)
+    for (const t of ['独立空气系统测试', 'TXFS500', '风速 自动 → 高']) expect(dlg.textContent).toContain(t)
+    expect(dlg.textContent).not.toContain('260911001') // S13：界面不显示项目 id
     expect(writes(be)).toHaveLength(0)
     fireEvent.click(within(dlg).getByRole('button', { name: '确认下发' }))
     await waitFor(() => expect(toasts()).toContain('TXFS500 已生效：风速 高'))

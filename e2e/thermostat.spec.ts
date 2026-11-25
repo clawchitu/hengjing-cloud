@@ -27,7 +27,7 @@ test.describe('温控面板：卡片内修改', () => {
     await c.getByRole('button', { name: '下发', exact: true }).click()
     await tick(page)
     const dlg = page.getByRole('alertdialog')
-    await expect(dlg).toContainText('将向 朝阳壹号院 A栋（PRJ-10241）的「客厅」下发：设定温度 26.0 → 25.0°C，确定继续？')
+    await expect(dlg).toContainText('将向 朝阳壹号院 A栋的「客厅」下发：设定温度 26.0 → 25.0°C，确定继续？')
     await dlg.getByRole('button', { name: '确认下发' }).click()
     await tick(page, 1000) // 演示接口的延时
     await expectToast(page, '客厅 已生效：设定温度 25.0°C')

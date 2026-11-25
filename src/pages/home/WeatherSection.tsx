@@ -362,7 +362,7 @@ function HoursCard({ hours }: { hours: WeatherLoad<Weather24View> }) {
     tooltip,
     grid: { left: 36, right: 20, top: 22, bottom: 30 },
     xAxis: { type: 'category' as const, boundaryGap: false, data: list.map((h) => hourLabel(h.time)), axisLabel: { ...axis.label, interval: 2 }, axisLine: { show: false }, axisTick: { show: false } },
-    yAxis: { type: 'value' as const, min: temps.length ? Math.floor(Math.min(...temps) - 2) : 0, max: temps.length ? Math.ceil(Math.max(...temps) + 2) : 10, axisLabel: { ...axis.label, formatter: '{value}°' }, splitLine: axis.split },
+    yAxis: { type: 'value' as const, min: temps.length ? Math.floor(Math.min(...temps) - 2) : 0, max: temps.length ? Math.ceil(Math.max(...temps) + 2) : 10, axisLabel: { ...axis.label, formatter: '{value}°', showMinLabel: false, showMaxLabel: false }, splitLine: axis.split }, // 上下界不在刻度间隔上时会压住相邻刻度字（S13 走查 P13）
     series: [{ name: '温度 °C', type: 'line' as const, smooth: true, data: list.map((h) => h.temp), symbol: 'circle', symbolSize: 5, lineStyle: { color: '#f28c38', width: 2.4 }, itemStyle: { color: '#f28c38' }, areaStyle: { color: 'rgba(249,115,22,.06)' } }],
   }
   return (

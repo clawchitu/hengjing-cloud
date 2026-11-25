@@ -17,7 +17,7 @@ import { selectArrow } from '@/components/ui/select'
 import { cn } from '@/lib/utils'
 import { DealersError } from './DealersError'
 import { Icon } from './legacy'
-import type { Dealer, Loadable } from '../data/org'
+import { PLATFORM_DEALER_ID, type Dealer, type Loadable } from '../data/org'
 
 /** 选项右侧的小字：经销商编码；演示数据没有编码，用大区名（真实接口的 region 是行政区划码，不显示） */
 const noteOf = (d: Dealer) => d.code || (/^\d/.test(d.region) ? '' : d.region)
@@ -132,7 +132,8 @@ export function DealerSelect({ dealers, value, onChange }: { dealers: Loadable<D
           </Command>
         </PopoverContent>
       </Popover>
-      <small>{list.length} 个经销商 · 先选择经销商，再查看其集成项目</small>
+      {/* 「平台」是虚拟分组，不算经销商（S13 走查 P14） */}
+      <small>{list.filter((d) => d.id !== PLATFORM_DEALER_ID).length} 个经销商 · 先选择经销商，再查看其集成项目</small>
       <DealersError dealers={dealers} />
     </div>
   )

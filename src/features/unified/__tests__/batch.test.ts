@@ -120,7 +120,7 @@ describe('prepare：任一项目校验不过就整体不下发', () => {
     const { batch, send } = setup([P('a', '1')])
     const s = batch.prepare(['a'], { systemMode: Mode.OPERATION_MODE_AUTO, roomTemp: 24.5 })
     expect(s.phase).toBe('confirming')
-    expect(s.items).toEqual([{ label: '运行模式', value: '自动模式' }, { label: '房间温度', value: '24.5°C' }])
+    expect(s.items).toEqual([{ label: '运行模式', value: '自动' }, { label: '房间温度', value: '24.5°C' }])
     batch.cancel()
     expect(batch.getState().phase).toBe('idle')
     await batch.start()

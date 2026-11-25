@@ -105,7 +105,7 @@ describe('其他校验', () => {
   })
   it('describeQuery 只列有改动的项', () => {
     expect(describeQuery({ systemSwitch: -1, systemMode: 100, roomSwitch: 0, roomTemp: -1 })).toEqual([
-      { label: TEXT.systemMode, value: '自动模式' },
+      { label: TEXT.systemMode, value: '自动' },
       { label: TEXT.roomSwitch, value: TEXT.off },
     ])
     expect(describeQuery({ systemSwitch: 1, systemMode: MODE_UNCHANGED, roomSwitch: -1, roomTemp: 25.5 })).toEqual([

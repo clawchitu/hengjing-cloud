@@ -5,6 +5,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { QueryClientProvider } from '@tanstack/react-query'
 import { createElement } from 'react'
+import { toast as sonner } from 'sonner'
 import { MemoryRouter, Route, Routes, useNavigate, type NavigateFunction } from 'react-router-dom'
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { setConfig } from '../api/config'
@@ -36,7 +37,7 @@ beforeAll(() => {
 /** 带 sub 的 JWT 形状令牌（写请求要求能解析出 sub） */
 const J = (sub: string, n = 1) => `h.${btoa(JSON.stringify({ sub, n }))}.s`
 const PROJECTS = [
-  { id: 'p1', code: '240829001', name: '测试项目0829', app_code: '1', online: true },
+  { id: 'p1', code: '240829001', name: '测试项目0829', app_code: '1', app_version: '4.3.9', online: true },
   { id: 'p3', code: '221031001', name: '科希家办公室', app_code: '1' }, // 离线（online 缺失）
   { id: 'p2', code: '260911001', name: '独立空气系统测试', app_code: '12', online: true },
   { id: 'p4', code: '230101001', name: '空气单机测试', app_code: '8', online: true },
@@ -82,10 +83,12 @@ async function openNotes() {
   return document.querySelector('.unified-notes')?.textContent ?? ''
 }
 /** 结果表每行只有 项目、项目ID、状态、操作时间 四格，状态格只有徽标 */
+/** 结果卡片：项目、状态、操作时间三列（S13 走查去掉了项目 ID 列） */
 function expectFourCells(badge: HTMLElement) {
   const cells = within(badge.closest('tr')!).getAllByRole('cell')
-  expect(cells).toHaveLength(4)
-  expect(cells[2].textContent).toBe(badge.textContent)
+  expect(cells).toHaveLength(3)
+  expect(cells[1].textContent).toBe(badge.textContent)
+  expect(badge.closest('table')!.textContent).not.toMatch(/项目ID|240829001/)
 }
 const tick = (ms: number) => act(() => new Promise((r) => setTimeout(r, ms)))
 /**
@@ -130,7 +133,8 @@ beforeEach(() => {
   __resetHttpForTests(); __resetSessionForTests(); __resetSessionViewForTests(); __resetCurrentForTests(); clearTokens()
   vi.spyOn(console, 'info').mockImplementation(() => {})
 })
-afterEach(() => { cleanup(); vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks(); setConfig(null) })
+// Sonner 的 toast 队列是模块级的：上一条用例没消失的 toast 会在下一条挂载 Toaster 时又显示出来
+afterEach(() => { cleanup(); sonner.dismiss(); vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks(); setConfig(null) })
 
 describe('温度区', () => {
   it('默认「保持不变」：温度区真正禁用，键盘和 ± 都改不了', async () => {
@@ -181,6 +185,102 @@ describe('温度区', () => {
   })
 })
 
+describe('S13 走查', () => {
+  it('运行模式按钮去掉末尾「模式」、不换行；13 写「冷热过渡」；没有写死的「推荐夏季 26°C」；项目列表不显示项目 ID 和版本号', async () => {
+    backend()
+    await mount()
+    const modes = [...within(screen.getByRole('group', { name: '运行模式' })).getAllByRole('button')].map((b) => b.textContent)
+    expect(modes).toEqual(['夏季', '冬季', '通风', '除湿', '免费制冷', '制热除湿', '供热', '供热加湿', '加湿', '供冷', '供冷加湿', '供冷除湿', '冷热过渡', '自动', '不变'])
+    expect(modes.every((m) => m!.length <= 4)).toBe(true)
+    expect(document.body.textContent).not.toMatch(/推荐夏季|冷热过度/)
+    const list = screen.getByText('测试项目0829').closest('.pick')!.textContent!
+    expect(list).not.toMatch(/240829001|4\.3\.9/)
+  })
+})
+
+describe('S13 同名序号（第 2 轮评审）', () => {
+  // 同一集成项目里两个同名项目（q1、q2），另有一个原始名称本身带「 (2)」的项目；另有一个同名的集成项目
+  const DUP_PROJECTS = [
+    ...PROJECTS,
+    { id: 'q1', code: '111', name: '同名项目', app_code: '1', online: true },
+    { id: 'q2', code: '222', name: '同名项目', app_code: '1', online: true },
+    { id: 'q3', code: '333', name: '改名 (2)', app_code: '1', online: true },
+  ]
+  const DUP_GROUPS = [
+    { ...GROUPS[0], project_ids: ['p1', 'p3', 'q1', 'q2', 'q3'] },
+    ...GROUPS.slice(1),
+    { id: 'g4', code: '5', name: '五恒集成项目', distributor_id: 'D1', project_ids: ['p2'] },
+  ]
+  const dupBackend = (routes: Record<string, Handler> = {}) => backend({
+    '/ctrl/projects': () => json({ project_entities: DUP_PROJECTS }),
+    '/integrated-projects': () => json({ entities: DUP_GROUPS }),
+    ...routes,
+  })
+  const resultNames = () => within(screen.getByRole('region', { name: '最近一次执行结果' })).getAllByRole('row').slice(1)
+    .map((tr) => within(tr).getAllByRole('cell')[0].textContent)
+
+  it('集成项目下拉：同名集成项目第 2 个写「五恒集成项目 (2)」', async () => {
+    dupBackend()
+    await mount()
+    const sel = screen.getByRole('combobox', { name: '集成项目' })
+    await act(async () => { fireEvent.keyDown(sel, { key: 'Enter' }) })
+    const opts = within(await screen.findByRole('listbox')).getAllByRole('option').map((o) => o.textContent)
+    expect(opts).toEqual(['五恒集成项目', '独立空气系统', '空气单机', '五恒集成项目 (2)'])
+  })
+
+  it('只勾同名项目里的第 2 个：项目列表、确认框、结果表都写「同名项目 (2)」', async () => {
+    const be = dupBackend({ '/ctrl/room-temperature-data-get': () => rooms(0, 26), '/ctrl/unified-ctrl-set': () => reply(true) })
+    await mount()
+    expect(screen.getAllByText(/^同名项目/).map((e) => e.textContent)).toEqual(['同名项目', '同名项目 (2)'])
+    await click(screen.getByText('同名项目 (2)'))
+    await click(screen.getByRole('button', { name: '全部开启' }))
+    await click(screen.getByRole('button', { name: '确认下发' }))
+    const dlg = await screen.findByRole('alertdialog')
+    expect(dlg.textContent).toContain('同名项目 (2)')
+    expect(dlg.textContent).not.toContain('222')
+    await click(within(dlg).getByRole('button', { name: '确认下发' }))
+    // 222 不在可下发白名单里，写防护拦下（未执行）；这里只核对结果表里的名称
+    await screen.findByText('失败（未执行）', { selector: '[data-slot=badge]' }, { timeout: 3000 })
+    expect(be.callsTo('/ctrl/unified-ctrl-set')).toHaveLength(0)
+    expect(resultNames()).toEqual(['同名项目 (2)'])
+  })
+
+  it('结果表：记录名和项目当前原始名称一致才用序号名；改过名的照记录显示（原始名称本身带「 (2)」也不误认）', async () => {
+    sessionStorage.setItem('hjc-unified-last:real:dealer-1', JSON.stringify([
+      { name: '同名项目', code: '222', status: 'success', at: '2026-11-24 10:00:00' },
+      { name: '旧名字', code: '111', status: 'success', at: '2026-11-24 10:00:00' },
+      { name: '改名', code: '333', status: 'success', at: '2026-11-24 10:00:00' },
+    ]))
+    dupBackend()
+    await mount()
+    await screen.findByText('旧名字')
+    expect(resultNames()).toEqual(['同名项目 (2)', '旧名字', '改名'])
+  })
+
+  it('结果表：记录里的同名项目在当前集成项目里找不到（切换过集成项目）→ 在结果内部按名称加序号', async () => {
+    sessionStorage.setItem('hjc-unified-last:real:dealer-1', JSON.stringify([
+      { name: '别处同名', code: '901', status: 'success', at: '2026-11-24 10:00:00' },
+      { name: '别处同名', code: '902', status: 'success', at: '2026-11-24 10:00:00' },
+      { name: '同名项目', code: '222', status: 'success', at: '2026-11-24 10:00:00' },
+    ]))
+    dupBackend()
+    await mount()
+    await screen.findByText('别处同名 (2)')
+    expect(resultNames()).toEqual(['别处同名', '别处同名 (2)', '同名项目 (2)'])
+  })
+
+  it('结果表：一行按当前列表取名、另一行照记录显示且同名 → 照记录的那行接着编号，不和列表里的显示名撞（第 3 轮评审）', async () => {
+    sessionStorage.setItem('hjc-unified-last:real:dealer-1', JSON.stringify([
+      { name: '同名项目', code: '901', status: 'success', at: '2026-11-24 10:00:00' },
+      { name: '同名项目', code: '222', status: 'success', at: '2026-11-24 10:00:00' },
+    ]))
+    dupBackend()
+    await mount()
+    await screen.findByText('同名项目 (3)')
+    expect(resultNames()).toEqual(['同名项目 (3)', '同名项目 (2)'])
+  })
+})
+
 describe('离线', () => {
   it('离线项目不能选，也不在「全选在线项目」里', async () => {
     backend()
@@ -217,7 +317,8 @@ describe('下发', () => {
     let readsAtSend = -1
     be = backend({ '/ctrl/room-temperature-data-get': room200(() => be, [0, 26], [1, 26.5]), '/ctrl/unified-ctrl-set': () => { readsAtSend = reads(be); return reply(true) } })
     const dlg = await prepare()
-    expect(dlg.textContent).toContain('测试项目0829（240829001）')
+    expect(dlg.textContent).toContain('测试项目0829')
+    expect(dlg.textContent).not.toContain('240829001') // S13：界面不显示项目 id
     expect(dlg.textContent).toContain('房间开关开启')
     expect(dlg.textContent).toContain('房间温度26.5°C')
     expect(dlg.textContent).toContain('设置温度不会开启房间，房间开启后按此温度运行')
@@ -239,7 +340,7 @@ describe('下发', () => {
     expect(card.textContent).not.toMatch(/回读|未自动重试|核对/)
     expect(card.textContent).toBe('最近一次执行结果' + within(card).getByRole('table').textContent)
     const heads = within(card).getAllByRole('columnheader').map((h) => h.textContent)
-    expect(heads).toEqual(['项目', '项目ID', '状态', '操作时间'])
+    expect(heads).toEqual(['项目', '状态', '操作时间']) // S13：去掉项目 ID 列
     // 「下发核对」默认收起
     const toggle = screen.getByRole('button', { name: /下发核对/ })
     expect(toggle.getAttribute('aria-expanded')).toBe('false')
@@ -516,7 +617,7 @@ describe('下发', () => {
       const rec = recordBadges()
       await click(okIn(dlg))
       await waitFor(() => expect(document.querySelectorAll('[role=region] tbody tr').length).toBe(2), { timeout: 3000 })
-      const p1Row = () => [...document.querySelectorAll('[role=region] tbody tr')].find((r) => r.textContent?.includes('240829001'))!
+      const p1Row = () => [...document.querySelectorAll('[role=region] tbody tr')].find((r) => r.textContent?.includes('测试项目0829'))!
       expect(p1Row().querySelector('[data-slot=badge]')!.textContent).toBe('已生效')
       expect(p1Reads).toBeGreaterThanOrEqual(2)
       const all = rec.all()
@@ -790,7 +891,7 @@ describe('下发', () => {
       await click(screen.getByRole('button', { name: '确认下发' }))
       return screen.findByRole('alertdialog')
     }
-    const row = (code: string) => [...document.querySelectorAll('[role=region] tbody tr')].find((r) => r.textContent?.includes(code))!
+    const row = (name: string) => [...document.querySelectorAll('[role=region] tbody tr')].find((r) => r.textContent?.includes(name))!
 
     it('205 返回 503 → 0 个写请求、未下发（控制屏未连接）、不占锁；不读 200 下发前状态', async () => {
       const be = backend({ '/ctrl/room-temperature-data-get': () => rooms(1, 26), '/ctrl/unified-ctrl-set': () => reply(true), '/ctrl/device-summary-get': offline205 })
@@ -834,7 +935,7 @@ describe('下发', () => {
       await click(okIn(dlg))
       await advance(5_100)
       vi.useRealTimers()
-      await waitFor(() => expect(row('240829001')?.querySelector('[data-slot=badge]')?.textContent).toBe('已生效'), { timeout: 3000 })
+      await waitFor(() => expect(row('测试项目0829')?.querySelector('[data-slot=badge]')?.textContent).toBe('已生效'), { timeout: 3000 })
       expect(be.callsTo('/ctrl/device-summary-get')).toHaveLength(2)
       expect(be.callsTo('/ctrl/unified-ctrl-set')).toHaveLength(1)
     })
@@ -846,8 +947,8 @@ describe('下发', () => {
         '/ctrl/unified-ctrl-set': (c) => { sentTo.add(pid(c) ?? ''); return reply(true) },
       })
       await click(okIn(await prepareTwo()))
-      await waitFor(() => expect(row('240829001')?.querySelector('[data-slot=badge]')?.textContent).toBe('已生效'), { timeout: 3000 })
-      expect(row('240829005').querySelector('[data-slot=badge]')!.textContent).toBe('未下发')
+      await waitFor(() => expect(row('测试项目0829')?.querySelector('[data-slot=badge]')?.textContent).toBe('已生效'), { timeout: 3000 })
+      expect(row('测试项目0905').querySelector('[data-slot=badge]')!.textContent).toBe('未下发')
       expect(be.callsTo('/ctrl/unified-ctrl-set').map(pid)).toEqual(['p1'])
       expect(be.callsTo('/ctrl/device-summary-get').map(pid)).toEqual(['p1', 'p5'])
       expect(lockOf('project:p5')).toBeNull()

@@ -1,10 +1,10 @@
-// ctrl 200 读取映射：end_modes（is_selected 蓝/灰、switch 开/关）、65536 隐藏、风速 1–99 档 / 100 自动、开关与连接。
+// ctrl 200 读取映射：end_modes（is_selected 蓝/灰、switch 开/关）、65536 隐藏、风速 0–99 档 / 100 自动、开关与连接。
 // 用生成的 proto 真正编码一遍再解码，字段号与 proto 一致（不是手写对象直接喂映射）。
 import { describe, expect, it } from 'vitest'
 import { decodeReply, encodeMessage, type CtrlReply } from '@/api/ctrl'
 import * as pb from '@/api/gen/ctrl200_pb.js'
 import { setConfig } from '@/api/config'
-import { summarize, toRoomViews, windLabel, windOf } from '../model'
+import { orderRooms, summarize, toRoomViews, windLabel, windOf } from '../model'
 
 const room = (o: Record<string, unknown> = {}) => ({
   id: 406658286, name: '房间11', temperature: 22, humidity: 60, dewPoint: 13.9, setTemp: 25.5, setHumi: 50, windSpeed: 3, eco: 0,
@@ -85,11 +85,13 @@ describe('ctrl 200 → RoomView', () => {
     expect(summarize(known)).toMatchObject({ on: 1, avgTemp: 24 })
   })
 
-  it('风速：1–99 档位，100 自动，其他（0 缺省、101、65536、小数）为 --', () => {
+  it('风速：0–99 档位，100 自动，其他（负数、101、65536、小数）为 --', () => {
+    expect(windOf(0)).toBe(0) // S13 P12：0 是有效读数（11/25 第 9 条），显示「0 档」
+    expect(windLabel(0)).toBe('0 档')
     expect(windOf(1)).toBe(1)
     expect(windOf(99)).toBe(99)
     expect(windOf(100)).toBe(100)
-    for (const v of [0, -1, 101, 65536, 2.5, NaN]) expect(windOf(v)).toBeNull()
+    for (const v of [-1, -100, 101, 65536, 2.5, NaN]) expect(windOf(v)).toBeNull()
     expect(windLabel(3)).toBe('3 档')
     expect(windLabel(100)).toBe('自动')
     expect(windLabel(null)).toBe('--')
@@ -118,5 +120,22 @@ describe('ctrl 200 → RoomView', () => {
     ]))
     expect(summarize(rooms)).toMatchObject({ total: 3, connected: 2, on: 2, eco: 1, avgTemp: 20, avgHumidity: 60 })
     expect(summarize([])).toMatchObject({ total: 0, avgTemp: null, avgHumidity: null, avgDew: null })
+  })
+})
+
+describe('orderRooms（S13：自然排序、同名用序号区分、不用 ID）', () => {
+  it('房间11、房间13、房间12 → 11、12、13；同名按设备 ID 排，第 2 个起加 (2)', () => {
+    const r = (equipmentId: number, name: string) => ({ equipmentId, name })
+    expect(orderRooms([r(5, '房间13'), r(9, '房间11'), r(3, '房间12'), r(2, '房间11'), r(1, '房间2')]).map((x) => [x.equipmentId, x.name])).toEqual([
+      [1, '房间2'], [2, '房间11'], [9, '房间11 (2)'], [3, '房间12'], [5, '房间13'],
+    ])
+  })
+})
+
+describe('房间没名称（S13：不拿 ID 当名称）', () => {
+  it('写「未命名房间」，多个时加序号；不含设备 ID', () => {
+    const views = toRoomViews({ data: [{ id: 406658286, name: '' }, { id: 406658291 }] } as never)
+    expect(views.map((v) => v.name)).toEqual(['未命名房间', '未命名房间 (2)'])
+    expect(views.map((v) => v.name).join()).not.toContain('406658')
   })
 })

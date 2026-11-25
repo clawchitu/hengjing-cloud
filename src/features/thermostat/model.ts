@@ -1,7 +1,7 @@
 // 房间温控面板的视图模型：ctrl 200（RoomTemperatureDataGet）的一条房间 → 页面用的 RoomView。
 // 依据：docs/api/ctrl同步消息200-210.md 4.1、docs/plan-v1.md 1.2「房间温控面板」与文末后端答复、改动文档「房间温控面板」。
 // - 65536 = 未初始化 / 无数据（后端答复⑪）→ null，页面隐藏该项；
-// - wind_speed：1–99 为档位，100 为自动（后端答复⑧），其他值（含缺省 0）没有含义 → null；
+// - wind_speed：0–99 为档位（0 是有效读数，11/25 答复第 9 条），100 为自动（后端答复⑧），其他值没有含义 → null；
 // - end_modes 按数量动态显示：is_selected 决定蓝 / 灰，「开 / 关」取该末端自己的 switch（改动文档）；末端 switch 是状态显示，
 //   由控制屏自己控制，前端不能改（后端 11/25 答复第 3 条）；
 // - 房间开关（switch）：后端 11/25 答复第 1 条，控制屏没上报房间状态，200 读到的是默认值 0。features.roomSwitchReported
@@ -16,7 +16,7 @@ type RawEndMode = RawRoom['endModes'][number]
 /** 201 里的末端（与 200 同一个 WorkModeData）：没改末端传空列表；改了末端才把该房间全部末端完整传回 */
 export type WireEndMode = CtrlQuery<201>['endModes'][number]
 
-/** 风速：1–99 档位，100 自动 */
+/** 风速：0–99 档位，100 自动 */
 export const WIND_AUTO = 100
 /** 末端类型（文档 4.1）：仅用于说明，显示一律用 option_name */
 export const END_MODE_TYPES: Record<number, string> = { 0: '风盘', 1: '顶辐射', 2: '地暖', 3: '地冷', 4: '全空气' }
@@ -44,7 +44,7 @@ export interface RoomView {
   dew: number | null
   /** 设定温度；无数据为 null（不可调） */
   setTemp: number | null
-  /** 风速：1–99 档位、100 自动；其他为 null（显示 --） */
+  /** 风速：0–99 档位、100 自动；其他为 null（显示 --） */
   windSpeed: number | null
   /** 节能模式：1 节能，0 标准；无数据为 null（不可调） */
   eco: 0 | 1 | null
@@ -66,10 +66,10 @@ export interface RoomView {
 
 const finite = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v)
 
-/** 风速 → 有效档位；不是 1–99 或 100 的一律 null */
+/** 风速 → 有效档位：0–99 档位（0 是有效读数，后端 11/25 答复第 9 条；<100 为对应档位，11/24 答复第 8 条）、100 自动；其他一律 null */
 export function windOf(v: unknown): number | null {
   if (!finite(v) || !Number.isInteger(v)) return null
-  return (v >= 1 && v <= 99) || v === WIND_AUTO ? v : null
+  return (v >= 0 && v <= 99) || v === WIND_AUTO ? v : null
 }
 
 /** 风速显示：「3 档」「自动」「--」 */
@@ -96,7 +96,7 @@ export function toRoomView(r: RawRoom, opts: RoomViewOpts = {}): RoomView {
   return {
     key: String(r.id),
     equipmentId: r.id,
-    name: r.name || `房间 ${r.id}`,
+    name: r.name?.trim() || '未命名房间', // 不拿 ID 当名称（S13：界面不显示 id），多个未命名的由 orderRooms 加序号
     temp: reading(r.temperature),
     humidity: reading(r.humidity),
     dew: reading(r.dewPoint),
@@ -116,7 +116,23 @@ export function toRoomView(r: RawRoom, opts: RoomViewOpts = {}): RoomView {
 /** 整个 200 回复 → 房间列表（设备 ID 无效的丢弃，避免拿 0 去下发） */
 export function toRoomViews(reply: CtrlReply<200>, opts: RoomViewOpts = {}): RoomView[] {
   const o = { switchReported: opts.switchReported ?? roomSwitchReported() }
-  return (reply.data ?? []).filter((r) => Number.isSafeInteger(r.id) && r.id > 0).map((r) => toRoomView(r, o))
+  return orderRooms((reply.data ?? []).filter((r) => Number.isSafeInteger(r.id) && r.id > 0).map((r) => toRoomView(r, o)))
+}
+
+const roomCollator = new Intl.Collator('zh-CN', { numeric: true })
+
+/**
+ * 页面上的房间顺序和名称（S13 走查）：按房间名自然排序（房间11、房间12、房间13，名称相同按设备 ID）；
+ * 界面不显示房间 ID，同一项目里有同名房间时，第 2 个起在名称后加「 (2)」「 (3)」区分
+ */
+export function orderRooms<T extends { name: string; equipmentId: number }>(rooms: readonly T[]): T[] {
+  const sorted = [...rooms].sort((a, b) => roomCollator.compare(a.name, b.name) || a.equipmentId - b.equipmentId)
+  const seen = new Map<string, number>()
+  return sorted.map((r) => {
+    const n = (seen.get(r.name) ?? 0) + 1
+    seen.set(r.name, n)
+    return n > 1 ? { ...r, name: `${r.name} (${n})` } : r
+  })
 }
 
 /** 房间是否确定关着：开关读数可信且为关。开关未知时一律 false（不拿它禁用任何操作） */

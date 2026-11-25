@@ -155,7 +155,7 @@ async function open(project: { id: string } = P1) {
 }
 async function openRooms() {
   await open()
-  await screen.findByText('客厅')
+  await screen.findByText('客厅', { selector: '.room-name' })
   return card('客厅')
 }
 /** 客厅温度 +0.5 后点下发（弹出确认） */
@@ -185,11 +185,43 @@ describe('读取（ctrl 200）', () => {
     expect(c.textContent).toContain('3 档')
     expect(c.textContent).toContain('湿度 51%')
     expect(c.textContent).not.toContain('设定湿度')
-    expect(c.textContent).toContain('406658286 · 制冷')
+    expect(c.textContent).toContain('客厅制冷') // S13：名称下方只写工作模式，不带房间 ID
+    expect(c.textContent).not.toContain('406658286')
     const off = card('主卧')
     expect(off.textContent).not.toContain('湿度') // 65536 隐藏
     expect(off.querySelectorAll('.modes-row [data-slot=badge]')).toHaveLength(1)
     expect((be.callsTo('/ctrl/room-temperature-data-get')[0].body as { project_id: string }).project_id).toBe(P1.id)
+  })
+
+  it('S13：房间按名称自然排序（11、12、13），卡片和统计下拉都不显示房间 ID，同名用 (2) 区分；风速 0 显示「0 档」', async () => {
+    rooms = [
+      { ...ROOM, id: 11, name: '房间11' }, { ...ROOM, id: 13, name: '房间13', windSpeed: 0 }, { ...ROOM, id: 12, name: '房间12' }, { ...ROOM, id: 14, name: '房间11' },
+    ]
+    backend()
+    await open()
+    await screen.findByText('房间13', { selector: '.room-name' })
+    expect([...document.querySelectorAll('.room-name')].map((e) => e.textContent)).toEqual(['房间11', '房间11 (2)', '房间12', '房间13'])
+    expect([...document.querySelectorAll('option')].map((e) => e.textContent)).toEqual(['房间11', '房间11 (2)', '房间12', '房间13'])
+    expect([...document.querySelectorAll('.room-id')].map((e) => e.textContent)).toEqual(['制冷', '制冷', '制冷', '制冷'])
+    expect(card('房间13').textContent).toContain('0 档')
+  })
+
+  it('S13：末端一行有小标题和说明（只读：开 / 关 由控制屏自动控制），标签不是按钮', async () => {
+    backend()
+    const c = await openRooms()
+    const row = c.querySelector('.modes-row') as HTMLElement
+    expect(row.querySelector('.ends-h')!.textContent).toBe('末端（由控制屏控制）')
+    expect(row.getAttribute('title')).toContain('开 / 关 由控制屏根据运行情况自动控制')
+    expect(within(row).queryAllByRole('button')).toHaveLength(0)
+  })
+
+  it('S13：app_code 12 的页头和说明只写程序名称，不写程序编码', async () => {
+    backend()
+    await open(P12)
+    await screen.findByText('该项目无房间温控面板')
+    const sub = document.querySelector('.page-head .sub')!.textContent!
+    expect(sub).toContain('程序 ')
+    expect(document.querySelector('.page')!.textContent).not.toMatch(/编码/)
   })
 
   it('风速 100 显示「自动」', async () => {
@@ -222,7 +254,7 @@ describe('读取（ctrl 200）', () => {
 })
 
 describe('修改设定温度与节能（ctrl 201）', () => {
-  it('− / + 只改草稿；下发 → 确认（含项目编号）→ 只发一条 201：温度是真实值，其余 -1，end_modes 没改传空列表；success 才提示成功并回读', async () => {
+  it('− / + 只改草稿；下发 → 确认（含项目名，不含项目编号）→ 只发一条 201：温度是真实值，其余 -1，end_modes 没改传空列表；success 才提示成功并回读', async () => {
     const be = backend({ '/ctrl/room-temperature-set': ok201 })
     const c = await openRooms()
     fireEvent.click(btn(c, '客厅 设定温度降低'))
@@ -234,7 +266,8 @@ describe('修改设定温度与节能（ctrl 201）', () => {
     const reads = be.callsTo('/ctrl/room-temperature-data-get').length
     fireEvent.click(btn(c, '下发'))
     const dlg = await dialog()
-    for (const t of ['测试项目0829', '240829001', '客厅', '设定温度 25.5 → 24.5°C', '设置温度不会开启房间，房间开启后按此温度运行']) expect(dlg.textContent).toContain(t)
+    expect(dlg.textContent).not.toContain('240829001') // S13：界面不显示项目 id
+    for (const t of ['测试项目0829', '客厅', '设定温度 25.5 → 24.5°C', '设置温度不会开启房间，房间开启后按此温度运行']) expect(dlg.textContent).toContain(t)
     expect(writes(be)).toHaveLength(0)
     fireEvent.click(within(dlg).getByRole('button', { name: '确认下发' }))
     await waitFor(() => expect(toasts()).toContain('客厅 已生效：设定温度 24.5°C'))
@@ -529,7 +562,7 @@ describe('在途下发跨卸载 / 切项目', () => {
     fireEvent.click(rawButton('去首页'))
     await screen.findByText('首页内容')
     fireEvent.click(rawButton('回温控'))
-    await screen.findByText('客厅')
+    await screen.findByText('客厅', { selector: '.room-name' })
     const c = card('客厅')
     expect(btn(c, '客厅 设定温度升高').disabled).toBe(true)
     expect((within(c).getByRole('switch', { name: '客厅 开关' }) as HTMLButtonElement).disabled).toBe(true)
@@ -566,7 +599,7 @@ describe('在途下发跨卸载 / 切项目', () => {
     fireEvent.click(rawButton('去首页'))
     await screen.findByText('首页内容')
     fireEvent.click(rawButton('回温控'))
-    await screen.findByText('客厅')
+    await screen.findByText('客厅', { selector: '.room-name' })
     expect((screen.getByRole('button', { name: '全部关闭' }) as HTMLButtonElement).disabled).toBe(true)
     await slow.release()
     await waitFor(() => expect(toasts()).toContain('已生效：全部开启'))
@@ -703,8 +736,8 @@ describe('房间开关（201 switch）与全部开关（206）', () => {
     expect(writes(be)).toHaveLength(0)
     fireEvent.click(within(card('客厅')).getByRole('switch', { name: '客厅 开关' }))
     const dlg = await dialog()
-    expect(dlg.textContent).toContain('「客厅」下发「关闭」')
-    expect(dlg.textContent).toContain('240829001')
+    expect(dlg.textContent).toContain('测试项目0829的「客厅」下发「关闭」')
+    expect(dlg.textContent).not.toContain('240829001')
     fireEvent.click(within(dlg).getByRole('button', { name: '确认下发' }))
     await waitFor(() => expect(writes(be)).toHaveLength(1))
     expect(body201(writes(be)[0])).toEqual({ equipmentId: 406658286, temperature: -1, humidity: -1, windSpeed: -1, eco: -1, switch: 0, endModes: [] })
@@ -876,7 +909,7 @@ describe('下发状态机：确认后新读、写后新读、会话、期限', (
     await act(async () => { await signOut() })
     mode = 'normal'
     await act(async () => { await signIn('u2', 'pw', true) })
-    await screen.findByText('客厅')
+    await screen.findByText('客厅', { selector: '.room-name' })
     await slowRead.release()
     await flush(80)
     expect(document.querySelector('[data-lock="unknown"]')).toBeTruthy()
@@ -950,7 +983,7 @@ describe('下发状态机：确认后新读、写后新读、会话、期限', (
     expect(toasts()).not.toContain('已下发')
     await flush(); await runRetries() // 把自动再核对（5 / 20 / 60 秒）跑完，再断言最终显示
     await act(async () => { await signIn('u', 'pw', true) })
-    await screen.findByText('客厅')
+    await screen.findByText('客厅', { selector: '.room-name' })
     expect(card('客厅').textContent).not.toContain('已下发')
     const bar = document.querySelector('[data-lock="unknown"]') as HTMLElement
     expect(bar.textContent).toContain('已下发，结果未知')
@@ -975,7 +1008,7 @@ describe('下发状态机：确认后新读、写后新读、会话、期限', (
     await slow.release()
     user = 'admin-2'
     await act(async () => { await signIn('u2', 'pw', true) })
-    await screen.findByText('客厅')
+    await screen.findByText('客厅', { selector: '.room-name' })
     const bar = await waitFor(() => { const b = document.querySelector('[data-lock="unknown"]') as HTMLElement; expect(b).toBeTruthy(); return b })
     expect(bar.textContent).toContain('上一账号的下发结果未知，请稍后再试或联系有权限的账号')
     expect(bar.textContent).not.toContain('客厅')
@@ -1266,7 +1299,7 @@ describe('#35 第三轮：回读 ID 歧义、重新下发中止、跨项目', ()
     render(createElement(QueryClientProvider, { client }, createElement(AppProvider, null,
       createElement(MemoryRouter, { initialEntries: ['/thermostat'] },
         createElement(Routes, null, createElement(Route, { element: createElement(OrgGate, null, createElement(Thermostat)), path: '/thermostat' }))))))
-    await screen.findByText('客厅')
+    await screen.findByText('客厅', { selector: '.room-name' })
     fireEvent.click(btn(card('客厅'), '客厅 设定温度升高'))
     fireEvent.click(btn(card('客厅'), '下发'))
     await confirmOk()
@@ -1327,7 +1360,7 @@ describe('#35 第五轮：201 目标 ID 唯一、核对读数写缓存的时机'
     const be = backend({ '/ctrl/room-temperature-set': ok201 })
     rooms = [ROOM, OFF_ROOM, DUP]
     await open()
-    await screen.findAllByText('客厅')
+    await screen.findAllByText('客厅', { selector: '.room-name' })
     fireEvent.click(btn(card('客厅'), '客厅 设定温度升高'))
     fireEvent.click(btn(card('客厅'), '下发'))
     await waitFor(() => expect(toasts()).toContain('出现了 2 次，无法确定目标房间'))
@@ -1339,7 +1372,7 @@ describe('#35 第五轮：201 目标 ID 唯一、核对读数写缓存的时机'
     const be = backend({ '/ctrl/room-temperature-set': ok201 })
     rooms = [ROOM, OFF_ROOM, DUP]
     await open()
-    await screen.findAllByText('客厅')
+    await screen.findAllByText('客厅', { selector: '.room-name' })
     fireEvent.click(within(card('客厅')).getByLabelText('客厅 开关'))
     await waitFor(() => expect(toasts()).toContain('无法确定目标房间'))
     expect(screen.queryByRole('alertdialog')).toBeNull()
@@ -1567,7 +1600,7 @@ describe('房间开关未上报（features.roomSwitchReported = false，后端 1
   it('开关显示「开关未知」，开 / 关各一个按钮；读到 0 的房间不置灰，温度、节能照常能改；KPI 已开启房间为 --', async () => {
     backend()
     await open()
-    await screen.findByText('主卧')
+    await screen.findByText('主卧', { selector: '.room-name' })
     const c = card('主卧') // 读到 switch = 0
     expect(c.textContent).toContain('开关未知')
     expect(c.textContent).not.toContain('已关闭')
@@ -1583,7 +1616,7 @@ describe('房间开关未上报（features.roomSwitchReported = false，后端 1
   it('读到 0 的房间改温度：照常下发 201（switch -1，末端空列表），确认框写明「设置温度不会开启房间」', async () => {
     const be = backend({ '/ctrl/room-temperature-set': ok201 })
     await open()
-    await screen.findByText('主卧')
+    await screen.findByText('主卧', { selector: '.room-name' })
     fireEvent.click(btn(card('主卧'), '主卧 设定温度降低'))
     fireEvent.click(btn(card('主卧'), '下发'))
     const dlg = await dialog()
@@ -1597,7 +1630,7 @@ describe('房间开关未上报（features.roomSwitchReported = false，后端 1
     fakeClock()
     const be = backend({ '/ctrl/room-temperature-set': ok201NoApply })
     await open()
-    await screen.findByText('主卧')
+    await screen.findByText('主卧', { selector: '.room-name' })
     fireEvent.click(btn(card('主卧'), '主卧 开启'))
     const dlg = await dialog()
     expect(dlg.textContent).toContain('「主卧」下发「开启」')

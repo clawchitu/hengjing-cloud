@@ -7,6 +7,10 @@ const NOW = Date.parse('2026-01-15T10:00:00+08:00')
 const KC2 = { id: 2042830592, name: 'KC2', temperature: 25.5, humidity: 55, pm25: 5, co2: 580, dewPoint: 15.8, isConnected: true }
 
 describe('toAirSensors', () => {
+  it('S13：同名传感器第 2 个起加 (2)，不靠 ID 区分；没名称的写「未命名传感器」，不拿 ID 当名称', () => {
+    expect(toAirSensors([KC2, { ...KC2, id: 7 }, { ...KC2, id: 2042830592, name: '' }, { ...KC2, id: 9, name: ' ' }]).map((x) => x.name)).toEqual(['KC2', 'KC2 (2)', '未命名传感器', '未命名传感器 (2)'])
+  })
+
   it('实测样本原样映射', () => {
     expect(toAirSensors([KC2])).toEqual([{ id: 2042830592, key: '2042830592', name: 'KC2', online: true, temp: 25.5, hum: 55, dew: 15.8, pm25: 5, co2: 580 }])
   })
@@ -41,7 +45,7 @@ describe('toAirSensors', () => {
   it('设备 ID 重复时 key 仍唯一；名称为空时给出可读的占位', () => {
     const list = toAirSensors([{ ...KC2 }, { ...KC2 }, { ...KC2, name: '  ', id: undefined }])
     expect(new Set(list.map((s) => s.key)).size).toBe(3)
-    expect(list[2].name).toBe('传感器 3')
+    expect(list[2].name).toBe('未命名传感器')
     expect(list[2].id).toBe(0)
   })
 })

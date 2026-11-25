@@ -508,7 +508,7 @@ test.describe('统一控制下发', () => {
     await expect(page.getByRole('group', { name: '房间开关' }).getByRole('button', { name: '全部开启' })).toBeEnabled()
   })
 
-  test('二次确认 → 逐个下发 → 结果表（项目、项目ID、状态、操作时间）带回显', async ({ page, login }) => {
+  test('二次确认 → 逐个下发 → 结果表（项目、状态、操作时间）带回显', async ({ page, login }) => {
     await open(page, login, '/control')
     await expect(page.getByText('暂无执行记录')).toBeVisible()
     await page.getByRole('group', { name: '房间开关' }).getByRole('button', { name: '全部开启' }).click()
@@ -518,13 +518,14 @@ test.describe('统一控制下发', () => {
     await page.clock.runFor(50)
     const dlg = page.getByRole('alertdialog')
     await expect(dlg).toContainText('房间温度26.5°C')
-    await expect(dlg).toContainText('朝阳壹号院 A栋（PRJ-10241）')
+    await expect(dlg).toContainText('朝阳壹号院 A栋')
+    await expect(dlg).not.toContainText('PRJ-10241') // S13：界面不显示项目 id
     await dlg.getByRole('button', { name: '确认下发' }).click()
     await page.clock.runFor(50)
     await expect(page.getByRole('status').filter({ hasText: '正在下发' })).toBeVisible()
     await page.clock.runFor(6000)
     const table = page.locator('table').filter({ hasText: '操作时间' })
-    await expect(table.locator('thead th')).toHaveText(['项目', '项目ID', '状态', '操作时间'])
+    await expect(table.locator('thead th')).toHaveText(['项目', '状态', '操作时间'])
     await expect(table.locator('[data-slot=badge]', { hasText: '已生效' })).toHaveCount(4)
     // 结果卡片只有四项；原因与回读在卡片下方默认收起的「下发核对」里
     const toggle = page.getByRole('button', { name: /下发核对/ })

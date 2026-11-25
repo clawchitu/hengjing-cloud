@@ -39,7 +39,9 @@ import {
 export const TEXT_UNSUPPORTED_PANEL = '该项目的控制屏不支持运行设置，这不是故障。设备状态仍按上方实时数据显示。'
 
 const num = (v: number | null, digits = 0, unit = '') => (v === null ? PLACEHOLDER : `${v.toFixed(digits)}${unit}`)
-const unitName = (u: UnitView, i: number) => u.name || `新风设备 ${i + 1}`
+// 202 没带名称时用这台设备 210 读到的名称（S13 走查 P10：页面、确认框与下发请求里的 name 一致），都没有才写「新风设备 N」
+const unitName = (u: UnitView, i: number, s210?: SettingsView | null) =>
+  u.name || (s210 && u.deviceId !== null && s210.deviceId === u.deviceId ? s210.name : '') || `新风设备 ${i + 1}`
 /** 压缩机状态（A6）：0 停止、1 运行，其他显示原数字 */
 const compressorText = (v: number | null) => (v === null ? PLACEHOLDER : v === 0 ? '停止' : v === 1 ? '运行' : String(v))
 const statusOf = (u: UnitView): [string, 'green' | 'gray' | 'red'] => (!u.connected ? ['未连接', 'red'] : u.on === null ? ['开关未知', 'gray'] : u.on ? ['运行中', 'green'] : ['已关机', 'gray'])
@@ -49,7 +51,7 @@ function PageHead({ project, count, right }: { project: Project | null; count?: 
   return (
     <div className="page-head">
       <div><h1>新风除湿机</h1>
-        {project && <div className="sub"><span><Icon icon={faBuilding} /> {project.name}</span>{count !== undefined && <><span className="sep">·</span>{count} 台新风除湿一体机</>}{hasSettings(project) && <><span className="sep">·</span>新风单机版</>}</div>}
+        {project && <div className="sub"><span><Icon icon={faBuilding} /> {project.name}</span>{count !== undefined && <><span className="sep">·</span>{count} 台新风除湿一体机</>}{hasSettings(project) ? <><span className="sep">·</span>新风单机版</> : <><span className="sep">·</span>该应用类型不支持在平台上设置运行参数，仅显示运行数据</>}</div>}
       </div>
       {right}
     </div>
@@ -390,7 +392,7 @@ function SettingsPanel(props: PanelProps) {
     const built = build204(s, ready.raw, draft, ctx)
     if (!built.ok) { showToast(built.reason, true); return }
     const cs = changes
-    const ok = await confirm({ title: '确认下发设置', body: <>将向 <b>{p0.name}</b>（<span className="num">{p0.code}</span>）的「{unitLabel}」下发：{describeChanges(cs)}，确定继续？</>, okText: '确认下发' })
+    const ok = await confirm({ title: '确认下发设置', body: <>将向 <b>{p0.name}</b>的「{unitLabel}」下发：{describeChanges(cs)}，确定继续？</>, okText: '确认下发' })
     if (!ok) return
     const now = latest.current
     const p = now.project
@@ -603,16 +605,16 @@ export default function FreshAir() {
             return (
               <TabsTrigger key={f.key} value={f.key} className={'dev-tab outline-none focus-visible:not-data-[pointer-focus]:shadow-[0_0_0_3px_rgba(6,182,212,.12),var(--shadow)]!' + (f.key === u.key ? ' on' : '')}>
                 <span className="di"><Icon icon={faFan} /></span>
-                <span className="block"><b className="num">{unitName(f, i)}</b><small className={c === 'gray' ? 'faint' : c}>{t}{f.connected && f.runningMode && <> · {f.runningMode}</>}</small></span>
+                <span className="block"><b className="num">{unitName(f, i, s)}</b><small className={c === 'gray' ? 'faint' : c}>{t}{f.connected && f.runningMode && <> · {f.runningMode}</>}</small></span>
               </TabsTrigger>
             )
           })}
         </TabsList>
         <TabsContent value={u.key}>
           <div className={'fa-top' + (panel ? '' : ' wide')}>
-            <LiveCard u={u} name={unitName(u, idx)} wide={!panel} />
+            <LiveCard u={u} name={unitName(u, idx, s)} wide={!panel} />
             {panel && project && (
-              <SettingsPanel st={settings} project={project} unit={u} unitLabel={unitName(u, idx)}
+              <SettingsPanel st={settings} project={project} unit={u} unitLabel={unitName(u, idx, s)}
                 draft={onDevice ? draft : null} conflict={onDevice ? rec.conflict : []} pending={frozen && onDevice}
                 onEdit={(f, v) => void onEdit(f, v)} onDiscard={discard} onPending={markPending}
                 lock={writes.lock} running={writes.running} result={s ? writes.result(faTarget(s.deviceId)) : null}
@@ -631,7 +633,7 @@ export default function FreshAir() {
                   const live = f.connected
                   return (
                     <TableRow key={f.key} onClick={() => setSel(f.key)} style={{ cursor: 'pointer', color: live && f.on ? undefined : 'var(--muted)' }}>
-                      <TableCell style={{ fontWeight: 500, color: 'var(--text)' }}>{unitName(f, i)}</TableCell>
+                      <TableCell style={{ fontWeight: 500, color: 'var(--text)' }}>{unitName(f, i, s)}</TableCell>
                       <TableCell>{live ? (f.on === null ? PLACEHOLDER : <Badge variant={f.on ? 'green' : 'gray'}><Icon icon={faPowerOff} /> {f.on ? '开' : '关'}</Badge>) : <Badge variant="red">未连接</Badge>}</TableCell>
                       <TableCell>{live ? f.runningMode || PLACEHOLDER : PLACEHOLDER}</TableCell>
                       <TableCell className="num text-right">{live ? num(f.runningTime) : PLACEHOLDER}</TableCell>

@@ -48,6 +48,8 @@ function usePresent() {
   return ref
 }
 
+export const END_TAGS_TIP = '蓝色为参与运行的末端，灰色为不参与；开 / 关 由控制屏根据运行情况自动控制。末端在平台上只读，不能修改'
+
 function EndTag({ m, dim }: { m: EndMode; dim?: boolean }) {
   // 改动文档：is_selected 选中蓝色、未选中灰色；后面的「开 / 关」取该末端的 switch
   return (
@@ -186,7 +188,7 @@ function RoomCard({ room: r, ctx, range, selected, onSelect, draft, conflict, on
     const dupe = raw ? roomTargetIssue(raw, r.equipmentId) : null
     if (dupe) { showToast(`${r.name}：${dupe}，本次未下发，请重新核对后再下发`, true); return }
     const okText = `${r.name} 已生效：${describeResult(changes)}`
-    const ok = await confirm({ title: '下发房间设置', body: <>将向 <b>{p0.name}</b>（<span className="num">{p0.code}</span>）的「{r.name}」下发：{describeChanges(changes)}，确定继续？{changes.temp && <div className="muted" style={{ marginTop: 8, fontSize: 12.5 }}>{TEMP_OFF_NOTE}。</div>}</>, okText: '确认下发' })
+    const ok = await confirm({ title: '下发房间设置', body: <>将向 <b>{p0.name}</b>的「{r.name}」下发：{describeChanges(changes)}，确定继续？{changes.temp && <div className="muted" style={{ marginTop: 8, fontSize: 12.5 }}>{TEMP_OFF_NOTE}。</div>}</>, okText: '确认下发' })
     if (!ok) return
     const now = latest.current
     const p = now.project
@@ -212,7 +214,7 @@ function RoomCard({ room: r, ctx, range, selected, onSelect, draft, conflict, on
     if (!built.ok) { showToast(built.reason, true); return }
     const dupe = raw ? roomTargetIssue(raw, r.equipmentId) : null
     if (dupe) { showToast(`${r.name}：${dupe}，本次未下发，请重新核对后再下发`, true); return }
-    const ok = await confirm({ title: v ? '开启房间' : '关闭房间', body: <>将向 <b>{p0.name}</b>（<span className="num">{p0.code}</span>）的「{r.name}」下发「{v ? '开启' : '关闭'}」指令，确定继续？</>, okText: '确认下发' })
+    const ok = await confirm({ title: v ? '开启房间' : '关闭房间', body: <>将向 <b>{p0.name}</b>的「{r.name}」下发「{v ? '开启' : '关闭'}」指令，确定继续？</>, okText: '确认下发' })
     if (!ok) return
     const now = latest.current
     const p = now.project
@@ -228,7 +230,7 @@ function RoomCard({ room: r, ctx, range, selected, onSelect, draft, conflict, on
   return (
     <Card pad={false} className={'room' + (selected ? ' sel' : '') + (off ? ' off' : '') + (mine ? ' busy' : '')} onClick={onSelect} data-room={r.key}>
       <div className="room-top">
-        <div><div className="room-name">{r.name}</div><div className="room-id num">{r.key}{r.mode && ` · ${r.mode}`}</div></div>
+        <div><div className="room-name">{r.name}</div>{r.mode && <div className="room-id">{r.mode}</div>}</div>
         <div className="row" onClick={(e) => e.stopPropagation()}>
           {!r.connected ? <Badge variant="red"><Icon icon={faPlugCircleXmark} />面板离线</Badge>
             : off ? <Badge variant="gray">已关闭</Badge>
@@ -279,7 +281,9 @@ function RoomCard({ room: r, ctx, range, selected, onSelect, draft, conflict, on
         </div>
         <div><span>风速</span><div className="te-line"><b>{off ? '--' : windLabel(r.windSpeed)}</b></div></div>
       </div>
-      <div className="modes-row">
+      {/* 末端本期只读（docs/HANDOFF.md：写锁核对 record201 还不核对末端，接入修改入口前要先补），这里只说明颜色和开 / 关的含义 */}
+      <div className="modes-row" title={END_TAGS_TIP}>
+        {r.endModes.length > 0 && <span className="ends-h">末端（由控制屏控制）</span>}
         {r.endModes.map((m, i) => <EndTag key={`${m.type}:${m.name}:${i}`} m={m} dim={off} />)}
       </div>
       {mine ? (
@@ -473,17 +477,17 @@ export default function Thermostat() {
     if (r.draft === rawDraft) return
     // 回读是外部数据源：读到新状态后同步整理草稿（有意在 effect 里更新状态，只在草稿确实变化时）
     setDraftState({ pid, d: r.draft })
-    if (r.cleared === 'gone' || r.cleared === 'blocked') showToast(`「${draftRoom?.name ?? rawDraft.key}」${CLEARED_TEXT[r.cleared]}，未下发的修改已清除`, true)
+    if (r.cleared === 'gone' || r.cleared === 'blocked') showToast(`「${draftRoom?.name ?? '该房间'}」${CLEARED_TEXT[r.cleared]}，未下发的修改已清除`, true)
   }, [rawDraft, list, online, rooms.isError, draftRoom?.name, pid, frozen])
 
   if (!project) return <div className="page"><div className="empty-fav" role="status"><b>暂无可用项目</b></div></div>
   if (!caps.thermostat) return (
     <div className="page">
-      <div className="page-head"><div><h1>房间温控面板</h1><div className="sub">{project.name}<span className="sep">·</span>程序 {PROGRAMS[project.programCode] ?? project.appName}（编码 <span className="num">{project.programCode}</span>）</div></div></div>
+      <div className="page-head"><div><h1>房间温控面板</h1><div className="sub">{project.name}<span className="sep">·</span>程序 {PROGRAMS[project.programCode] ?? project.appName}</div></div></div>
       <Card className="placeholder">
         <div className="ph-ico"><Icon icon={faFan} /></div>
         <h3>该项目无房间温控面板</h3>
-        <p>「{project.name}」为<b>新风单机版</b>项目（程序编码 {project.programCode}），仅接入新风除湿机，不包含房间温控面板。<br />新风机的运行数据与运行设置请前往「新风除湿机」查看。</p>
+        <p>「{project.name}」为<b>新风单机版</b>项目，仅接入新风除湿机，不包含房间温控面板。<br />新风机的运行数据与运行设置请前往「新风除湿机」查看。</p>
       </Card>
     </div>
   )
@@ -529,7 +533,7 @@ export default function Thermostat() {
     if (!target.ok) { showToast(`${subject}：${target.reason}，本次未下发`, true); return }
     const ids = target.roomIds
     const okText = `已生效：${subject}（${ids.length} 个房间）`
-    const ok = await confirm({ title: subject, body: <>将向 <b>{p0.name}</b>（<span className="num">{p0.code}</span>）的 {ids.length} 个温控面板下发「{v ? '开启' : '关闭'}」指令，确定继续？</>, okText: '确认下发', danger: !v })
+    const ok = await confirm({ title: subject, body: <>将向 <b>{p0.name}</b>的 {ids.length} 个温控面板下发「{v ? '开启' : '关闭'}」指令，确定继续？</>, okText: '确认下发', danger: !v })
     if (!ok) return
     const now = latest.current
     const p = now.project
@@ -598,8 +602,8 @@ export default function Thermostat() {
         <CardHeader><div><CardTitle>温度 / 湿度 / 露点 统计</CardTitle><CardDescription>{statRoom?.name} · {range === '24小时' ? '24 小时逐时数据' : `近${range === '7日' ? ' 7 ' : ' 30 '}日日均值`}</CardDescription></div>
           <div className="row" style={{ gap: 12 }}>
             <Select value={statRoom?.key ?? ''} onValueChange={setSel}>
-              <SelectTrigger aria-label="统计房间" sizer={list.map((r) => `${r.name} · ${r.key}`)} />
-              <SelectContent>{list.map((r) => <SelectItem key={r.key} value={r.key}>{r.name} · {r.key}</SelectItem>)}</SelectContent>
+              <SelectTrigger aria-label="统计房间" sizer={list.map((r) => r.name)} />
+              <SelectContent>{list.map((r) => <SelectItem key={r.key} value={r.key}>{r.name}</SelectItem>)}</SelectContent>
             </Select>
             <Seg value={range} options={['24小时', '7日', '30日']} onChange={setRange} />
           </div></CardHeader>

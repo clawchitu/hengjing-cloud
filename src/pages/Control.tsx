@@ -28,6 +28,7 @@ import { jwtSub, readTokens } from '../api/tokens'
 import { UnifiedCtrlSetQuery_OperatingMode as Mode } from '../api/gen/ctrl200_pb.js'
 import * as api from '../api'
 import { attachEvidence, endOf, lockKeysOf, lockOf, writeLockTtl, type VerifyResult, lockVersion, onForceReread, OTHER_ACCOUNT_TEXT, subscribe as subscribeLock } from '../api/writeLock'
+import { seqNames } from '@/lib/seqNames'
 import {
   clampTemp, LOCK_BUSY_TEXT, lockTargetOf, rereadHits, MODE_OPTIONS, readUnifiedSnapshot, resolveTempRange, TEXT, tempAvailability, unifiedAppCode, useUnifiedBatch,
   fieldResults, isStoredQuery203, overallOf, resultTitle,
@@ -244,6 +245,9 @@ export default function Control() {
   const [pq, setPq] = useState('')
   // 按 Group.projectIds 判断归属：一个项目可能属于多个集成项目
   const inGroup = projectsInGroup(groups.find((g) => g.id === gid), projects)
+  const groupNames = seqNames(groups, (g) => g.name, (g) => g.id)
+  const pickNames = seqNames(inGroup, (p) => p.name, (p) => p.id)
+  const codeNames = seqNames(inGroup, (p) => p.name, (p) => p.code)
   const ps = inGroup.filter((p) => !pq.trim() || (p.name + p.code).toLowerCase().includes(pq.trim().toLowerCase()))
   const [pickedRaw, setPicked] = useState<string[]>(() => (__HJC_MOCK__ && mock ? ['PRJ-10241', 'PRJ-10242', 'PRJ-10243', 'PRJ-10245'] : []))
   const picked = pickedRaw.filter((id) => inGroup.some((p) => p.id === id))
@@ -276,6 +280,13 @@ export default function Control() {
   // 写锁：订阅锁的变化；不在下发中时，已选项目里有被占的（同一块屏上一条还没有结论）就提示并置灰下发按钮
   const lockV = useSyncExternalStore(subscribeLock, lockVersion, lockVersion)
   const shownLast = last?.map(shown) ?? null
+  // 界面不显示项目 id（S13 走查）：同名项目用序号区分
+  // 序号和项目列表用同一份（按整个集成项目算），确认框、结果表里的「X (2)」就是列表里勾的那个
+  // 记录里的名称和项目当前的原始名称一致才用序号名；改过名（或不在当前列表里）就照记录显示
+  // 照记录显示的那些（比如切换了集成项目）也可能同名：接在当前列表后面按名称加序号，不和列表里已用的显示名撞
+  const matched = (r: { code: string; name: string }) => inGroup.some((p) => p.code === r.code && p.name === r.name)
+  const ownNames = seqNames([...inGroup.map((p) => ({ name: p.name, key: 'g:' + p.code })), ...(shownLast ?? []).filter((r) => !matched(r)).map((r) => ({ name: r.name, key: 'r:' + r.code }))], (x) => x.name, (x) => x.key)
+  const lastNames = new Map((shownLast ?? []).map((r) => [r.code, matched(r) ? codeNames.get(r.code) ?? r.name : ownNames.get('r:' + r.code) ?? r.name] as const))
   // 写锁结束了（核对一致放开 / 到期）：把这一行定下来并存进本标签页（刷新后也是最终结论）
   useEffect(() => {
     if (!last?.some((r) => settledRow(r))) return
@@ -340,7 +351,7 @@ export default function Control() {
       title: '确认下发统一控制指令',
       body: <>将向以下 <b>{s.rows.length}</b> 个项目逐个下发，并覆盖用户本地设置：
         <div className="kv">{s.items.map((i) => <div key={i.label}><span>{i.label}</span><b>{i.value}</b></div>)}</div>
-        <div className="muted" style={{ marginTop: 8, fontSize: 12.5 }}>{s.rows.map((r) => `${r.name}（${r.code}）`).join('、')}</div>
+        <div className="muted" style={{ marginTop: 8, fontSize: 12.5 }}>{s.rows.map((r) => codeNames.get(r.code) ?? r.name).join('、')}</div>
         {s.items.some((i) => i.label === TEXT.roomTemp) && <div className="muted" style={{ marginTop: 8, fontSize: 12.5 }}>{TEXT.tempOffNote}。</div>}
         <div className="muted" style={{ marginTop: 4, fontSize: 12.5 }}>下发前后各读一次当前状态用于核对；失败不会自动重试。</div></>,
       okText: TEXT.confirmOk, danger: true,
@@ -406,9 +417,8 @@ export default function Control() {
             <Icon icon={faLayerGroup} style={{ position: 'absolute', left: 14, top: 12, color: 'var(--primary)' }} />
             <Select value={gid} disabled={busy} onValueChange={(v) => { setGid(v); setPicked([]) }}>
               <SelectTrigger aria-label="集成项目" className="h-10 w-full pl-[38px] font-medium text-foreground" />
-              <SelectContent>{groups.map((g) => <SelectItem key={g.id} value={g.id}>{g.name}</SelectItem>)}</SelectContent>
+              <SelectContent>{groups.map((g) => <SelectItem key={g.id} value={g.id}>{groupNames.get(g.id) ?? g.name}</SelectItem>)}</SelectContent>
             </Select>
-            <span className="faint num" style={{ position: 'absolute', right: 34, top: 12, fontSize: 12, pointerEvents: 'none' }}>{groups.find((g) => g.id === gid)?.code ?? gid}</span>
           </div>
           <InputGroup className="mb-[14px] h-10"><Icon icon={faMagnifyingGlass} /><InputGroupInput className="min-w-0" placeholder="按项目名称检索" value={pq} onChange={(e) => setPq(e.target.value)} /></InputGroup>
           <div className="row" style={{ justifyContent: 'space-between', marginBottom: 10, fontSize: 13 }}>
@@ -422,7 +432,7 @@ export default function Control() {
             return (
               <div key={p.id} className={'pick' + (on ? ' on' : '') + (!p.online ? ' dis' : '')} onClick={() => can && setPicked(on ? picked.filter((x) => x !== p.id) : [...picked, p.id])}>
                 <Checkbox checked={on} disabled={!can} aria-label={p.name} />
-                <div><b>{p.name}</b><small className="num">{p.online ? `${p.code} · ${p.version}${p.programCode === 12 ? ' · 新风单机版' : ''}` : '离线 · 不可下发'}</small></div>
+                <div><b>{pickNames.get(p.id) ?? p.name}</b><small>{p.online ? (p.programCode === 12 ? '新风单机版' : '在线') : '离线 · 不可下发'}</small></div>
                 <span className="dot" />
               </div>
             )
@@ -458,7 +468,6 @@ export default function Control() {
               <b className="num" aria-live="polite">{temp.toFixed(1)}<small>°C</small></b>
               <button type="button" className="round plus" aria-label="升高温度" disabled={tempDisabled || temp >= range.max} onClick={() => setT(temp + range.step)}>+</button>
             </div>
-            <div className="c muted" style={{ fontSize: 12, textAlign: 'center', marginTop: 4 }}>推荐夏季 26°C</div>
             {/* 盒子同原生 range：宽 100%、左右 UA 默认外边距 2px、上边距 18px（见 slider.tsx） */}
             <Slider className="mx-[2px] mt-[18px] w-full" aria-label="房间温度设定" disabled={tempDisabled} min={range.min} max={range.max} step={range.step} value={[temp]} onValueChange={([v]) => { if (!tempDisabled) setT(v) }} />
             <div className="ticks num"><span>{range.min}°C</span><span>20°C</span><span>25°C</span><span>{range.max}°C</span></div>
@@ -497,12 +506,11 @@ export default function Control() {
           <div className="faint" style={{ padding: '18px 22px 22px', fontSize: 13, textAlign: 'center' }}>暂无执行记录</div>
         ) : (
           <Table>
-            <TableHeader><TableRow><TableHead>项目</TableHead><TableHead>项目ID</TableHead><TableHead>状态</TableHead><TableHead>操作时间</TableHead></TableRow></TableHeader>
+            <TableHeader><TableRow><TableHead>项目</TableHead><TableHead>状态</TableHead><TableHead>操作时间</TableHead></TableRow></TableHeader>
             <TableBody>
               {shownLast.map((r) => (
                 <TableRow key={r.code + r.name}>
-                  <TableCell style={{ fontWeight: 500 }}>{r.name}</TableCell>
-                  <TableCell className="num muted">{r.code}</TableCell>
+                  <TableCell style={{ fontWeight: 500 }}>{lastNames.get(r.code) ?? r.name}</TableCell>
                   {/* 状态列：有逐字段结果的显示标题（单一结果是那个词，混合是计数，Fable 11/25）；逐字段明细在「下发核对」 */}
                   <TableCell><Badge variant={r.badge.variant}>{r.badge.label}</Badge></TableCell>
                   <TableCell className="num muted">{r.at}</TableCell>
@@ -525,7 +533,7 @@ export default function Control() {
             <ul id="unified-notes" className="unified-notes" style={{ margin: 0, padding: '0 22px 18px 40px', fontSize: 12.5, lineHeight: 1.7 }}>
               {shownLast.filter((r) => r.detail).map((r) => (
                 <li key={r.code + r.name} className="muted">
-                  <b style={{ color: 'var(--text)' }}>{r.name}（{r.code}）</b>：{r.title ? <b style={{ color: 'var(--text)' }}>{r.title}</b> : r.detail}
+                  <b style={{ color: 'var(--text)' }}>{lastNames.get(r.code) ?? r.name}</b>：{r.title ? <b style={{ color: 'var(--text)' }}>{r.title}</b> : r.detail}
                   {/* 逐字段明细：标题下面的紧凑列表，每个字段四种状态之一 */}
                   {r.title && r.fields && (
                     <ul className="unified-fields" aria-label="逐字段结果" style={{ margin: '2px 0 0', padding: '0 0 0 16px', listStyle: 'disc' }}>
