@@ -34,6 +34,12 @@
 //    次数且来得及（或正在核对、退避定时器在等），并且没到期；一致但被否决（lastVetoed）也算。settling 期间界面只显示「正在核对…」，
 //    不报未变化 / 无法核对 / 结果未知；退避都用完（或来不及再排）、到期时才按最近一次结论显示四态。锁怎么结束的（一致放开 / 到期）
 //    另记在 endOf(主锁键)（带到期时间认是哪一把，以及结束时最近一次核对的结论），供一次性结果卡片（统一控制）在锁放开后改显示。
+//    核对证据（evidence，#66 赤兔定）：核对函数在读取时可用 attachEvidence(signal, 读数) 给这次核对挂一份不透明的读数，写锁不解读它。
+//    只有这次核对被写锁收下（commitRead 通过、记入 lastVerify / lastFields，或一致放锁）时才随结论一起存到锁上（lastEvidence），
+//    放锁时随 endOf 一并记下；迟到、超时、换账号、读失败的核对不留证据，读到一致但在提交时被否决（lastVetoed，按未变化记）的
+//    也不留；中止不改上次的结论与证据。页面按它重算展示，保证与 lastVerify 对得上。只有当前账号（mine）的锁视图 / 结束记录带证据；
+//    会话代次一变（换账号、登出、重登），所有锁上和结束记录里的证据一律清空；结束记录本身（怎么结束、到期时间、最后结论）保留，
+//    同一用户重登后结果卡片仍能按它定结论。
 // 7. 持久化：markSent 时就写 localStorage（键 = STORAGE_PREFIX + 主锁键），放锁时删（核对一致、确定失败、未认领、到期）；刷新后读到的记录一律按「结果未知」
 //    恢复（原 Promise 已不存在，视为已结算），靠 registerVerifier(消息号, fn) 注册的核对器重建核对，注册时若已有该消息号的锁就立刻
 //    核对一次。记录只存：锁键、projectId、消息号、设备 id、目标字段与值、206 的目标房间 id 集合、userId、sentAt（不存 label、项目名、
@@ -158,6 +164,8 @@ export interface LockInfo {
   verifying: boolean
   /** 有效期到期时间（已发出才有） */
   expiresAt?: number
+  /** 写锁最后收下的那次核对挂的读数（attachEvidence，不透明）；只有当前账号的视图带，会话代次变了即清空 */
+  lastEvidence?: unknown
 }
 
 export interface LockToken { readonly id: number; readonly key: string }
@@ -190,6 +198,8 @@ interface Entry {
   lastVerify?: VerifyResult
   lastFields?: Record<string, FieldResult>
   lastVetoed?: boolean
+  /** 随 lastVerify 一起收下的核对证据（见文件头口径 6） */
+  evidence?: unknown
 }
 
 // ---------------------------------------------------------------------------
@@ -210,7 +220,7 @@ function syncAccount(): boolean {
   return true
 }
 function watchAccount() {
-  if (!unsub) unsub = subscribeSession(() => { if (syncAccount()) emit() })
+  if (!unsub) unsub = subscribeSession(() => { if (syncAccount()) { sweepSession(); emit() } })
 }
 const defaultAccount = (): Account => {
   watchAccount()
@@ -281,12 +291,14 @@ function settlingOf(e: Entry): boolean {
   return delay !== undefined && (e.sentAt === undefined || Date.now() + delay < e.sentAt + ttlMs)
 }
 const view = (e: Entry): LockInfo => {
+  sweepSession()
   const owner = ownerOf(e)
   const hide = owner === 'other-account'
   return {
     key: e.token.key, keys: e.keys, projectId: hide ? '' : e.projectId, label: hide ? '' : e.label, phase: e.phase, origin: e.origin,
     sendSettled: e.sendSettled, outcome: e.outcome, lastVerify: e.lastVerify, lastFields: hide ? undefined : e.lastFields, lastVetoed: e.lastVetoed === true, settling: settlingOf(e), overdue: e.overdue, owner, mine: owner === 'current', verifiable: !!verifierOf(e),
     verifying: e.verifying, expiresAt: e.sentAt !== undefined ? e.sentAt + ttlMs : undefined,
+    ...(owner === 'current' && e.evidence !== undefined ? { lastEvidence: e.evidence } : {}),
   }
 }
 const isLive = (e: Entry) => byKey.get(e.token.key) === e
@@ -404,17 +416,52 @@ function removeStored(e: Entry) {
 
 /** 锁怎么结束的：applied = 核对一致放开；expired = 到期；other = 确定失败、没认领、主动放弃等。按主锁键只留最近一条 */
 export type LockEnd = 'applied' | 'expired' | 'other'
-/** 结束记录：到期时间（发出时间 + 有效期，用来认是哪一把）、结束方式、结束时最近一次核对的结论 */
-export interface LockEndInfo { expiresAt: number; how: LockEnd; lastVerify?: VerifyResult; lastFields?: Record<string, FieldResult> }
-let ends = new Map<string, LockEndInfo>()
+/**
+ * 结束记录：到期时间（发出时间 + 有效期，用来认是哪一把）、结束方式、结束时最近一次核对的结论；
+ * lastEvidence = 结束时锁上最后收下的核对证据（只给这把锁所属的当前账号）
+ */
+export interface LockEndInfo { expiresAt: number; how: LockEnd; lastVerify?: VerifyResult; lastFields?: Record<string, FieldResult>; lastEvidence?: unknown }
+interface EndRecord { info: LockEndInfo; account: Account; evidence?: unknown }
+let ends = new Map<string, EndRecord>()
+
+// 会话代次变化（换账号、登出、重登）：清空结束记录里与所有锁上的核对证据（结束记录本身保留）。读取方（view / endOf）和写入方
+// （drop、收下核对）先调它，所以不依赖订阅回调的时机；默认账号来源的 session 订阅里也调一次
+let sweptFor: Account | null = null
+function sweepSession() {
+  const cur = currentAccount()
+  if (sweptFor && sameAccount(sweptFor, cur)) return
+  if (sweptFor) {
+    for (const r of ends.values()) r.evidence = undefined
+    for (const e of byKey.values()) e.evidence = undefined
+  }
+  sweptFor = cur
+}
+
 /** 主锁键上最近结束的那把锁；没有返回 null */
 export function endOf(key: string): LockEndInfo | null {
-  return ends.get(key) ?? null
+  sweepSession()
+  const r = ends.get(key)
+  if (!r) return null
+  return sameAccount(r.account, currentAccount()) && r.evidence !== undefined ? { ...r.info, lastEvidence: r.evidence } : { ...r.info }
+}
+
+/** 核对进行中、可以挂证据的信号（runVerify 交给核对函数的那个）→ 这次核对挂上的证据 */
+const pendingEvidence = new WeakMap<AbortSignal, { value?: unknown }>()
+/**
+ * 核对函数读到数据时调用：把读数作为这次核对的证据挂上（后挂的覆盖先挂的）。signal 必须是写锁交给核对函数的那个；
+ * 别的信号（页面自己的回读等）、这次核对已经结束（迟到、超时）一律忽略。证据只在写锁收下这次核对时才保存
+ */
+export function attachEvidence(signal: AbortSignal | undefined, evidence: unknown): void {
+  const slot = signal ? pendingEvidence.get(signal) : undefined
+  if (slot) slot.value = evidence
 }
 
 function drop(e: Entry, how: LockEnd = 'other') {
   if (!isLive(e)) return
-  if (e.sentAt !== undefined) ends.set(e.token.key, { expiresAt: e.sentAt + ttlMs, how, lastVerify: e.lastVerify, lastFields: e.lastFields })
+  sweepSession()
+  if (e.sentAt !== undefined) {
+    ends.set(e.token.key, { info: { expiresAt: e.sentAt + ttlMs, how, lastVerify: e.lastVerify, lastFields: e.lastFields }, account: e.account, ...(e.evidence !== undefined ? { evidence: e.evidence } : {}) })
+  }
   for (const k of e.keys) if (byKey.get(k) === e) byKey.delete(k)
   if (e.expiryTimer) clearTimeout(e.expiryTimer)
   if (e.retryTimer) clearTimeout(e.retryTimer)
@@ -697,6 +744,8 @@ async function runVerify(e: Entry, fn: VerifyFn, signal?: AbortSignal): Promise<
   // 读取凭据（与页面回读同一套，见 beginRead / commitRead）：记下锁 token 与读取开始时的账号
   const ticket: ReadTicket = { token: e.token, account: currentAccount() }
   const ac = new AbortController()
+  const slot: { value?: unknown } = {}
+  pendingEvidence.set(ac.signal, slot)
   const onAbort = () => ac.abort()
   signal?.addEventListener('abort', onAbort, { once: true })
   let timer: ReturnType<typeof setTimeout> | undefined
@@ -718,6 +767,8 @@ async function runVerify(e: Entry, fn: VerifyFn, signal?: AbortSignal): Promise<
   } finally {
     clearTimeout(timer)
     signal?.removeEventListener('abort', onAbort)
+    // 这次核对结束：之后（迟到）挂的证据一律不收
+    pendingEvidence.delete(ac.signal)
     e.verifying = false
     if (isLive(e)) emit()
   }
@@ -738,19 +789,23 @@ async function runVerify(e: Entry, fn: VerifyFn, signal?: AbortSignal): Promise<
   let vetoed = false
   const valid = result !== 'account-changed' && result !== 'aborted' && !err && !ac.signal.aborted
     && commitRead(ticket, () => { if (commit?.() === false) vetoed = true }, signal)
+  // 证据随结论一起收下（见文件头口径 6）：只有这次核对被收下才保存；被否决的按未变化记、不留证据
+  sweepSession()
   if (result === 'released' && valid && vetoed) {
     e.lastVerify = 'mismatch'
     e.lastFields = unknownFields(e)
     e.lastVetoed = true
+    e.evidence = undefined
     emit()
     return 'mismatch'
   }
-  if (result === 'released') { if (!valid) return 'none'; drop(e, 'applied'); return result }
+  if (result === 'released') { if (!valid) return 'none'; e.evidence = slot.value; drop(e, 'applied'); return result }
   // 未变化 / 无法核对 / 结果未知：锁保持到核对一致或有效期到期（不续期）
   if (result !== 'aborted') {
     e.lastVerify = result
     // 回读失败或读取途中换号：核对器返回的逐字段结果作废，每个改了的目标字段都记为结果未知（中止不更新上次结论）
     e.lastFields = valid ? fields : unknownFields(e)
+    e.evidence = valid ? slot.value : undefined
     emit()
   }
   return result
@@ -790,6 +845,7 @@ export function __resetWriteLockForTests(account?: () => Account) {
   for (const e of new Set(byKey.values())) { if (e.expiryTimer) clearTimeout(e.expiryTimer); if (e.retryTimer) clearTimeout(e.retryTimer) }
   byKey = new Map()
   ends = new Map()
+  sweptFor = null
   verifiers.clear()
   rereadSubs.clear()
   unsub = null

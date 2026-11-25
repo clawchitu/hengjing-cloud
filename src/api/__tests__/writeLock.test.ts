@@ -1048,3 +1048,182 @@ describe('订阅与模块级', () => {
     expect(second.getByTestId('b').textContent).toBe('锁：客厅 unknown')
   })
 })
+
+describe('核对证据（evidence，#66）：只存写锁最后收下的那次核对；会话代次变化清空', () => {
+  const fake = () => vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
+  /** 已认领、登记、定为已下发、原写立即结算：开始自动核对 */
+  async function sentOk(fn: L.VerifyFn) {
+    const t = take()
+    claim(t)
+    markSent(t, Promise.resolve(), REC)
+    requireVerify(t, fn)
+    settle(t, 'ok')
+    await vi.advanceTimersByTimeAsync(0)
+    return t
+  }
+  /** 第 n 次核对挂上 'A{n}' 作为证据、返回不一致 */
+  const mismatchWith = (name: (n: number) => string) => { let n = 0; return vi.fn(async (sig: AbortSignal): Promise<L.MatchResult> => { L.attachEvidence(sig, name(++n)); return false }) }
+
+  it('收下的核对（不一致）随 lastVerify 一起存证据；下一次收下的覆盖；到期 endOf 带最后一次', async () => {
+    fake()
+    await sentOk(mismatchWith((n) => `A${n}`))
+    expect(lockOf(PA)).toMatchObject({ lastVerify: 'mismatch', lastEvidence: 'A1' })
+    await vi.advanceTimersByTimeAsync(5_000)
+    expect(lockOf(PA)?.lastEvidence).toBe('A2')
+    await vi.advanceTimersByTimeAsync(20_000 + 60_000)
+    expect(lockOf(PA)?.lastEvidence).toBe('A4')
+    await vi.advanceTimersByTimeAsync(DEFAULT_TTL_MS)
+    expect(lockOf(PA)).toBeNull()
+    expect(L.endOf(KEY)).toMatchObject({ how: 'expired', lastVerify: 'mismatch', lastEvidence: 'A4' })
+  })
+  it('一致放锁：endOf(applied) 带这次的证据', async () => {
+    fake()
+    await sentOk(async (sig) => { L.attachEvidence(sig, { ok: 1 }); return true })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(lockOf(PA)).toBeNull()
+    expect(L.endOf(KEY)).toMatchObject({ how: 'applied', lastEvidence: { ok: 1 } })
+  })
+  it('迟到读数（核对超时后才回来）：不改证据，仍是之后那次收下的核对', async () => {
+    fake()
+    let n = 0
+    await sentOk((sig) => {
+      n += 1
+      if (n === 1) return new Promise((r) => setTimeout(() => { L.attachEvidence(sig, 'LATE'); r(false) }, 30_000)) // 忽略中止，30 秒后才回来
+      L.attachEvidence(sig, `B${n}`)
+      return Promise.resolve(false)
+    })
+    await vi.advanceTimersByTimeAsync(L.VERIFY_TIMEOUT_MS)
+    expect(lockOf(PA)).toMatchObject({ lastVerify: 'failed' })
+    expect(lockOf(PA)?.lastEvidence).toBeUndefined() // 回读失败（超时）：没有证据，与 lastVerify 对得上
+    await vi.advanceTimersByTimeAsync(5_000) // 第一次退避：收下 B2
+    expect(lockOf(PA)).toMatchObject({ lastVerify: 'mismatch', lastEvidence: 'B2' })
+    await vi.advanceTimersByTimeAsync(10_000) // 第一次的读数这时才回来
+    expect(n).toBe(2)
+    expect(lockOf(PA)).toMatchObject({ lastVerify: 'mismatch', lastEvidence: 'B2' })
+  })
+  it('到期后才回来的读数：不改 endOf 的证据（到期时最后收下的那次）', async () => {
+    fake()
+    configureWriteLock({ ttlMs: 30_000 })
+    let n = 0
+    await sentOk((sig) => {
+      n += 1
+      // 第 3 次（25 秒）读到 33 秒才回来：有效期 30 秒已过
+      if (n === 3) return new Promise((r) => setTimeout(() => { L.attachEvidence(sig, 'LATE'); r(false) }, 8_000))
+      L.attachEvidence(sig, `C${n}`)
+      return Promise.resolve(false)
+    })
+    await vi.advanceTimersByTimeAsync(5_000 + 20_000)
+    expect(n).toBe(3)
+    expect(lockOf(PA)?.lastEvidence).toBe('C2')
+    await vi.advanceTimersByTimeAsync(5_000)
+    expect(lockOf(PA)).toBeNull()
+    expect(L.endOf(KEY)).toMatchObject({ how: 'expired', lastEvidence: 'C2' })
+    await vi.advanceTimersByTimeAsync(5_000)
+    expect(L.endOf(KEY)).toMatchObject({ how: 'expired', lastEvidence: 'C2' })
+  })
+  it('读失败、读取途中换号、被否决：不留证据；中止不改上次的证据', async () => {
+    const t = await unknownSettled(async (sig) => { L.attachEvidence(sig, 'X1'); return false })
+    expect(await verify(KEY)).toBe('mismatch')
+    expect(lockOf(PA)?.lastEvidence).toBe('X1')
+    // 中止：上次结论与证据都不变
+    const ac = new AbortController()
+    requireVerify(t, async (sig) => { L.attachEvidence(sig, 'ABORTED'); ac.abort(); return false })
+    expect(await verify(KEY, ac.signal)).toBe('aborted')
+    expect(lockOf(PA)).toMatchObject({ lastVerify: 'mismatch', lastEvidence: 'X1' })
+    // 读到了再抛错：结果未知，证据清掉
+    requireVerify(t, async (sig) => { L.attachEvidence(sig, 'ERR'); throw new Error('读失败') })
+    expect(await verify(KEY)).toBe('failed')
+    expect(lockOf(PA)?.lastVerify).toBe('failed')
+    expect(lockOf(PA)?.lastEvidence).toBeUndefined()
+    // 被否决（一致但提交时否决）：按未变化记，不留证据
+    requireVerify(t, async (sig) => { L.attachEvidence(sig, 'X2'); return false })
+    await verify(KEY)
+    requireVerify(t, async (sig) => { L.attachEvidence(sig, 'VETO'); return { same: true, commit: () => false } })
+    expect(await verify(KEY)).toBe('mismatch')
+    expect(lockOf(PA)).toMatchObject({ lastVetoed: true })
+    expect(lockOf(PA)?.lastEvidence).toBeUndefined()
+    // 读取途中换号：作废，不留证据
+    requireVerify(t, async (sig) => { L.attachEvidence(sig, 'SWAP'); acct = { user: 'u1', gen: 9 }; return false })
+    expect(await verify(KEY)).toBe('account-changed')
+    acct = { user: 'u1', gen: 9 }
+    expect(lockOf(PA)?.lastEvidence).toBeUndefined()
+  })
+  it('别的信号挂的证据（页面自己的回读等）一律忽略', async () => {
+    await unknownSettled(async () => { L.attachEvidence(new AbortController().signal, 'OTHER'); L.attachEvidence(undefined, 'NONE'); return false })
+    expect(await verify(KEY)).toBe('mismatch')
+    expect(lockOf(PA)?.lastEvidence).toBeUndefined()
+  })
+  it('他账号 / 上一会话的视图不带证据；换代后锁上的证据清空（换回原账号也看不到）', async () => {
+    const t = await unknownSettled(async (sig) => { L.attachEvidence(sig, 'MINE'); return false })
+    await verify(KEY)
+    expect(lockOf(PA)?.lastEvidence).toBe('MINE')
+    acct = { user: 'u2', gen: 2 }
+    const other = lockOf(PA)!
+    expect(other.owner).toBe('other-account')
+    expect('lastEvidence' in other).toBe(false)
+    // 别的账号核对上一账号的锁（核对不绑定账号）：收下的证据也不在它看到的视图里
+    requireVerify(t, async (sig) => { L.attachEvidence(sig, 'B-READ'); return false })
+    expect(await verify(KEY)).toBe('mismatch')
+    expect('lastEvidence' in lockOf(PA)!).toBe(false)
+    acct = { user: 'u1', gen: 3 }
+    expect(lockOf(PA)?.owner).toBe('previous-session')
+    expect(lockOf(PA)?.lastEvidence).toBeUndefined()
+    acct = { user: 'u1', gen: 1 } // 只为证明是清空而不是隐藏
+    expect(lockOf(PA)?.owner).toBe('current')
+    expect(lockOf(PA)?.lastEvidence).toBeUndefined()
+  })
+  it('换代后 ends 里的证据清空、结束记录保留（同号重登仍能定结论）；别的账号看不到证据', async () => {
+    const t1 = await unknownSettled(async (sig) => { L.attachEvidence(sig, 'E1'); return false })
+    expect(await verify(KEY)).toBe('mismatch')
+    const exp = lockOf(PA)!.expiresAt!
+    requireVerify(t1, async (sig) => { L.attachEvidence(sig, 'E1b'); return true })
+    expect(await verify(KEY)).toBe('released')
+    expect(L.endOf(KEY)).toMatchObject({ expiresAt: exp, how: 'applied', lastEvidence: 'E1b' })
+    acct = { user: 'u2', gen: 2 } // 换成别的账号
+    const forB = L.endOf(KEY)!
+    expect(forB).toMatchObject({ expiresAt: exp, how: 'applied' })
+    expect('lastEvidence' in forB).toBe(false)
+    acct = { user: 'u1', gen: 3 } // 同一用户重新登录：结束记录还在，证据没了
+    const again = L.endOf(KEY)!
+    expect(again).toMatchObject({ expiresAt: exp, how: 'applied' })
+    expect('lastEvidence' in again).toBe(false)
+    acct = { user: 'u1', gen: 1 } // 只为证明证据是清空而不是隐藏
+    expect('lastEvidence' in L.endOf(KEY)!).toBe(false)
+    // 上一账号的锁由新账号核对放开：结束记录给新账号看时不带证据（证据也只在当前账号自己的锁上）
+    acct = { user: 'u1', gen: 1 }
+    const t3 = await unknownSettled(async (sig) => { L.attachEvidence(sig, 'E2'); return false })
+    expect(await verify(KEY)).toBe('mismatch')
+    acct = { user: 'u2', gen: 4 }
+    requireVerify(t3, async (sig) => { L.attachEvidence(sig, 'B-READ'); return true })
+    expect(await verify(KEY)).toBe('released')
+    const end = L.endOf(KEY)!
+    expect(end.how).toBe('applied')
+    expect('lastEvidence' in end).toBe(false)
+  })
+  it('默认账号来源（api/session）：退出登录后 ends 里与锁上的证据清空（结束记录保留）', async () => {
+    __resetWriteLockForTests()
+    setConfig({ apiBase: '/api', dataSource: 'real' })
+    __resetHttpForTests(); __resetSessionForTests(); clearTokens()
+    __resetWriteLockForTests()
+    configureWriteLock({ resolveProject: (id) => visible[id] ?? null })
+    fakeBackend({
+      '/auth/login': () => json({ access_token: 'A1', refresh_token: 'R1', expires_in: 7200 }),
+      '/me': () => json({ user_entity: { id: 'u1', name: '甲' } }),
+      '/auth/invalidate': () => json({}),
+    })
+    await signIn('a', 'pw', true)
+    await unknownSettled(async (sig) => { L.attachEvidence(sig, 'S1'); return true })
+    expect(await verify(KEY)).toBe('released')
+    expect(L.endOf(KEY)).toMatchObject({ lastEvidence: 'S1' })
+    const t2 = take(PC)
+    claim(t2); markSent(t2, Promise.resolve(), REC); settle(t2, 'unknown')
+    requireVerify(t2, async (sig) => { L.attachEvidence(sig, 'S2'); return false })
+    await flush()
+    expect(lockOf(PC)?.lastEvidence).toBe('S2')
+    await signOut()
+    expect(L.endOf(KEY)).toMatchObject({ how: 'applied' })
+    expect('lastEvidence' in L.endOf(KEY)!).toBe(false)
+    expect(lockOf(PC)?.lastEvidence).toBeUndefined()
+    setConfig(null)
+  })
+})
