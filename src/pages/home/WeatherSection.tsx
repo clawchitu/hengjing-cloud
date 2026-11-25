@@ -6,7 +6,7 @@
 //   一小时，标「小时预报」，湿度、露点、气压、紫外线没有来源，隐藏；
 // - 账号没有天气接口权限：整块显示「当前账号未开通天气功能」，不发请求；
 // - 演示数据模式走同一个组件（数据源由 weatherSource() 选择）。
-import { useEffect, useId, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import {
   faLocationDot, faChevronDown, faRotateRight, faDroplet, faWind, faTemperatureLow, faGauge, faSun, faUmbrella, faMagnifyingGlass, faCompass, type IconDefinition,
 } from '@fortawesome/free-solid-svg-icons'
@@ -45,7 +45,8 @@ export function CityPicker({ city, onPick }: { city: City; onPick: (code: string
   const show = () => { scrolled.current = ''; opened.current = city.code; setQ(''); setHl(city.code); setOpen(true) }
   const pick = (c: City) => { setOpen(false); if (c.code !== city.code) onPick(c.code) }
   const hlNow = useRef(hl)
-  hlNow.current = hl
+  // layout effect：早于 AfterRender 的 useEffect 和 rAF / ResizeObserver 回调，reveal 读到的总是本次渲染的高亮
+  useLayoutEffect(() => { hlNow.current = hl }, [hl])
   const watched = useRef<{ list: Element; ro: ResizeObserver } | null>(null)
   useEffect(() => () => watched.current?.ro.disconnect(), [])
   /**

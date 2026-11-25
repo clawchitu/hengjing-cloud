@@ -11,7 +11,7 @@
 // - 每次读取取递增序号，写缓存时缓存里已有更新的读数就不覆盖（putNewer，同 thermostat/hooks.ts）；
 //   useFreshRead 绑定发起时的会话代次，会话变了就丢弃结果。
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { useCallback, useEffect } from 'react'
+import { useCallback } from 'react'
 import { ApiError, isApiError } from '@/api/errors'
 import { queryKeys } from '@/api/query'
 import { isDeviceId } from '@/api/writeLock'
@@ -57,35 +57,39 @@ type SettingsData = SettingsResult & Seq
 /**
  * 503 之后旧数据作废（同 src/data/sensors/hooks.ts 的请求序号方案，按项目记）：202、210 的读取遇到 503，记下该项目的失效序号；
  * 只有序号更大的成功结果才显示。之间遇到 500 / 超时 / ctrl 错误只显示错误，不恢复 503 之前的读数。
- * 控制屏是项目级的，所以 202 的 503 也让该项目的 210 读数作废，反过来一样
+ * 控制屏是项目级的，所以 202 的 503 也让该项目的 210 读数作废，反过来一样。
+ * 作废的读数不主动重读（S10b：持续 503 时 202、210 会互相作废、反复重读，页面一直停在「正在读取」）：
+ * 项目最近一次结束的读取是 503（down）时，没有本查询自己的错误也显示 unavailable 占位，各自按正常轮询节奏重试
  */
 const invalid = new Map<string, number>()
 const invalidSeq = (pid: string) => invalid.get(pid) ?? 0
 const valid = (pid: string, d: Seq | undefined): boolean => d !== undefined && d.seq > invalidSeq(pid)
+/** 各项目最近一次成功读取的序号 */
+const okSeq = new Map<string, number>()
+/** 控制屏当前视为不可用：最近的 503 晚于最近的成功读取 */
+const down = (pid: string) => invalidSeq(pid) > (okSeq.get(pid) ?? 0)
 /** 发起一次读取：取序号；503 时记失效序号 */
 async function runSeq<T>(key: readonly unknown[], pid: string, fn: () => Promise<T>): Promise<T & Seq> {
   const seq = nextSeq(key)
   try {
-    return { ...(await fn()), seq }
+    const r = await fn()
+    if (seq > (okSeq.get(pid) ?? 0)) okSeq.set(pid, seq)
+    return { ...r, seq }
   } catch (e) {
     if (isApiError(e) && e.kind === 'unavailable' && seq > invalidSeq(pid)) invalid.set(pid, seq)
     throw e
   }
 }
 /** 仅供测试 */
-export const __resetFreshAirForTests = () => { invalid.clear(); startedSeq.clear() }
+export const __resetFreshAirForTests = () => { invalid.clear(); okSeq.clear(); startedSeq.clear() }
 
-/** 不能显示缓存时的状态：503 → unavailable；其他错误 → error；还没有结果 → loading */
-function noData(err: ApiError | null, retry: () => void) {
-  if (err?.kind === 'unavailable') return { kind: 'unavailable', retry } as const
+/**
+ * 不能显示缓存时的状态：503 → unavailable；其他错误 → error；
+ * 本查询没有错误但控制屏 down（别的读取 503 作废了读数，或重试中 TanStack 清掉了上次的错误）→ unavailable；还没有结果 → loading
+ */
+function noData(pid: string, err: ApiError | null, retry: () => void) {
+  if (err?.kind === 'unavailable' || (!err && down(pid))) return { kind: 'unavailable', retry } as const
   return err ? ({ kind: 'error', error: err, retry } as const) : ({ kind: 'loading' } as const)
-}
-
-/** 缓存「新鲜」但已作废时（别的读取遇到 503），staleTime 内 TanStack 不会自己请求，这里主动重取一次（本查询出错时不重取，避免循环） */
-function useRefetchInvalid(active: boolean, pid: string, q: { data: Seq | undefined; isFetching: boolean; isError: boolean; refetch: () => unknown }) {
-  const stale = active && q.data !== undefined && !valid(pid, q.data) && !q.isFetching && !q.isError
-  const { refetch } = q
-  useEffect(() => { if (stale) void refetch() }, [stale, refetch])
 }
 
 // ---------------------------------------------------------------------------
@@ -121,12 +125,11 @@ export function useUnits(project: FreshProject | null, paused = false): UnitsVie
   })
   const qRefetch = q.refetch
   const retry = useCallback(() => { void qRefetch() }, [qRefetch])
-  useRefetchInvalid(canRead(project, src.kind) && permitted, pid, q)
   if (!project || !pid) return { kind: 'no-project' }
   if (!canRead(project, src.kind)) return { kind: 'offline' }
   if (!permitted) return { kind: 'forbidden' }
   const err = q.error ? toApiError(q.error) : null
-  if (!q.data || !valid(pid, q.data)) return noData(err, retry)
+  if (!q.data || !valid(pid, q.data)) return noData(pid, err, retry)
   if (q.data.list.length === 0) return { kind: 'empty', updatedAt: q.dataUpdatedAt }
   return { kind: 'ready', units: q.data.list, updatedAt: q.dataUpdatedAt, staleError: err, retry }
 }
@@ -169,7 +172,6 @@ export function useSettings(project: FreshProject | null, unit: Pick<UnitView, '
   })
   const qRefetch = q.refetch
   const retry = useCallback(() => { void qRefetch() }, [qRefetch])
-  useRefetchInvalid(active && permitted, pid, q)
   if (!project || !pid) return { kind: 'no-project' }
   if (!canRead(project, src.kind)) return { kind: 'offline' }
   if (!hasSettings(project)) return { kind: 'not-applicable' }
@@ -177,7 +179,7 @@ export function useSettings(project: FreshProject | null, unit: Pick<UnitView, '
   if (unit?.connected !== true) return { kind: 'device-offline' }
   if (!permitted) return { kind: 'forbidden' }
   const err = q.error ? toApiError(q.error) : null
-  if (!q.data || !valid(pid, q.data)) return noData(err, retry)
+  if (!q.data || !valid(pid, q.data)) return noData(pid, err, retry)
   if (q.data.kind === 'unsupported') return { kind: 'unsupported', message: q.data.message, detail: q.data.detail }
   return { kind: 'ready', settings: q.data.view, raw: q.data.raw, updatedAt: q.dataUpdatedAt, staleError: err, retry }
 }
