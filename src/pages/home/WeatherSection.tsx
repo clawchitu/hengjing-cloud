@@ -47,7 +47,11 @@ export function CityPicker({ city, onPick }: { city: City; onPick: (code: string
     const el = document.getElementById(contentId)
     setListId(el?.querySelector('[cmdk-list]')?.id)
     setItemId(hl ? itemById(el, hl)?.id : undefined)
-    if (hl && scrolled.current !== hl) { itemById(el, hl)?.scrollIntoView({ block: 'nearest' }); scrolled.current = hl }
+    // 弹层刚挂载时还在定位，当场滚动不生效：下一帧再滚，每个高亮只滚一次
+    if (hl && scrolled.current !== hl) {
+      scrolled.current = hl
+      requestAnimationFrame(() => itemById(document.getElementById(contentId), hl)?.scrollIntoView({ block: 'nearest' }))
+    }
   }
 
   return (

@@ -23,6 +23,7 @@ test.describe('天气城市选择', () => {
     const current = page.locator('[cmdk-item][data-current]')
     await expect(current).toHaveText('无锡市')
     await expect(current).toHaveAttribute('aria-selected', 'true')
+    await expect(current).toBeInViewport() // 列表滚到当前城市
     await page.keyboard.press('ArrowDown') // 无锡市的下一个：徐州市
     await tick(page)
     await expect(page.locator('[cmdk-item][aria-selected="true"]')).toHaveText('徐州市')
