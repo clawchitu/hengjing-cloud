@@ -41,16 +41,52 @@ export function CityPicker({ city, onPick }: { city: City; onPick: (code: string
   const groups = PROVINCES.map((p) => ({ p, cities: p.cities.filter((c) => matchCity(c, p.name, q)) })).filter((g) => g.cities.length > 0)
   const first = groups[0]?.cities[0]
 
-  const show = () => { scrolled.current = ''; setQ(''); setHl(city.code); setOpen(true) }
+  const opened = useRef('')
+  const show = () => { scrolled.current = ''; opened.current = city.code; setQ(''); setHl(city.code); setOpen(true) }
   const pick = (c: City) => { setOpen(false); if (c.code !== city.code) onPick(c.code) }
+  const hlNow = useRef(hl)
+  hlNow.current = hl
+  const watched = useRef<{ list: Element; ro: ResizeObserver } | null>(null)
+  useEffect(() => () => watched.current?.ro.disconnect(), [])
+  /**
+   * 把当前高亮项滚进列表可见区（贴最近的一边，同 block: 'nearest'）。只改列表自己的 scrollTop：立即到位、没有平滑滚动，
+   * 也不会带动页面或弹层。
+   * 打开时的那个高亮（当前城市）按「从列表顶端出发」算出绝对位置，不看此刻已经滚到哪：弹层定位期间列表高度会变，
+   * 相对滚动的结果取决于先滚还是先定高（CI 上偶发偏移的根因）。列表尺寸每变一次重算（见 sync 里的 ResizeObserver）
+   */
+  const reveal = () => {
+    const root = document.getElementById(contentId)
+    const list = root?.querySelector<HTMLElement>('[cmdk-list]')
+    const item = hlNow.current ? itemById(root, hlNow.current) : null
+    if (!list || !item) return
+    const r = item.getBoundingClientRect()
+    const top = list.getBoundingClientRect().top + list.clientTop
+    if (hlNow.current === opened.current) {
+      list.scrollTop = Math.max(0, r.bottom - top + list.scrollTop - list.clientHeight)
+      return
+    }
+    if (r.top < top) list.scrollTop += r.top - top
+    else if (r.bottom > top + list.clientHeight) list.scrollTop += r.bottom - (top + list.clientHeight)
+  }
   const sync = () => {
     const el = document.getElementById(contentId)
-    setListId(el?.querySelector('[cmdk-list]')?.id)
+    const list = el?.querySelector('[cmdk-list]')
+    setListId(list?.id)
     setItemId(hl ? itemById(el, hl)?.id : undefined)
-    // 弹层刚挂载时还在定位，当场滚动不生效：下一帧再滚，每个高亮只滚一次
+    // 弹层刚挂载时还在定位、列表高度（取决于可用高度）还没定，当场滚的位置不可靠：
+    // 下一帧滚一次（每个高亮只滚一次），之后列表尺寸每变一次再按当时的高度重算，最终位置与定位完成的先后无关
     if (hl && scrolled.current !== hl) {
       scrolled.current = hl
-      requestAnimationFrame(() => itemById(document.getElementById(contentId), hl)?.scrollIntoView({ block: 'nearest' }))
+      requestAnimationFrame(reveal)
+    }
+    if (list && watched.current?.list !== list) {
+      watched.current?.ro.disconnect()
+      watched.current = null
+      if (typeof ResizeObserver === 'function') {
+        const ro = new ResizeObserver(() => reveal())
+        ro.observe(list)
+        watched.current = { list, ro }
+      }
     }
   }
 

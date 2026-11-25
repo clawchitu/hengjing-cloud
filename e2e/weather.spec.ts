@@ -81,6 +81,8 @@ test.describe('天气城市选择', () => {
     await trigger(page).click()
     await tick(page, 300)
     await expect(search(page)).toBeFocused()
+    // 当前城市贴列表底边（从顶端出发的 nearest 位置），与弹层定位、列表定高的先后无关；位置稳定后再截图
+    await expect(page.locator('[cmdk-item][data-current]')).toBeInViewport({ ratio: 1 })
     await shot(page, 'weather-city-picker')
   })
 })
