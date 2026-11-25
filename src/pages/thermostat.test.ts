@@ -24,7 +24,7 @@ import { __resetSessionViewForTests } from '../data/session'
 import { __resetWritesForTests, LIMITS, realSource as thermoRealSource } from '../features/thermostat'
 import Layout from '../components/Layout'
 import { OrgGate } from '../app/OrgGate'
-import { __resetWriteLockForTests, configureWriteLock, lockOf as lockOfKey, subscribe as subscribeLock, acquire as acquireLock, release as releaseLock, STORAGE_PREFIX, verify as verifyLock } from '../api/writeLock'
+import { __resetWriteLockForTests, configureWriteLock, lockOf as lockOfKey, subscribe as subscribeLock, acquire as acquireLock, release as releaseLock, STORAGE_PREFIX, verify as verifyLock, __setRetryDelaysForTests, RETRY_DELAYS_MS } from '../api/writeLock'
 import Thermostat from './Thermostat'
 
 beforeAll(() => {
@@ -163,6 +163,9 @@ beforeEach(() => {
   setConfig({ apiBase: '/api', apiEnv: 'test', dataSource: 'real', features: SW })
   localStorage.clear(); sessionStorage.clear()
   __resetHttpForTests(); __resetSessionForTests(); __resetSessionViewForTests(); __resetCurrentForTests(); __resetWritesForTests(); __resetWriteLockForTests(); clearTokens()
+  // 现有用例断言的是退避用完后的四态显示：默认不排自动再核对（首次核对的结论即最终显示）。
+  // 正在核对期间（settling）的显示单独一组（「首次回读不一致：正在核对」），用短退避间隔跑真实的退避
+  __setRetryDelaysForTests([])
 })
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.restoreAllMocks(); setConfig(null) })
 
@@ -1299,6 +1302,7 @@ describe('#35 第五轮：201 目标 ID 唯一、核对读数写缓存的时机'
   })
 
   it('旧核对跨过到期、晚于到期后的强制重读返回：不覆盖强制重读的新读数', async () => {
+    __setRetryDelaysForTests(RETRY_DELAYS_MS) // 靠真实的自动再核对卡在有效期最后 15 秒内
     vi.useFakeTimers({ shouldAdvanceTime: true, toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'] })
     try {
       let wrote = false
@@ -1500,5 +1504,130 @@ describe('房间开关未上报（features.roomSwitchReported = false，后端 1
     expect(card('主卧').textContent).toContain('设备暂不回报开关状态，2 分钟后可再次操作')
     expect(card('主卧').textContent).not.toContain('设备状态暂未变化')
     expect(toasts()).not.toContain('已生效')
+  })
+})
+
+describe('首次回读不一致：正在核对（赤兔 11/25：退避都用完仍不一致才报结论）', () => {
+  /** 短退避间隔，跑真实的自动再核对（默认 5 / 20 / 60 秒） */
+  const FAST = [60, 60, 60] as const
+  /** 记录过程中结果条与锁提示出现过的所有文案 */
+  function recordTexts() {
+    const seen: string[] = []
+    const grab = () => { for (const el of document.querySelectorAll('.te-bar, [data-lock]')) { const t = el.textContent ?? ''; if (t && seen[seen.length - 1] !== t && !seen.includes(t)) seen.push(t) } }
+    const mo = new MutationObserver(grab)
+    mo.observe(document.body, { subtree: true, childList: true, characterData: true, attributes: true })
+    grab()
+    return { all: () => { grab(); return seen.join('\n') }, stop: () => mo.disconnect() }
+  }
+  /** 写后第 n 次读 200（1 起算）返回什么 */
+  function backendAfterWrite(nth: (n: number) => Response) {
+    let wrote = false
+    let n = 0
+    const be = backend({
+      '/ctrl/room-temperature-set': () => { wrote = true; return ok201NoApply() },
+      '/ctrl/room-temperature-data-get': () => (wrote ? nth(++n) : reply200(rooms)),
+    })
+    return { be, reads: () => n }
+  }
+  const applied = () => reply200([{ ...ROOM, setTemp: 26 }, OFF_ROOM])
+  const old = () => reply200([ROOM, OFF_ROOM])
+
+  it('第一次回读旧值、第二次回读新值：整个过程只出现「正在核对」和「已生效」，中间不出现「未变化」', async () => {
+    __setRetryDelaysForTests(FAST)
+    const { be, reads } = backendAfterWrite((n) => (n === 1 ? old() : applied()))
+    await draftAndSend()
+    const rec = recordTexts()
+    await confirmOk()
+    await waitFor(() => expect(reads()).toBeGreaterThanOrEqual(1))
+    await flush()
+    // 首次回读不一致：仍显示正在核对，锁保持
+    expect(card('客厅').textContent).toContain('已下发，正在核对')
+    expect(document.querySelector('[data-lock="unknown"]')).toBeTruthy()
+    await waitFor(() => expect(toasts()).toContain('客厅 已生效'))
+    await waitFor(() => expect(document.querySelector('[data-lock]')).toBeNull())
+    expect(reads()).toBeGreaterThanOrEqual(2) // 首次自动核对（旧值）+ 第一次退避（新值）；放锁后页面会再刷新读数
+    const all = rec.all()
+    rec.stop()
+    expect(all).toContain('正在核对')
+    expect(all).not.toContain('未变化')
+    expect(all).not.toContain('未生效')
+    expect(all).not.toContain('结果未知')
+    expect(toasts()).not.toContain('未变化')
+    expect(writes(be)).toHaveLength(1)
+  })
+
+  it('三次退避都不一致：退避用完前一直是「正在核对」，用完才显示「指令已下发，设备状态暂未变化」，锁保持', async () => {
+    __setRetryDelaysForTests(FAST)
+    const { reads } = backendAfterWrite(() => old())
+    await draftAndSend()
+    const rec = recordTexts()
+    await confirmOk()
+    await waitFor(() => expect(within(card('客厅')).getAllByRole('alert').map((a) => a.textContent).join()).toContain('指令已下发，设备状态暂未变化'))
+    expect(reads()).toBe(1 + FAST.length) // 首次自动核对 + 三次退避
+    const all = rec.all()
+    rec.stop()
+    // 结论第一次出现之前，出现过的都是正在核对
+    const before = all.slice(0, all.indexOf('暂未变化'))
+    expect(before).toContain('正在核对')
+    expect(before).not.toContain('结果未知')
+    expect(document.querySelector('[data-lock="unknown"]')!.textContent).toContain('指令已下发，设备状态暂未变化')
+    expect(card('客厅').textContent).toContain('设定温度 25.5 → 26.0°C') // 草稿保留
+  })
+
+  it('读不到（回读失败）：同样等退避跑完才报「结果未知（回读失败）」', async () => {
+    __setRetryDelaysForTests(FAST)
+    const { reads } = backendAfterWrite(() => json({ code: 14, message: 'x' }, 503))
+    await draftAndSend()
+    const rec = recordTexts()
+    await confirmOk()
+    await waitFor(() => expect(reads()).toBeGreaterThanOrEqual(1))
+    await flush()
+    expect(card('客厅').textContent).toContain('已下发，正在核对')
+    expect(card('客厅').textContent).not.toContain('结果未知')
+    await waitFor(() => expect(within(card('客厅')).getAllByRole('alert').map((a) => a.textContent).join()).toContain('结果未知（回读失败）'))
+    expect(reads()).toBe(1 + FAST.length)
+    const all = rec.all()
+    rec.stop()
+    expect(all.slice(0, all.indexOf('结果未知'))).toContain('正在核对')
+    expect(all).not.toContain('未变化')
+  })
+
+  it('到期前来不及再排下一次退避、最后一次仍不一致：显示「指令已下发，设备状态暂未变化」（锁到期前），之后到期放开', async () => {
+    __setRetryDelaysForTests([60, 60_000]) // 有效期 30 秒：第二次退避排不进有效期
+    const { reads } = backendAfterWrite(() => old())
+    await draftAndSend()
+    configureWriteLock({ ttlMs: 30_000 })
+    await confirmOk()
+    await waitFor(() => expect(reads()).toBe(1))
+    await flush()
+    expect(card('客厅').textContent).toContain('已下发，正在核对')
+    await waitFor(() => expect(within(card('客厅')).getAllByRole('alert').map((a) => a.textContent).join()).toContain('指令已下发，设备状态暂未变化'))
+    expect(reads()).toBe(2)
+    expect(document.querySelector('[data-lock="unknown"]')).toBeTruthy() // 锁照旧保持到到期
+  })
+
+  it('首次回读已一致：直接「已生效」，不等退避', async () => {
+    __setRetryDelaysForTests(RETRY_DELAYS_MS) // 默认 5 秒起的退避：1 秒内就出结论说明没等退避
+    backendAfterWrite(() => applied())
+    await draftAndSend()
+    await confirmOk()
+    await waitFor(() => expect(toasts()).toContain('客厅 已生效'))
+    expect(document.querySelector('[data-lock]')).toBeNull()
+  })
+
+  it('锁提示：退避期间手动「核对」仍不一致，只说稍后自动再核对，不报未变化', async () => {
+    __setRetryDelaysForTests([60, 60_000, 60_000])
+    const { reads } = backendAfterWrite(() => old())
+    await draftAndSend()
+    await confirmOk()
+    await waitFor(() => expect(reads()).toBe(2)) // 首次 + 第一次退避；第二次退避在 60 秒后
+    await flush()
+    const bar = document.querySelector('[data-lock="unknown"]') as HTMLElement
+    expect(bar.textContent).toContain('已下发，正在核对…')
+    expect(bar.textContent).not.toContain('未变化')
+    fireEvent.click(within(bar).getByRole('button', { name: '核对' }))
+    await waitFor(() => expect(reads()).toBe(3))
+    await waitFor(() => expect(toasts()).toContain('暂未核对一致，稍后自动再核对'))
+    expect(toasts()).not.toContain('未变化')
   })
 })

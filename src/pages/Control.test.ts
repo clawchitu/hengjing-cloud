@@ -21,7 +21,7 @@ import { __resetSessionViewForTests } from '../data/session'
 import { __resetMockUnifiedForTests, mockUnifiedRead, mockUnifiedSend } from '../api'
 import Control, { lastResultKey } from './Control'
 import { setCurrentUserId } from '../api/auth'
-import { __resetWriteLockForTests, OTHER_ACCOUNT_TEXT, STORAGE_PREFIX } from '../api/writeLock'
+import { __resetWriteLockForTests, __setRetryDelaysForTests, OTHER_ACCOUNT_TEXT, STORAGE_PREFIX } from '../api/writeLock'
 import { TEXT } from '../features/unified/constants'
 
 beforeAll(() => {
@@ -115,6 +115,8 @@ async function expectTempLocked() {
 
 beforeEach(() => {
   __resetWriteLockForTests()
+  // 现有用例断言退避用完后的结论：默认不排自动再核对。正在核对期间的显示见「下发」里的「正在核对」两条，用短退避间隔
+  __setRetryDelaysForTests([])
   setConfig({ apiBase: '/api', dataSource: 'real', apiEnv: 'test', features: { roomSwitchReported: true } })
   localStorage.clear(); sessionStorage.clear()
   __resetHttpForTests(); __resetSessionForTests(); __resetSessionViewForTests(); __resetCurrentForTests(); clearTokens()
@@ -415,6 +417,113 @@ describe('下发', () => {
     const notes = await openNotes()
     expect(notes).toContain(TEXT.unverifiable)
     expect(notes).toContain('下发后 无房间')
+  })
+
+  describe('首次回读不一致：正在核对（赤兔 11/25）', () => {
+    const FAST = [60, 60, 60] as const
+    /** 203 之后第 n 次读 200（1 = 批次的下发后回读，之后是写锁的自动再核对） */
+    function after203(nth: (n: number) => Response) {
+      let be!: ReturnType<typeof backend>
+      let n = 0
+      be = backend({ '/ctrl/room-temperature-data-get': () => (be.callsTo('/ctrl/unified-ctrl-set').length ? nth(++n) : rooms(0, 26)), '/ctrl/unified-ctrl-set': () => reply(true) })
+      return { be, reads: () => n }
+    }
+    /** 记录结果卡片状态列出现过的所有文案 */
+    function recordBadges() {
+      const seen: string[] = []
+      const grab = () => { for (const b of document.querySelectorAll('[role=region] [data-slot=badge]')) { const t = b.textContent ?? ''; if (!seen.includes(t)) seen.push(t) } }
+      const mo = new MutationObserver(grab)
+      mo.observe(document.body, { subtree: true, childList: true, characterData: true })
+      return { all: () => { grab(); return seen }, stop: () => mo.disconnect() }
+    }
+    it('批次回读旧值、写锁首次自动核对仍旧值、第一次退避读到新值：状态列只出现「正在核对」和「已生效」，不出现「未变化」；刷新后仍是已生效', async () => {
+      __setRetryDelaysForTests([300, 300, 300])
+      const { be, reads } = after203((n) => (n <= 2 ? rooms(0, 26) : rooms(1, 26.5)))
+      const dlg = await prepare()
+      const rec = recordBadges()
+      await click(okIn(dlg))
+      await screen.findByText(TEXT.verifying, { selector: '[data-slot=badge]' }, { timeout: 3000 })
+      expect(await openNotes()).toContain(TEXT.verifying)
+      await screen.findByText('已生效', { selector: '[data-slot=badge]' }, { timeout: 3000 })
+      expect(reads()).toBeGreaterThanOrEqual(3)
+      const all = rec.all()
+      rec.stop()
+      expect(all).toContain(TEXT.verifying)
+      expect(all).not.toContain('未变化')
+      expect(all).not.toContain('结果未知')
+      expect(all.filter((t) => t !== TEXT.verifying && t !== '已生效')).toEqual([])
+      expect(be.callsTo('/ctrl/unified-ctrl-set')).toHaveLength(1)
+      // 定为已生效后存进本标签页：重新进入仍是已生效
+      cleanup()
+      await mount(false)
+      expect(screen.getByText('已生效', { selector: '[data-slot=badge]' })).toBeTruthy()
+    })
+    it('批次结束前写锁的自动核对已一致放开：直接「已生效」，不出现「未变化」', async () => {
+      __setRetryDelaysForTests(FAST)
+      after203((n) => (n === 1 ? rooms(0, 26) : rooms(1, 26.5)))
+      const dlg = await prepare()
+      const rec = recordBadges()
+      await click(okIn(dlg))
+      await screen.findByText('已生效', { selector: '[data-slot=badge]' }, { timeout: 3000 })
+      const all = rec.all()
+      rec.stop()
+      expect(all.filter((t) => t !== TEXT.verifying && t !== '已生效')).toEqual([])
+    })
+    it('两个项目：第一个的写锁在批次结束前（第二个还在下发）就自动核对一致放开 → 第一个直接「已生效」，不留「未变化」（第二个的结果不在本用例范围）', async () => {
+      __setRetryDelaysForTests(FAST)
+      const P5 = { id: 'p5', code: '240829005', name: '测试项目0905', app_code: '1', online: true }
+      const sentTo = new Set<string>()
+      let p1Reads = 0
+      const pid = (c: Call) => (c.body as { project_id?: string } | undefined)?.project_id
+      backend({
+        '/ctrl/projects': () => json({ project_entities: [...PROJECTS, P5] }),
+        '/integrated-projects': () => json({ entities: [{ ...GROUPS[0], project_ids: ['p1', 'p3', 'p5'] }, ...GROUPS.slice(1)] }),
+        '/ctrl/room-temperature-data-get': (c) => {
+          const id = pid(c) ?? ''
+          if (!sentTo.has(id)) return rooms(0, 26)
+          if (id === 'p1') return ++p1Reads === 1 ? rooms(0, 26) : rooms(1, 26.5) // 批次回读旧值，写锁首次自动核对新值
+          return rooms(1, 26.5)
+        },
+        '/ctrl/unified-ctrl-set': async (c) => {
+          const id = pid(c) ?? ''
+          if (id === 'p5') await new Promise((r) => setTimeout(r, 400)) // 第二个项目慢：第一个的写锁先放开
+          sentTo.add(id)
+          return reply(true)
+        },
+      })
+      await mount()
+      await click(screen.getByText('测试项目0829'))
+      await click(screen.getByText('测试项目0905'))
+      await click(screen.getByRole('button', { name: '全部开启' }))
+      await click(keep())
+      await click(screen.getByRole('button', { name: '升高温度' }))
+      await click(screen.getByRole('button', { name: '确认下发' }))
+      const dlg = await screen.findByRole('alertdialog')
+      const rec = recordBadges()
+      await click(okIn(dlg))
+      await waitFor(() => expect(document.querySelectorAll('[role=region] tbody tr').length).toBe(2), { timeout: 3000 })
+      const p1Row = () => [...document.querySelectorAll('[role=region] tbody tr')].find((r) => r.textContent?.includes('240829001'))!
+      expect(p1Row().querySelector('[data-slot=badge]')!.textContent).toBe('已生效')
+      expect(p1Reads).toBeGreaterThanOrEqual(2)
+      const all = rec.all()
+      rec.stop()
+      expect(all).not.toContain('未变化')
+      expect(all).not.toContain('结果未知')
+    })
+    it('退避都不一致：退避用完前是「正在核对」，用完才显示「未变化」', async () => {
+      __setRetryDelaysForTests([300, 300, 300])
+      const { reads } = after203(() => rooms(0, 26))
+      const dlg = await prepare()
+      const rec = recordBadges()
+      await click(okIn(dlg))
+      await screen.findByText('未变化', { selector: '[data-slot=badge]' }, { timeout: 3000 })
+      expect(reads()).toBeGreaterThanOrEqual(2 + FAST.length) // 批次回读 + 写锁首次自动核对 + 三次退避（之后页面会再刷新一次房间状态）
+      const all = rec.all()
+      rec.stop()
+      expect(all.indexOf(TEXT.verifying)).toBeGreaterThanOrEqual(0)
+      expect(all.indexOf(TEXT.verifying)).toBeLessThan(all.indexOf('未变化'))
+      expect(await openNotes()).toContain(TEXT.unapplied)
+    })
   })
 
   it('下发后回读请求失败（500）→ 结果未知，提示回读失败、刷新核对；不列「设备未回报」，不算无法核对', async () => {

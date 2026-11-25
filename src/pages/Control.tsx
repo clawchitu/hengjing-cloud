@@ -27,7 +27,7 @@ import { WRITE_RECHECK_TEXT } from '../api/http'
 import { jwtSub, readTokens } from '../api/tokens'
 import { UnifiedCtrlSetQuery_OperatingMode as Mode } from '../api/gen/ctrl200_pb.js'
 import * as api from '../api'
-import { lockOf, lockVersion, onForceReread, OTHER_ACCOUNT_TEXT, subscribe as subscribeLock } from '../api/writeLock'
+import { endOf, lockKeysOf, lockOf, writeLockTtl, lockVersion, onForceReread, OTHER_ACCOUNT_TEXT, subscribe as subscribeLock } from '../api/writeLock'
 import {
   clampTemp, LOCK_BUSY_TEXT, lockTargetOf, rereadHits, MODE_OPTIONS, readUnifiedSnapshot, resolveTempRange, TEXT, tempAvailability, unifiedAppCode, useUnifiedBatch,
   fieldResults, resultTitle,
@@ -65,6 +65,32 @@ export interface ResultRow {
   /** 逐字段结果（Fable 11/25）：标题（单一结果是那个词，混合是计数）+ 每个字段各自的状态。只在「下发核对」区显示 */
   title?: string
   fields?: Array<{ label: string; status: FieldStatus; messages: string[] }>
+  /**
+   * 批次结束时这一行还没核对一致、写锁仍在自动再核对：记下那把锁（主锁键 + 到期时间，不是凭据）。锁还在自动核对（settling）
+   * 时这一行只显示「已下发，正在核对…」；锁核对一致放开后改显示已生效；退避用完 / 到期后显示批次的结论（赤兔 11/25）
+   */
+  lock?: { key: string; exp: number }
+}
+
+/** 批次里没核对一致、写锁会接着自动再核对的结论 */
+const SETTLE_STATUSES: ReadonlySet<ResultRow['status']> = new Set(['unapplied', 'unverifiable', 'unknown'])
+/** 这一行此刻怎么显示：写锁还在自动核对 → 正在核对；写锁已核对一致放开 → 已生效；其余按批次结论 */
+type Live = 'settling' | 'applied' | null
+function liveOf(r: ResultRow): Live {
+  if (!r.lock) return null
+  const l = lockOf(r.lock.key)
+  if (l) return l.expiresAt === r.lock.exp && l.settling ? 'settling' : null
+  const end = endOf(r.lock.key)
+  return end && end.expiresAt === r.lock.exp && end.how === 'applied' ? 'applied' : null
+}
+/** 写锁自动再核对一致、已放开：这一行定为已生效 */
+const appliedRow = (r: ResultRow): ResultRow => ({ ...r, lock: undefined, status: 'success', title: undefined, fields: undefined, detail: `${TEXT.success}（自动再核对一致）` })
+interface ShownRow extends ResultRow { badge: { label: string; variant: 'green' | 'red' | 'orange' | 'amber' | 'gray' } }
+function shown(r: ResultRow): ShownRow {
+  const live = liveOf(r)
+  if (live === 'settling') return { ...r, title: undefined, fields: undefined, detail: TEXT.verifying, badge: { label: TEXT.verifying, variant: 'gray' } }
+  if (live === 'applied') return { ...appliedRow(r), badge: STATUS.success }
+  return { ...r, badge: { label: r.notExecuted ? '失败（未执行）' : r.title ?? STATUS[r.status].label, variant: STATUS[r.status].variant } }
 }
 
 const FIELD_BADGE: Record<FieldStatus, 'green' | 'orange' | 'amber'> = { applied: 'green', unchanged: 'orange', unverifiable: 'amber', unknown: 'orange' }
@@ -136,13 +162,15 @@ const isRow = (r: unknown): r is ResultRow => {
   const x = r as Partial<ResultRow> | null
   return !!x && typeof x.name === 'string' && typeof x.code === 'string' && typeof x.at === 'string' && typeof x.status === 'string' && Object.hasOwn(STATUS, x.status)
 }
+const isLockRef = (l: unknown): l is ResultRow['lock'] => !!l && typeof (l as { key?: unknown }).key === 'string' && Number.isFinite((l as { exp?: unknown }).exp)
 function readLast(key: string | null): ResultRow[] | null {
   if (!key) return null
   try {
     const v: unknown = JSON.parse(sessionStorage.getItem(LAST_KEY + key) ?? 'null')
     // 逐字段明细不合规（旧版本存的、被改过的）就丢掉明细，只按原来的说明显示
     const okFields = (f: unknown) => Array.isArray(f) && f.every((x) => x && typeof x.label === 'string' && Object.hasOwn(FIELD_BADGE, x.status) && Array.isArray(x.messages))
-    return Array.isArray(v) ? v.filter(isRow).map((r) => (typeof r.title === 'string' && okFields(r.fields) ? r : { ...r, title: undefined, fields: undefined })) : null
+    return Array.isArray(v) ? v.filter(isRow).map((r) => (typeof r.title === 'string' && okFields(r.fields) ? r : { ...r, title: undefined, fields: undefined }))
+      .map((r) => (r.lock === undefined || isLockRef(r.lock) ? r : { ...r, lock: undefined })) : null
   } catch { return null }
 }
 function writeLast(key: string | null, rows: ResultRow[]) {
@@ -202,7 +230,15 @@ export default function Control() {
   })
   const busy = run.phase === 'confirming' || run.phase === 'running'
   // 写锁：订阅锁的变化；不在下发中时，已选项目里有被占的（同一块屏上一条还没有结论）就提示并置灰下发按钮
-  useSyncExternalStore(subscribeLock, lockVersion, lockVersion)
+  const lockV = useSyncExternalStore(subscribeLock, lockVersion, lockVersion)
+  const shownLast = last?.map(shown) ?? null
+  // 写锁自动再核对一致、放开了：把这一行定为已生效并存下（刷新后也是已生效）
+  useEffect(() => {
+    if (!last?.some((r) => liveOf(r) === 'applied')) return
+    const rows = last.map((r) => (liveOf(r) === 'applied' ? appliedRow(r) : r))
+    setLastRun({ key: lastKey, rows })
+    writeLast(lastKey, rows)
+  }, [lockV, last, lastKey])
   // 锁到期放开时发出「强制重读」：与本页项目有关就重读一次房间状态
   useEffect(() => onForceReread((ev) => {
     if (rereadHits(ev, projects)) void queryClient.invalidateQueries({ queryKey: ['unified-snap'] })
@@ -266,19 +302,34 @@ export default function Control() {
       okText: TEXT.confirmOk, danger: true,
     })
     if (!ok) { batch.cancel(); return }
+    const startedAt = Date.now()
     const done = await batch.start()
-    const rows = done.rows.map(toResult)
+    // 没核对一致的行：记下写锁（它会接着自动再核对），结果卡片据此显示「正在核对」直到退避用完或核对一致。
+    // 批次还没结束、写锁的自动核对就已一致放开的（这块屏上本批次发出的那把锁）：直接定为已生效
+    const rows = done.rows.map((br): ResultRow => {
+      const row = toResult(br)
+      const p = projects.find((x) => x.id === br.id)
+      if (!p || !SETTLE_STATUSES.has(row.status) || row.notExecuted) return row
+      const target = lockTargetOf(p)
+      const l = lockOf(target)
+      if (l) return l.mine && l.phase === 'unknown' && l.expiresAt !== undefined ? { ...row, lock: { key: l.key, exp: l.expiresAt } } : row
+      const end = lockKeysOf(target).map(endOf).find(Boolean)
+      return end && end.how === 'applied' && end.expiresAt - writeLockTtl() >= startedAt ? appliedRow(row) : row
+    })
     setLastRun({ key: lastKey, rows })
     writeLast(lastKey, rows)
     setShowNotes(false)
     // 有项目真的发出过写请求才刷新房间状态
     if (rows.some((r) => r.status !== 'not-sent' && !r.notExecuted)) void queryClient.invalidateQueries({ queryKey: ['unified-snap'] })
     batch.reset()
-    const n = (st: ResultRow['status']) => rows.filter((r) => r.status === st).length
+    // 还在自动核对的行不报结论，单独计「正在核对」
+    const settlingN = rows.filter((r) => liveOf(r) === 'settling').length
+    const n = (st: ResultRow['status']) => rows.filter((r) => r.status === st && liveOf(r) !== 'settling').length
     // 只有全部回读一致（已生效）才弹成功提示
     if (n('success') === rows.length) toast(`${TEXT.success}（${rows.length} 个项目）`)
+    else if (n('success') + settlingN === rows.length) toast([n('success') && `已生效 ${n('success')} 个`, `正在核对 ${settlingN} 个`].filter(Boolean).join('，') + '。已下发，正在自动核对')
     else toast([
-      n('success') && `已生效 ${n('success')} 个`, n('unapplied') && `未变化 ${n('unapplied')} 个`, n('unverifiable') && `无法核对 ${n('unverifiable')} 个`,
+      n('success') && `已生效 ${n('success')} 个`, settlingN && `正在核对 ${settlingN} 个`, n('unapplied') && `未变化 ${n('unapplied')} 个`, n('unverifiable') && `无法核对 ${n('unverifiable')} 个`,
       n('unknown') && `结果未知 ${n('unknown')} 个`, n('failure') && `失败 ${n('failure')} 个`, n('not-sent') && `未下发 ${n('not-sent')} 个`,
     ].filter(Boolean).join('，') + '。请稍后刷新确认，未自动重试', true)
   }
@@ -392,18 +443,18 @@ export default function Control() {
         <CardHeader pad style={{ marginBottom: 0, paddingBottom: 14 }}>
           <div><CardTitle>最近一次执行结果</CardTitle></div>
         </CardHeader>
-        {!last || last.length === 0 ? (
+        {!shownLast || shownLast.length === 0 ? (
           <div className="faint" style={{ padding: '18px 22px 22px', fontSize: 13, textAlign: 'center' }}>暂无执行记录</div>
         ) : (
           <Table>
             <TableHeader><TableRow><TableHead>项目</TableHead><TableHead>项目ID</TableHead><TableHead>状态</TableHead><TableHead>操作时间</TableHead></TableRow></TableHeader>
             <TableBody>
-              {last.map((r) => (
+              {shownLast.map((r) => (
                 <TableRow key={r.code + r.name}>
                   <TableCell style={{ fontWeight: 500 }}>{r.name}</TableCell>
                   <TableCell className="num muted">{r.code}</TableCell>
                   {/* 状态列：有逐字段结果的显示标题（单一结果是那个词，混合是计数，Fable 11/25）；逐字段明细在「下发核对」 */}
-                  <TableCell><Badge variant={STATUS[r.status].variant}>{r.notExecuted ? '失败（未执行）' : r.title ?? STATUS[r.status].label}</Badge></TableCell>
+                  <TableCell><Badge variant={r.badge.variant}>{r.badge.label}</Badge></TableCell>
                   <TableCell className="num muted">{r.at}</TableCell>
                 </TableRow>
               ))}
@@ -413,7 +464,7 @@ export default function Control() {
       </Card>
 
       {/* 卡片下方单独的「下发核对」：失败原因、未重试说明、下发前后的回读。默认收起 */}
-      {run.phase !== 'running' && last?.some((r) => r.detail) && (
+      {run.phase !== 'running' && shownLast?.some((r) => r.detail) && (
         <Card pad={false} className="unified-check" style={{ marginTop: 16 }}>
           <button type="button" className="row" aria-expanded={showNotes} aria-controls="unified-notes" onClick={() => setShowNotes(!showNotes)}
             style={{ width: '100%', justifyContent: 'space-between', padding: '14px 22px', background: 'none', border: 0, fontSize: 14, fontWeight: 600, cursor: 'pointer' }}>
@@ -422,7 +473,7 @@ export default function Control() {
           </button>
           {showNotes && (
             <ul id="unified-notes" className="unified-notes" style={{ margin: 0, padding: '0 22px 18px 40px', fontSize: 12.5, lineHeight: 1.7 }}>
-              {last.filter((r) => r.detail).map((r) => (
+              {shownLast.filter((r) => r.detail).map((r) => (
                 <li key={r.code + r.name} className="muted">
                   <b style={{ color: 'var(--text)' }}>{r.name}（{r.code}）</b>：{r.title ? <b style={{ color: 'var(--text)' }}>{r.title}</b> : r.detail}
                   {/* 逐字段明细：标题下面的紧凑列表，每个字段四种状态之一 */}

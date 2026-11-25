@@ -29,6 +29,8 @@ async function reloadWith(userId: string, target: Record<string, number>, read20
   const { STORAGE_PREFIX } = await import('../api/writeLock')
   localStorage.setItem(STORAGE_PREFIX + KEY, JSON.stringify({ v: 1, op: 'before-refresh', keys: [KEY, 'project:' + P1.id], projectId: P1.id, userId, sentAt: Date.now() - 1000, msg: 201, deviceId: ROOM.id, target }))
   vi.resetModules()
+  // 这组用例断言退避用完后的四态显示：不排自动再核对（首次核对的结论即最终显示）。正在核对期间的显示见 thermostat.test.ts「正在核对」
+  ;(await import('../api/writeLock')).__setRetryDelaysForTests([])
   const [{ setConfig }, { createQueryClient }, { signIn }, { AppProvider }, { OrgGate }, { default: Layout }, { default: Thermostat }, rq, router] = await Promise.all([
     import('../api/config'), import('../api/query'), import('../api/session'), import('../app/store'), import('../app/OrgGate'),
     import('../components/Layout'), import('./Thermostat'), import('@tanstack/react-query'), import('react-router-dom'),
