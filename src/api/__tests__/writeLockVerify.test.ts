@@ -102,9 +102,9 @@ describe('206 目标房间集合（roomIds）', () => {
 })
 
 describe('「不改」判定（isNoChange）', () => {
-  it('标量 -1 = 不改；203 的 systemMode 0（OPERATION_MODE_NONE）= 不改，其余消息 / 字段的 0 是真实目标值', () => {
+  it('一律 -1 = 不改（含 203 的 systemMode）；0 在任何消息 / 字段上都不是「不改」', () => {
     expect(isNoChange(201, 'temperature', -1)).toBe(true)
-    expect(isNoChange(203, 'systemMode', 0)).toBe(true)
+    expect(isNoChange(203, 'systemMode', 0)).toBe(false)
     expect(isNoChange(203, 'systemMode', -1)).toBe(true)
     expect(isNoChange(203, 'systemMode', 1)).toBe(false)
     expect(isNoChange(203, 'roomSwitch', 0)).toBe(false)

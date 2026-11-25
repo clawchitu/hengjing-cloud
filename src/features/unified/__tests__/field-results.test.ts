@@ -9,7 +9,7 @@ import * as L from '@/api/writeLock'
 import { createUnifiedBatch, type BatchProject, type BatchSender, type UnifiedSnapshot } from '../batch'
 import { echoMismatches, echoVerdict, fieldResults, overallOf, resultTitle, type FieldStatus } from '../rules'
 
-const Q = (o: Partial<{ systemSwitch: number; systemMode: number; roomSwitch: number; roomTemp: number }>) => ({ systemSwitch: -1, systemMode: 0, roomSwitch: -1, roomTemp: -1, ...o })
+const Q = (o: Partial<{ systemSwitch: number; systemMode: number; roomSwitch: number; roomTemp: number }>) => ({ systemSwitch: -1, systemMode: -1, roomSwitch: -1, roomTemp: -1, ...o })
 const st = (...xs: FieldStatus[]) => xs.map((status) => ({ status }))
 
 describe('总结果排序 B 与标题', () => {

@@ -1,3 +1,4 @@
+import { MODE_UNCHANGED } from '@/api/ctrl'
 // 默认下发函数走 S4 统一写入口：writeCtrl(203) → requestWrite('ctrl-203') → guard.ts。
 // fetch 用假后端替换，不连任何真实接口。
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -34,7 +35,7 @@ describe('默认下发经统一写入口', () => {
     const body = be.calls[0].body as { project_id: string; user_id: string; body: string }
     expect(be.calls[0].url).toBe('/api/ctrl/unified-ctrl-set')
     expect(body.project_id).toBe(CTX.projectId)
-    expect(decodeReply(pb.UnifiedCtrlSetQuerySchema, body.body)).toEqual({ systemSwitch: -1, systemMode: 0, roomSwitch: -1, roomTemp: 25.5 })
+    expect(decodeReply(pb.UnifiedCtrlSetQuerySchema, body.body)).toEqual({ systemSwitch: -1, systemMode: MODE_UNCHANGED, roomSwitch: -1, roomTemp: 25.5 })
   })
 
   it('写防护拦截（writeMode=off / code 不在名单 / 名单为空 / 名单里写的是 id）→ not-sent，没有任何请求', async () => {
@@ -66,7 +67,7 @@ describe('默认下发经统一写入口', () => {
     setConfig({ apiBase: '/api', apiEnv: 'test' })
     for (const projectCode of ['', undefined as unknown as string]) {
       const be = fakeBackend({ '/ctrl/unified-ctrl-set': ok })
-      await expect(defaultSender({ id: CTX.projectId, code: projectCode }, { systemSwitch: 1, systemMode: 0, roomSwitch: -1, roomTemp: -1 })).rejects.toMatchObject({ kind: 'write_blocked' })
+      await expect(defaultSender({ id: CTX.projectId, code: projectCode }, { systemSwitch: 1, systemMode: MODE_UNCHANGED, roomSwitch: -1, roomTemp: -1 })).rejects.toMatchObject({ kind: 'write_blocked' })
       expect(be.calls).toHaveLength(0)
     }
   })
@@ -74,7 +75,7 @@ describe('默认下发经统一写入口', () => {
   it('生产环境默认拦截', async () => {
     setConfig({ apiBase: '/api', apiEnv: 'prod' })
     const be = fakeBackend({ '/ctrl/unified-ctrl-set': ok })
-    await expect(defaultSender({ id: CTX.projectId, code: CTX.projectCode }, { systemSwitch: 1, systemMode: 0, roomSwitch: -1, roomTemp: -1 })).rejects.toMatchObject({ kind: 'write_blocked' })
+    await expect(defaultSender({ id: CTX.projectId, code: CTX.projectCode }, { systemSwitch: 1, systemMode: MODE_UNCHANGED, roomSwitch: -1, roomTemp: -1 })).rejects.toMatchObject({ kind: 'write_blocked' })
     expect(be.calls).toHaveLength(0)
   })
 

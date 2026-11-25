@@ -22,6 +22,7 @@ import { useQueries, useQueryClient } from '@tanstack/react-query'
 import { isMockMode, roomSwitchReported } from '../api/config'
 import { getCurrentUserId } from '../api/auth'
 import { ApiError } from '../api/errors'
+import { MODE_UNCHANGED } from '../api/ctrl'
 import { WRITE_RECHECK_TEXT } from '../api/http'
 import { jwtSub, readTokens } from '../api/tokens'
 import { UnifiedCtrlSetQuery_OperatingMode as Mode } from '../api/gen/ctrl200_pb.js'
@@ -52,7 +53,7 @@ const MODE_ICON: Partial<Record<Mode, [IconDefinition, string]>> = {
   [Mode.OPERATION_MODE_REFRIGERATION_HEATING]: [faArrowsRotate, '#8b5cf6'],
   [Mode.OPERATION_MODE_AUTO]: [faRobot, '#8b5cf6'],
 }
-const MODES: Array<{ value: Mode; label: string }> = [...MODE_OPTIONS, { value: Mode.OPERATION_MODE_NONE, label: TEXT.unchanged }]
+const MODES: Array<{ value: Mode; label: string }> = [...MODE_OPTIONS, { value: MODE_UNCHANGED, label: TEXT.unchanged }]
 
 /** 结果表的一行（演示数据与本次下发结果同一形状） */
 export interface ResultRow {
@@ -177,7 +178,7 @@ export default function Control() {
   const picked = pickedRaw.filter((id) => inGroup.some((p) => p.id === id))
   const [expand, setExpand] = useState(false)
   const [power, setPower] = useState<Tri>('不变')
-  const [mode, setMode] = useState<Mode>(Mode.OPERATION_MODE_NONE)
+  const [mode, setMode] = useState<Mode>(MODE_UNCHANGED)
   const [roomSw, setRoomSw] = useState<RoomTri>('不变')
   const [temp, setTemp] = useState(26)
   const [keep, setKeep] = useState(true)
@@ -244,7 +245,7 @@ export default function Control() {
 
   const draft: UnifiedDraft = {
     systemSwitch: power === '开启' ? 1 : power === '关闭' ? 0 : undefined,
-    systemMode: mode === Mode.OPERATION_MODE_NONE ? undefined : mode,
+    systemMode: mode === MODE_UNCHANGED ? undefined : mode,
     roomSwitch: roomSw === '全部开启' ? 1 : roomSw === '全部关闭' ? 0 : undefined,
     roomTemp: tempOff ? undefined : temp,
   }
@@ -369,7 +370,7 @@ export default function Control() {
           <div className="step-h"><span className="sn">3</span>指令预览</div>
           <div className="pv-kpi"><div><span>目标项目</span><b className="num">{picked.length}<small>个</small></b></div></div>
           <div className="pv-row"><span>系统开关</span><b className={power === '不变' ? 'w' : ''}>{power}</b></div>
-          <div className="pv-row"><span>运行模式</span><b className={mode === Mode.OPERATION_MODE_NONE ? 'w' : ''}>{modeLabel}</b></div>
+          <div className="pv-row"><span>运行模式</span><b className={mode === MODE_UNCHANGED ? 'w' : ''}>{modeLabel}</b></div>
           <div className="pv-row"><span>房间开关</span><b className={roomSw === '不变' ? 'w' : ''}>{roomSw}</b></div>
           <div className="pv-row"><span>温度设定</span><b className={'num ' + (tempOff ? 'w' : '')}>{tempOff ? '不变' : temp.toFixed(1) + '°C'}</b></div>
           <div className="pv-row"><span>执行方式</span><b className="w">立即执行</b></div>

@@ -23,7 +23,7 @@ import { TEXT } from './constants'
 import { consoleLogger, type UnifiedLogger } from './log'
 import { createUnifiedController, isDone, outcomeOf, type UnifiedController, type UnifiedState } from './machine'
 import { changedFields, describeQuery, fieldResults, type EchoField, type UnifiedContext, type UnifiedDraft, type UnifiedEcho } from './rules'
-import { acquire, beginRead, claim, commitRead, currentAccount, holds, lockOf, markOverdue, markSent, OTHER_ACCOUNT_TEXT, requireVerify, sameAccount, settle, verify, type LockToken } from '@/api/writeLock'
+import { acquire, beginRead, checkSentRecord, claim, commitRead, currentAccount, holds, lockOf, markOverdue, markSent, OTHER_ACCOUNT_TEXT, requireVerify, sameAccount, settle, verify, type LockToken } from '@/api/writeLock'
 import { LOCK_BUSY_TEXT, lockTargetOf, recordOf } from './lock'
 
 /** 页面传进来的项目（S6a 的 Project 直接可用） */
@@ -255,6 +255,10 @@ export function createUnifiedBatch(deps: BatchDeps) {
     if (!got.ok) return Promise.reject(new ApiError('write_blocked', got.busy.owner === 'other-account' ? OTHER_ACCOUNT_TEXT : LOCK_BUSY_TEXT))
     const token = got.token
     e.token = token
+    // 核对数据发送前先查（203 运行模式为 0 等）：不合规就不发，放锁
+    const record = recordOf(q)
+    const bad = checkSentRecord(record)
+    if (bad) { settle(token, 'fail'); return Promise.reject(new ApiError('write_blocked', bad)) }
     // beforeSend 链：批次复核在前，claim(token) 必须放在最后（认领成功即视为已发出）
     const beforeSend = () => {
       const ok = recheck(e, wp) && claim(token)
@@ -263,7 +267,7 @@ export function createUnifiedBatch(deps: BatchDeps) {
     }
     let out: Promise<CtrlReply<203>>
     try { out = send(p, q, { beforeSend, signal: ac.signal }) } catch (x) { settle(token, 'fail'); return Promise.reject(x) }
-    markSent(token, out, recordOf(q))
+    markSent(token, out, record)
     e.query = q
     e.open = new Set(changedFields(q))
     // 本次的核对函数：只看还没结束的字段，读到一致的作为候选；写锁确认这次核对仍有效（锁没换、没超时、没取消、账号没变）

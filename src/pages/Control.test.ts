@@ -222,7 +222,7 @@ describe('下发', () => {
     expect(w).toHaveLength(1)
     const body = w[0].body as { project_id: string; body: string }
     expect(body.project_id).toBe('p1')
-    expect(decodeReply(pb.UnifiedCtrlSetQuerySchema, body.body)).toEqual({ systemSwitch: -1, systemMode: 0, roomSwitch: 1, roomTemp: 26.5 })
+    expect(decodeReply(pb.UnifiedCtrlSetQuerySchema, body.body)).toEqual({ systemSwitch: -1, systemMode: -1, roomSwitch: 1, roomTemp: 26.5 })
     expectFourCells(badge)
     const card = screen.getByRole('region', { name: '最近一次执行结果' })
     // 卡片里只有标题和四列表格：没有任何说明、没有计数汇总
@@ -521,7 +521,7 @@ describe('下发', () => {
 
 describe('写锁（页面）', () => {
   /** 别的标签页 / 上一次留下的 203 记录（p1 没有屏号，主锁键为 project:p1），用 storage 事件同步进本标签 */
-  const lockRec = (userId: string) => ({ v: 1, op: 'x1', keys: ['project:p1'], projectId: 'p1', userId, sentAt: Date.now() - 1000, msg: 203, deviceId: null, target: { systemSwitch: -1, systemMode: 0, roomSwitch: 1, roomTemp: -1 } })
+  const lockRec = (userId: string) => ({ v: 1, op: 'x1', keys: ['project:p1'], projectId: 'p1', userId, sentAt: Date.now() - 1000, msg: 203, deviceId: null, target: { systemSwitch: -1, systemMode: -1, roomSwitch: 1, roomTemp: -1 } })
   const syncLock = (v: object | null) => act(async () => {
     window.dispatchEvent(new StorageEvent('storage', { key: STORAGE_PREFIX + 'project:p1', newValue: v ? JSON.stringify(v) : null }))
   })

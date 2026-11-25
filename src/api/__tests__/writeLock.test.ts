@@ -410,7 +410,7 @@ describe('候选结果提交（#33）与无效核对', () => {
   })
   it('回读失败时只把「改了的字段」记为结果未知：203 的 systemMode 0 = 不改', async () => {
     const t = take(); claim(t)
-    markSent(t, Promise.resolve(), { msg: 203, deviceId: null, target: { systemSwitch: -1, systemMode: 0, roomSwitch: 1, roomTemp: -1 } })
+    markSent(t, Promise.resolve(), { msg: 203, deviceId: null, target: { systemSwitch: -1, systemMode: -1, roomSwitch: 1, roomTemp: -1 } })
     requireVerify(t, async () => { throw new Error('网络错误') })
     settle(t, 'unknown')
     await flush()
@@ -800,6 +800,13 @@ describe('持久化（localStorage）', () => {
     expect(checkSentRecord({ msg: 206, deviceId: null, target: { switch: 1 }, roomIds: [] })).toMatch(/没有读到目标房间/)
     expect(checkSentRecord(REC)).toBeNull()
     expect(checkSentRecord({ msg: 201, deviceId: 1, target: { access_token: 'A1' } })).toMatch(/不合规/)
+  })
+  it('checkSentRecord：203 运行模式为 0 一律拒发（不变是 -1）；-1 和合法模式通过', () => {
+    const r203 = (systemMode: number) => ({ msg: 203, deviceId: null, target: { systemSwitch: -1, systemMode, roomSwitch: 1, roomTemp: -1 } })
+    expect(checkSentRecord(r203(0))).toMatch(/运行模式为 0.*未下发/)
+    expect(checkSentRecord(r203(-1))).toBeNull()
+    expect(checkSentRecord(r203(100))).toBeNull()
+    for (const m of [1, 7, -2]) expect(checkSentRecord(r203(m)), String(m)).toMatch(/不是可选的模式.*未下发/)
   })
   it('206 漏传目标房间集合：告警、照常落盘锁住；回包里的房间全部一致也按无法核对，不放锁', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})

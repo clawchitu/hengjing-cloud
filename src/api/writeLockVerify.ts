@@ -44,10 +44,10 @@ export const VERIFIABLE_FIELDS: Readonly<Record<number, readonly string[]>> = Ob
 /** 某消息号的某个写入字段能不能核对 */
 export const isVerifiableField = (msg: number, field: string) => (VERIFIABLE_FIELDS[msg] ?? []).includes(field)
 /**
- * 按消息类型判断写入字段是否为「不改」（唯一口径，写锁与比对函数都用它）：标量 -1；203 的 systemMode 是枚举，
- * 0（OPERATION_MODE_NONE）= 不改
+ * 按消息类型判断写入字段是否为「不改」（唯一口径，写锁与比对函数都用它）：一律 -1，含 203 的 systemMode 枚举（后端 11/25「不变一律传 -1」）。
+ * 0 不是「不改」（203 运行模式为 0 在发送前就被 checkSentRecord 和 guard 拒绝）
  */
-export const isNoChange = (msg: number, field: string, v: unknown) => v === -1 || (msg === 203 && field === 'systemMode' && v === 0)
+export const isNoChange = (_msg: number, _field: string, v: unknown) => v === -1
 
 /** 混合字段的整体优先级（数字越大越优先）：结果未知 > 未变化 > 无法核对 > 已生效（Fable 裁定 B）。只在这里改 */
 const PRIORITY: Record<FieldResult, number> = { unknown: 3, unchanged: 2, unverifiable: 1, applied: 0 }
