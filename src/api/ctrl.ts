@@ -15,7 +15,7 @@ import { base64Decode, base64Encode, BinaryReader, WireType } from '@bufbuild/pr
 import { getCurrentUserId } from './auth'
 import { getConfig } from './config'
 import { ApiError } from './errors'
-import { type WriteOp, type WriteProject } from './guard'
+import { assertNoImplicitZero, type WriteOp, type WriteProject } from './guard'
 import { request, requestWrite } from './http'
 import * as pb from './gen/ctrl200_pb.js'
 
@@ -130,7 +130,7 @@ export function decodeReply(schema: DescMessage, body: string | undefined): unkn
 
 // ---------------------------------------------------------------------------
 // 写消息：每个字段都必须显式给出（类型必填 + 运行时校验），绝不依赖 proto3 默认值 0，
-// 因为 0 在这些字段上的含义是「关闭」「湿度控制」等真实指令。不改的标量传 -1，end_modes 不改传 []。
+// 因为 0 在这些字段上的含义是「关闭」「湿度控制」等真实指令。不改的标量（含 203 的运行模式枚举）一律传 -1，end_modes 不改传 []。
 
 export const WRITE_CTRL = [201, 203, 204, 206] as const
 export type WriteCtrlType = (typeof WRITE_CTRL)[number]
@@ -166,44 +166,60 @@ export function validateWriteQuery(schema: DescMessage, q: unknown, path = ''): 
 const U = -1 // 后端约定：不变
 type Changes<T extends WriteCtrlType, Fixed extends string> = Partial<Omit<WriteQuery<T>, Fixed>>
 
-/** 201 房间温控设置：只改给出的项，其余标量 -1，末端不改传 [] */
-export function buildRoomTemperatureSet(equipmentId: number, changes: Changes<201, 'equipmentId'> = {}): WriteQuery<201> {
-  return {
-    equipmentId,
-    temperature: changes.temperature ?? U,
-    humidity: changes.humidity ?? U,
-    windSpeed: changes.windSpeed ?? U,
-    eco: changes.eco ?? U,
-    switch: changes.switch ?? U,
-    endModes: changes.endModes ?? [],
-  }
-}
+/**
+ * 203 运行模式「不变」：-1（后端 11/25 答复「所有字段不变一律传 -1」）。proto 里 system_mode 是枚举，-1 不在枚举内，
+ * 但 proto3 的枚举是开放的，在线格式就是 int32 varint，-1 编成 10 字节（10 ff ff ff ff ff ff ff ff ff 01），后端按 int32 解出 -1。
+ * 不能传 0：proto3 里 0 不上线，后端解出 0；11/25 00:20 的 203 就是这样发出 system_mode=0，现场随后反馈系统模式变成「关闭」
+ */
+export const MODE_UNCHANGED = U as pb.UnifiedCtrlSetQuery_OperatingMode
 
 /**
- * 203 统一控制：开关/温度不改为 -1；运行模式是枚举，不改为 0（OPERATION_MODE_NONE）。
- * 后端 11/25 答复「所有字段不变一律传 -1」，但 proto 里 system_mode 是枚举，明确写了 OPERATION_MODE_NONE = 0 是「不变」，-1 不在枚举里，
- * 所以这一项仍按 proto 传 0，已列入待后端确认
+ * 写消息的「全部不变」底板：所有数值标量和枚举（含嵌套消息里的）填 -1，列表填 []（end_modes 不改传空列表）；
+ * 字符串、布尔没有 -1，不在底板里，由组装函数显式给出（validateWriteQuery 会拦缺的）。
+ * 以后 proto 新增字段也会自动落在底板里（src/api/__tests__/writeEncode.test.ts 遍历字段描述钉住）
  */
-export function buildUnifiedCtrlSet(changes: Changes<203, never> = {}): WriteQuery<203> {
-  return {
-    systemSwitch: changes.systemSwitch ?? U,
-    systemMode: changes.systemMode ?? pb.UnifiedCtrlSetQuery_OperatingMode.OPERATION_MODE_NONE,
-    roomSwitch: changes.roomSwitch ?? U,
-    roomTemp: changes.roomTemp ?? U,
+export function unchangedOf(schema: DescMessage): Record<string, unknown> {
+  const out: Record<string, unknown> = {}
+  for (const f of schema.fields) {
+    if (f.fieldKind === 'list' || f.fieldKind === 'map') out[f.localName] = f.fieldKind === 'map' ? {} : []
+    else if (f.fieldKind === 'message') out[f.localName] = unchangedOf(f.message)
+    else if (f.fieldKind === 'enum') out[f.localName] = U
+    else if (f.scalar !== ScalarType.STRING && f.scalar !== ScalarType.BOOL && f.scalar !== ScalarType.BYTES) out[f.localName] = U
   }
+  return out
+}
+
+/** 组装函数记下的「明确给出的字段」（目标 id 与用户改动）：编码前的最后防线据此判断 0 是否来自明确选择 */
+const explicitFields = new WeakMap<object, ReadonlySet<string>>()
+/** 某个写消息明确给出的字段；不是 build* 组装的（没有登记）返回空集合，此时任何数值 0 都会被拒发 */
+export const explicitFieldsOf = (q: object): ReadonlySet<string> => explicitFields.get(q) ?? new Set()
+
+/** 先铺「全部不变」底板，再用明确给出的字段覆盖（undefined、null 视为不变），并登记这些字段 */
+function assemble<T extends WriteCtrlType>(type: T, given: Record<string, unknown>): WriteQuery<T> {
+  const out = unchangedOf(CTRL[type].query)
+  const explicit = new Set<string>()
+  for (const [k, v] of Object.entries(given)) {
+    if (v === undefined || v === null) continue
+    out[k] = v
+    explicit.add(k)
+  }
+  explicitFields.set(out, explicit)
+  return out as WriteQuery<T>
+}
+
+/** 201 房间温控设置：只改给出的项，其余标量 -1，末端不改传 []（改了就完整回传，末端 switch 回传读到的值） */
+export function buildRoomTemperatureSet(equipmentId: number, changes: Changes<201, 'equipmentId'> = {}): WriteQuery<201> {
+  return assemble(201, { ...changes, equipmentId })
+}
+
+/** 203 统一控制：没改的开关、运行模式、温度一律 -1（运行模式见 MODE_UNCHANGED） */
+export function buildUnifiedCtrlSet(changes: Changes<203, never> = {}): WriteQuery<203> {
+  return assemble(203, { ...changes })
 }
 
 /** 204 运行控制设置：id、name 必给，其余不改为 -1 */
 export function buildRunningCtrlSet(id: number, name: string, changes: Changes<204, 'id' | 'name'> = {}): WriteQuery<204> {
-  return {
-    id,
-    name,
-    controlType: changes.controlType ?? U,
-    dewPoint: changes.dewPoint ?? U,
-    humiditySet: changes.humiditySet ?? U,
-    windSpeed: changes.windSpeed ?? U,
-    switch: changes.switch ?? U,
-  }
+  return assemble(204, { ...changes, id, name })
 }
 
 /**
@@ -212,7 +228,18 @@ export function buildRunningCtrlSet(id: number, name: string, changes: Changes<2
  */
 export function buildProjectRoomSwitchSet(on: boolean): WriteQuery<206> {
   if (typeof on !== 'boolean') throw new ApiError('bad_request', `206 全部房间开关须明确传 true 或 false，收到：${on === null ? 'null' : typeof on}`)
-  return { switch: on ? 1 : 0 }
+  return assemble(206, { switch: on ? 1 : 0 })
+}
+
+/**
+ * 写消息编码 + 最后防线：编码后再解码（proto3 里没上线的字段解出来就是 0，和后端看到的一样），
+ * 交给 guard.ts 的 assertNoImplicitZero 检查：除了明确给出的字段，任何数值为 0 一律拒发；203 运行模式为 0 一律拒发
+ */
+export function encodeWrite(op: WriteOp, schema: DescMessage, query: object): string {
+  const body = encodeMessage(schema, query)
+  const decoded = toPlain(fromBinary(schema, body ? base64Decode(body) : new Uint8Array())) as Record<string, unknown>
+  assertNoImplicitZero(op, decoded, explicitFieldsOf(query))
+  return body
 }
 
 // ---------------------------------------------------------------------------
@@ -240,8 +267,9 @@ export async function writeCtrl<T extends WriteCtrlType>(type: T, project: Write
   if (!isWriteCtrl(type)) throw new ApiError('bad_request', `不是写消息：${type}`)
   const def: CtrlDef = CTRL[type]
   validateWriteQuery(def.query, query)
+  const body = encodeWrite(def.write!, def.query, query)
   const res = await requestWrite<{ body?: string }>(def.write!, [project],
-    { user_id: opts.userId ?? getCurrentUserId(), body: encodeMessage(def.query, query) },
+    { user_id: opts.userId ?? getCurrentUserId(), body },
     { timeoutMs: getConfig().ctrlTimeoutMs, signal: opts.signal, beforeSend: opts.beforeSend })
   return decodeReply(def.reply, res.body) as CtrlReply<T>
 }
@@ -249,8 +277,9 @@ export async function writeCtrl<T extends WriteCtrlType>(type: T, project: Write
 /** 批量统一控制：POST /ctrl/unified-ctrls-send（操作人由后端取登录用户，不传 user_id） */
 export async function sendUnifiedCtrls(projects: readonly WriteProject[], query: WriteQuery<203>) {
   validateWriteQuery(pb.UnifiedCtrlSetQuerySchema, query)
+  const body = encodeWrite('unified-ctrls-send', pb.UnifiedCtrlSetQuerySchema, query)
   return requestWrite<{ batch_id?: string; total?: number }>('unified-ctrls-send', projects,
-    { body: encodeMessage(pb.UnifiedCtrlSetQuerySchema, query) },
+    { body },
     { timeoutMs: getConfig().ctrlTimeoutMs })
 }
 

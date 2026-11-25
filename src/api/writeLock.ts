@@ -335,6 +335,8 @@ export function checkSentRecord(r: SentRecord): string | null {
     const bad = check204Target(r.target)
     if (bad) return bad
   }
+  // 203 运行模式：不变是 -1；0 不是界面可选的模式，含义后端未确认（11/25 00:20 的 203 传了 0，现场反馈系统模式变成「关闭」）→ 一律拒发
+  if (r.msg === 203 && r.target.systemMode === 0) return '运行模式为 0（不变应传 -1），未下发'
   if (r.msg === 206) {
     if (!Array.isArray(r.roomIds) || !r.roomIds.length) return '没有读到目标房间，无法核对下发结果，未下发'
     if (r.roomIds.length > ROOM_IDS_MAX) return `目标房间超过 ${ROOM_IDS_MAX} 个，无法记录核对数据，未下发`
