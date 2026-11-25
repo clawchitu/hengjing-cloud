@@ -2071,6 +2071,15 @@ describe('末端选择下发（201 end_modes）', () => {
     expect(card('客厅').textContent).toContain('风盘、顶辐射 → 风盘、顶辐射、地冷')
   })
 
+  it('is_change = false 且未选中：同样显示小锁图标，提示「不允许修改」', async () => {
+    rooms = [{ ...ROOM, endModes: [{ optionName: '全空气', type: 4, isSelected: false, isChange: false, switch: 0 }, ...ENDS] }, OFF_ROOM]
+    backend()
+    const c = await openRooms()
+    const air = endTag(c, '全空气')
+    expect(air.querySelector('.end-lock svg[data-icon=lock]')).not.toBeNull()
+    expect(air.getAttribute('title')).toContain('不允许修改')
+  })
+
   it('is_change = false（全空气）：已选中的标「不可取消」，点击无效并提示，不进草稿', async () => {
     rooms = [{ ...ROOM, endModes: [{ optionName: '全空气', type: 4, isSelected: true, isChange: false, switch: 1 }, ...ENDS] }, OFF_ROOM]
     const be = backend({ '/ctrl/room-temperature-set': ok201Ends })

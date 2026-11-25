@@ -79,7 +79,7 @@ function EndTag({ m, selected, dirty, locked, disabled, dim, roomName, onToggle 
       <span>{m.name}</span>
       <span aria-hidden="true">·</span>
       <span className="end-sw" title={END_SWITCH_TIP} data-end-switch="">{m.on ? '开' : '关'}</span>
-      {locked && selected && <span className="end-lock" title="不可取消"><Icon icon={faLock} /><span className="sr-only">不可取消</span></span>}
+      {locked && <span className="end-lock" title={selected ? '不可取消' : '不允许修改'}><Icon icon={faLock} /><span className="sr-only">{selected ? '不可取消' : '不允许修改'}</span></span>}
     </button>
   )
 }
