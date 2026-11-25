@@ -198,6 +198,24 @@
 - 210 读到 -1 表示这一项不能设置（第 5 条）：界面上禁用这一项，其余项照常，不整次拦截；`control_type = -1` 时控制类型、露点设定、湿度设定禁用，风速、开关照常。规则在 `src/api/writeLockVerify.ts` 的 `settable204` / `blocked204`
 - 202 滤网：`filter_life` 是剩余天数，`filter_life_p` 是剩余比例（1 = 100%），显示乘 100；告警按比例：低于 15% 红、低于 50% 橙（`src/features/freshAir/filter.ts`）；proto 里 `filter_life_p` 是 int32，待后端确认，确认前告警开关 `freshAirFilterWarn` 保持关
 
+### 4.1 数据读取（S10a，只读）
+
+**【用户】**
+- 新风页的设备列表每 15 秒刷新一次；运行设置（只有独立空气系统，即程序编码 12 的项目才有）每 30 秒刷新一次。
+- 项目离线、控制屏未连接时不显示之前读到的数据，避免把旧读数当成当前值。某台设备未连接时，不读也不显示它的运行设置。
+- 控制屏回复「该软件类型不支持此控制」时，显示「该项目不支持新风控制」，这不是故障，也不会反复重试。
+- 运行设置里显示 `--` 的项不能设置：读到 -1 表示这一项不能设置，读到 -100 或 65536 表示没有有效读数。
+
+**【内部】**
+- 代码在 `src/features/freshAir/`：`model.ts`（202 → `UnitView`、210 → `SettingsView`）、`source.ts`（real / mock）、`hooks.ts`（`useUnits`、`useSettings`、`useFreshRead`）。这一段没有写函数，不发 204。
+- 设备 id 只从 202 取；202 里 id 不是正整数、或同一 id 出现多次的设备，`deviceId` 为 `null`，不读 210。
+- 210 每一项标注三类：`settable`（可设置，0 是有效读数）、`unsettable`（读到 -1；`control_type = -1` 时露点、湿度连带不可设置，和 `settable204` 一致）、`invalid`（-100、65536、非有限数、枚举外的值）。
+- `control_type` 为 -1（或无效）时，`SettingsView.writeBlock` 非空，整个写入口禁用（S10a 任务要求）。**注意**：这比上面「风速、开关照常」和 `docs/plan-s10-s7.md` 2.3 更严；`blocked204` 发送前兜底仍按 2.3。两者取哪一个，待负责人确认，确认前界面按更严的 `writeBlock`。
+- 210 回包 id 与请求的设备 id 不符（含空回包）算读取失败，不当成读数。
+- 「不支持」的识别：回包只有 #2 文案且含「不支持此控制」（11/25 实测 240829001，app_code 1）。其他 ctrl 文案照常算错误。
+- 不发请求：没有项目、项目离线、没有 `/v1/ctrl/fresh-dehumidifier-get` 或 `/v1/ctrl/running-ctrl-get` 权限（返回 `forbidden`）；210 另外要求 app_code 12、设备 id 有效、202 里该设备已连接。
+- 最近一次读取是 503 时返回 `unavailable`，之前的读数作废。读取带递增序号，旧读数不覆盖新读数；`useFreshRead` 绑定会话代次。
+
 ## 5. S7 天气
 
 待补。
