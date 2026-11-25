@@ -16,7 +16,7 @@
 // 收到未认证直接结束这次下发（WRITE_AUTH_TEXT），绝不重放；真正调用 fetch 前同步执行一次 beforeSend 复核。
 import { getConfig } from './config'
 import { ApiError, errorFromResponse, errorFromThrown } from './errors'
-import { assertWriteAllowed, assertWriteBody, isNonCanonicalPath, isWritePath, WRITE_ROUTES, type WriteOp, type WriteProject } from './guard'
+import { assertWriteAllowed, assertWriteBody, isNonCanonicalPath, takeWriteBodySeal, isWritePath, WRITE_ROUTES, type WriteOp, type WriteProject } from './guard'
 import { clearTokens, jwtSub, readTokens, tokensFromResponse, writeTokens, type Tokens } from './tokens'
 
 export interface RequestOptions {
@@ -246,8 +246,13 @@ export interface WriteOptions extends Omit<RequestOptions, 'body' | 'method' | '
 }
 
 export async function requestWrite<T>(op: WriteOp, projects: readonly WriteProject[], body: Record<string, unknown>, opts: WriteOptions = {}): Promise<T> {
+  // 最先取走 encodeWrite 的登记：后面任何一步被拦下，登记也已经没了，不会留给之后的手写 body 借用
+  let rawBody: unknown
+  try { rawBody = body && typeof body === 'object' ? Object.getOwnPropertyDescriptor(body, 'body')?.value : undefined } catch { rawBody = undefined }
+  const sealed = takeWriteBodySeal(op, rawBody)
   const allowed = assertWriteAllowed(op, projects)
   const copy = plainWriteBody(body)
+  if (copy.body !== rawBody) throw new ApiError('write_blocked', '写请求体前后读到的 body 不一致，未下发')
   let target: Record<string, unknown>
   if (op === 'unified-ctrls-send') target = { project_ids: allowed.map((p) => p.id) }
   else if (allowed.length === 1) target = { project_id: allowed[0].id }
@@ -258,7 +263,7 @@ export async function requestWrite<T>(op: WriteOp, projects: readonly WriteProje
   if (extra.length) throw new ApiError('write_blocked', `写请求体不能带字段：${extra.join('、')}`)
   if (copy.user_id !== undefined && typeof copy.user_id !== 'string') throw new ApiError('write_blocked', '写请求体 user_id 不是字符串')
   // 发送边界：body 必须是 encodeWrite 校验登记过的，且枚举取值合法；直接调 requestWrite 也绕不过（201/203/204/206 与批量都经这里）
-  assertWriteBody(op, copy.body)
+  assertWriteBody(op, copy.body, sealed)
   const payload = { ...copy, ...target }
   try {
     return await writeOnce<T>(WRITE_ROUTES[op], { ...opts, method: 'POST', body: payload })
