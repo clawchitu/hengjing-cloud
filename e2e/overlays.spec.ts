@@ -131,7 +131,7 @@ test.describe('确认弹窗', () => {
     await tick(page)
     const dlg = dialog(page, '全部关闭')
     await expect(dlg).toBeVisible()
-    await expect(dlg).toContainText('将向 朝阳壹号院 A栋（PRJ-10241）的 6 个温控面板下发「关闭」指令，确定继续？')
+    await expect(dlg).toContainText('将向 朝阳壹号院 A栋的 6 个温控面板下发「关闭」指令，确定继续？')
     await expect(dlg.getByRole('button', { name: '取消' })).toBeVisible()
     await expect(dlg.getByRole('button', { name: '确认下发' })).toBeVisible()
   })
