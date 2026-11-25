@@ -23,7 +23,7 @@
 | `npm run e2e:live -- --project platform` | 只跑平台账号（setup 只登录平台账号，不碰经销商账号）；`--project dealer` 同理 |
 | `npx vitest run e2e-live` | 闸门放行规则的单元测试（也在 `npm test` 里） |
 
-不允许的参数（配置加载时直接报错，不会登录）：`--ui`、`--debug`、`--trace`、`PWDEBUG`、`--retries` 非 0、`--repeat-each` 非 1。
+不允许的参数（配置加载时直接报错，不会登录）：`--ui`、`--ui-port`、`--ui-host`、`--debug`、`--trace`、`PWDEBUG`、`--retries` 非 0、`--repeat-each` 非 1。
 
 账号：先读环境变量 `H1_PLATFORM_ACCOUNT` / `H1_PLATFORM_PASSWORD` / `H1_DEALER_ACCOUNT` / `H1_DEALER_PASSWORD`；本机没设时从 macOS 钥匙串读（服务名 `hengjing-test-platform`、`hengjing-test-dealer`，帐户字段是手机号，密码是条目密码）。CI 里必须用环境变量。
 
@@ -57,6 +57,8 @@ GitHub Actions：`.github/workflows/e2e-live.yml`，只能在 Actions 页面手�
 | `org.spec.ts` | F6、F7 | 侧栏菜单的条目数、每个项目的在线 / 离线显示与 `/ctrl/projects`、`/integrated-projects` 一致；切换后侧栏更新；搜索按编号找到可见项目并切换，可见范围外的项目搜不到 |
 | `home.spec.ts` | F1、F5（统计卡） | 四张统计卡与 `/integrated-projects/stat` 一致（无权限时与前端按可见范围的计算一致）；常用项目与 `/projects/frequent` 一致（未开通、空、失败各有对应状态） |
 | `devices.spec.ts` | F8、F10（只看） | 传感器卡片与 207 一致、统计三档切换不报错；温控房间与 200 一致，点开关（或开关未上报时的「开」）进确认框、核对文案后取消，网络记录里没有任何写请求；连接状态计数与 205 一致；新风（最小只读）打开不白屏、不出现 65536，不点任何开关、设置或下发；各页不出现 65536；离线项目四个设备页都是离线空态、不发起 ctrl 请求 |
+
+新风用例只证明「打开不白屏、页面上没有 65536」：`src/pages/FreshAir.tsx` 目前仍走旧的演示数据层（`src/api/index.ts` 的 `getFreshAir`），还没接 S10a 的新风数据源（`src/features/freshAir`），所以它不核对 202 / 210 回包，通过也不代表新风读数正确。接上 S10a 后再补读数核对。
 
 不覆盖：新风的读数核对和任何设置、天气、统一控制、退出登录、续期（F4）。测试服上没有在线项目或离线项目时，相应用例标为跳过（环境不可用，不算失败）。
 

@@ -12,9 +12,12 @@ describe('H1 命令行护栏', () => {
     expect(checkCli(['test', '--project', 'dealer', 'platform', '-g', 'x']).roles).toEqual(['platform', 'dealer'])
     expect(checkCli(['test', '--project', 'setup']).roles).toEqual([])
   })
-  it('拒绝 --ui / --debug / --trace / PWDEBUG', () => {
+  it('拒绝 --ui / --ui-port / --ui-host / --debug / --trace / PWDEBUG', () => {
     expect(checkCli(['test', '--ui']).errors).toHaveLength(1)
     expect(checkCli(['test', '--debug']).errors).toHaveLength(1)
+    expect(checkCli(['test', '--ui-port', '8080']).errors).toHaveLength(1)
+    expect(checkCli(['test', '--ui-port=0']).errors).toHaveLength(1)
+    expect(checkCli(['test', '--ui-host', '0.0.0.0']).errors).toHaveLength(1)
     expect(checkCli(['test', '--trace', 'on']).errors).toHaveLength(1)
     expect(checkCli(['test', '--trace=retain-on-failure']).errors).toHaveLength(1)
     expect(checkCli(['test'], { PWDEBUG: '1' }).errors).toHaveLength(1)
