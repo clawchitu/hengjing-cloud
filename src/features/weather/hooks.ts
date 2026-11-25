@@ -5,7 +5,7 @@
 // - 失败（接口报错、没有数据）不抛到组件，返回 status='error' 和「暂无天气数据」，页面据此降级，不白屏；
 // - 没有该接口权限时不发请求，status='forbidden'。
 import { useQuery } from '@tanstack/react-query'
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useMemo, useSyncExternalStore } from 'react'
 import { can, useSession } from '@/data/session'
 import { readCity, writeCity } from './cityStore'
 import { weatherQueryOf, type City } from './cities'
@@ -30,15 +30,20 @@ export interface WeatherLoad<T> {
   refetch: () => void
 }
 
+// 选择变化时通知所有用到 useWeatherCity 的组件（城市选择器和天气卡可以各自调用，拿到同一个城市）
+let version = 0
+const subs = new Set<() => void>()
+const subscribe = (fn: () => void) => { subs.add(fn); return () => { subs.delete(fn) } }
+const getVersion = () => version
+
 /** 当前账号的天气城市；setCity 记住选择（编码不在城市文件里或未登录时不生效，返回 false） */
 export function useWeatherCity(): { city: City; setCity: (code: string) => boolean } {
   const { userKey } = useSession()
-  const [tick, setTick] = useState(0)
-  // tick 在 setCity 写入后加一，用来重读存储
-  const city = useMemo(() => { void tick; return readCity(userKey) }, [userKey, tick])
+  const v = useSyncExternalStore(subscribe, getVersion, getVersion)
+  const city = useMemo(() => { void v; return readCity(userKey) }, [userKey, v])
   const setCity = useCallback((code: string) => {
     const ok = writeCity(userKey, code)
-    if (ok) setTick((t) => t + 1)
+    if (ok) { version++; for (const fn of subs) fn() }
     return ok
   }, [userKey])
   return { city, setCity }

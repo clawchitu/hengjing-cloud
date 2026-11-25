@@ -55,6 +55,15 @@ describe('城市：默认和按账号记住', () => {
     expect(b.result.current.city).toEqual({ code: '110000', name: '北京市' })
   })
 
+  it('同一账号下多个组件共用一个城市：一处选了，另一处跟着变', async () => {
+    backend(); await signIn('13800000000', 'pw', true)
+    const { wrapper: w } = wrapper()
+    const picker = renderHook(() => useWeatherCity(), { wrapper: w })
+    const card = renderHook(() => useWeatherCity(), { wrapper: w })
+    act(() => { picker.result.current.setCity('532900') })
+    expect(card.result.current.city.code).toBe('532900')
+  })
+
   it('不在城市文件里的码不生效', async () => {
     backend(); await signIn('13800000000', 'pw', true)
     const { result } = renderHook(() => useWeatherCity(), { wrapper: wrapper().wrapper })
@@ -179,6 +188,8 @@ describe('演示数据模式', () => {
     await waitFor(() => expect(result.current.hours.status).toBe('success'))
     expect(result.current.now.data?.days).toHaveLength(7)
     expect(result.current.hours.data?.hours).toHaveLength(24)
+    expect(result.current.now.data?.city).toBe('无锡市')
+    expect(result.current.hours.data?.area).toBe('无锡市')
     expect(be.fetchMock).not.toHaveBeenCalled()
   })
 })
