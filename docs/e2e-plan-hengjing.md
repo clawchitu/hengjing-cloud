@@ -92,6 +92,7 @@
 - 下发前后自动在项目群里发一条消息。
 - 紧急停止：hvac-demo 的 `/config.js` 由 Worker 生成，加一个 Worker 变量可把 `writeMode` 改成 `off`，无需重新构建（写进 `docs/部署说明.md`）。
 - 账号：现在钥匙串里有两套名字（`hengjing-admin` / `hengjing-dealer` 和 `hengjing-test-platform` / `hengjing-test-dealer`），先统一。后端每个用户只有一个有效 refresh_token，自动化测试会挤掉同账号的人工会话，所以**向后端要一个自动化专用的平台账号和经销商账号**；要到之前，自动化只在没人走查时跑，并且串行。
+- **H1 的运行方式（负责人 11/25 同意仓库公开后定）**：仓库公开；`.github/workflows/e2e-live.yml` 只能手动触发，跑在 GitHub 托管 runner 上；账号放在 environment `h1-live` 的 secrets 里（必需审批人 clawchitu、只允许 `main` 部署）；不进必需 CI。artifact 只传去敏的 JSON 报告、保留 1 天（公开仓库任何人可下载）。本机运行先读环境变量 `H1_PLATFORM_ACCOUNT` / `H1_PLATFORM_PASSWORD`、`H1_DEALER_ACCOUNT` / `H1_DEALER_PASSWORD`，没设再读钥匙串 `hengjing-test-platform` / `hengjing-test-dealer`。账号暂时共用现有账号（REVIEW.md 12.6 第 1 条）。H3 的自建 runner 与定时运行仍按下表。
 - 和 plan-v1 §3.6「CI 里的测试一律用拦截的假响应，不连任何真实后端」的关系：第 4、5 层不进必需 CI，在本机或 Mac mini 上跑，不违反这条；但第 5 层是新的真实写入入口，开工前请负责人确认一次。
 
 ## 6. 分阶段落地计划（每阶段一个 PR）

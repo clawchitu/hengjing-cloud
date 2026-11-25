@@ -1,0 +1,69 @@
+name: H1 测试服只读 e2e
+
+# 只能手动触发（不由推送、PR 或定时触发）。运行说明和前置条件见 docs/H1-测试服只读e2e.md：
+# 跑之前先在项目群里说一声；每次运行会让两个账号在别处的登录失效（每个账号登录一次、全程不续期）。
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: '被测站点：demo = 测试站 hvac-demo；local = runner 上起本机开发服务器，经开发代理连测试服'
+        type: choice
+        options: [demo, local]
+        default: demo
+      notified:
+        description: '已在项目群里通知，且确认此刻没有人在用这两个账号（填 yes）'
+        type: string
+        required: true
+
+# 同一时间只跑一个（两个账号每次运行都会重新登录，并行会互相挤掉）
+concurrency:
+  group: e2e-live
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  live:
+    name: 测试服只读 e2e（${{ inputs.target }}）
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    # 账号放在这个 environment 的 secrets 里。environment 已设必需审批人（clawchitu）、只允许 main 部署：
+    # 手动触发可选任意分支，工作流文件取自那个分支，没有这两条就等于任何有写权限的人都能拿到账号
+    environment: h1-live
+    container:
+      image: mcr.microsoft.com/playwright:v1.65.1-noble
+      options: --ipc=host
+    env:
+      CI: '1'
+      HOME: /root
+      H1_TARGET: ${{ inputs.target }}
+    steps:
+      - name: 确认已在群里通知
+        if: inputs.notified != 'yes'
+        run: |
+          echo "没有确认已在群里通知（notified 须填 yes），不运行。"
+          exit 1
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - run: npm ci --no-audit --no-fund
+      - name: 闸门规则单元测试
+        run: npx vitest run e2e-live
+      - name: 测试服只读 e2e
+        env:
+          H1_PLATFORM_ACCOUNT: ${{ secrets.H1_PLATFORM_ACCOUNT }}
+          H1_PLATFORM_PASSWORD: ${{ secrets.H1_PLATFORM_PASSWORD }}
+          H1_DEALER_ACCOUNT: ${{ secrets.H1_DEALER_ACCOUNT }}
+          H1_DEALER_PASSWORD: ${{ secrets.H1_DEALER_PASSWORD }}
+        run: npm run e2e:live
+      # 仓库公开：artifact 任何人可下载，所以只上传 JSON 报告（不含步骤参数、不含令牌；附件 network.txt 只有方法和路径），保留 1 天。
+      # 登录态文件和失败现场（test-results-live/）由 globalTeardown 删除
+      - name: 上传运行记录
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: h1-live-report
+          path: playwright-report-live/results.json
+          if-no-files-found: ignore
+          retention-days: 1
