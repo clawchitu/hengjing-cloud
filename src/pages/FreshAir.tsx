@@ -397,7 +397,7 @@ function SettingsPanel(props: PanelProps) {
     onPending(true)
     const out = await runFreshAirSet({
       project: p, deviceId: s.deviceId, subject: unitLabel, okText: `${unitLabel} 已生效：${describeResult(cs)}`,
-      confirmed: { query: built.query, view: s, draft },
+      confirmed: { query: built.query, view: s, raw: ready.raw, draft },
       read: (signal, opts) => readPair(s.deviceId, signal, opts),
       currentProject: () => latest.current.project,
       writable: () => latest.current.writable,

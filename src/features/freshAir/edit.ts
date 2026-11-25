@@ -180,6 +180,19 @@ export function sameSettings(a: SettingsView, b: SettingsView): boolean {
   return FIELDS_204.every((f) => a.fields[f].state === b.fields[f].state && sameVal(f, a.fields[f].value, b.fields[f].value))
 }
 
+/** 210 的全部字段（含 name、can_change 与没改的项）；缺省按 proto3 默认值 */
+const RAW_FIELDS = ['id', 'name', 'controlType', 'dewPoint', 'humiditySet', 'windSpeed', 'switch', 'canChange'] as const
+const RAW_DEFAULT: Record<(typeof RAW_FIELDS)[number], unknown> = { id: 0, name: '', controlType: 0, dewPoint: 0, humiditySet: 0, windSpeed: 0, switch: 0, canChange: false }
+/**
+ * 两份 210 原始解码读数逐字段严格相同（预检用：确认时的读数 vs 确认后新读的读数）。
+ * 不经视图折叠（control_type = -1 时露点 / 湿度在视图里是 null）、数值不取整，-1 / 65536 / -100 等按原值比；
+ * 任何一项不同（含没改的项、name、can_change）都算变化。sameSettings 只给界面用
+ */
+export function sameRaw210(a: Raw210 | null | undefined, b: Raw210 | null | undefined): boolean {
+  if (!a || !b) return false
+  return RAW_FIELDS.every((k) => Object.is(a[k] ?? RAW_DEFAULT[k], b[k] ?? RAW_DEFAULT[k]))
+}
+
 // ---------------------------------------------------------------------------
 // 文案
 

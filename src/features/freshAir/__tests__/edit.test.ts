@@ -4,7 +4,7 @@ import { decodeReply, encodeMessage, explicitFieldsOf } from '@/api/ctrl'
 import * as pb from '@/api/gen/ctrl200_pb.js'
 import { BLOCK_204_CONTROL_TYPE, BLOCK_204_NO_READING, BLOCK_204_NOT_SETTABLE } from '@/api/writeLockVerify'
 import {
-  build204, describeChanges, draftChanges, editBlock, editDraft, newDraft, panelBlock, reconcileDraft, sameSettings, stepSetpoint,
+  build204, describeChanges, draftChanges, editBlock, editDraft, newDraft, panelBlock, reconcileDraft, sameRaw210, sameSettings, stepSetpoint,
   TEXT_CONFLICT, TEXT_CT_LOCKED, TEXT_DEVICE_OFF, TEXT_DEW_INACTIVE, TEXT_DISCONNECTED, TEXT_HUM_INACTIVE, TEXT_NO_CHANGES, TEXT_OFFLINE, TEXT_STALE, TEXT_WRITE_OFF,
   type FaCtx,
 } from '../edit'
@@ -149,6 +149,15 @@ describe('build204（唯一的组装点）', () => {
     const d = { ...newDraft(s), values: { humiditySet: 80 } }
     expect(build204(s, raw(), d, CTX)).toMatchObject({ ok: false })
     expect(build204(s, raw(), { ...d, values: { humiditySet: 55.5 } }, CTX)).toMatchObject({ ok: false })
+  })
+
+  it('sameRaw210：全部原始字段严格比较（不折叠、不取整，无效值按原值，缺省按 proto3 默认值）', () => {
+    expect(sameRaw210(raw(), raw())).toBe(true)
+    expect(sameRaw210({ id: ID }, { id: ID, name: '', controlType: 0, dewPoint: 0, canChange: false })).toBe(true)
+    for (const o of [{ dewPoint: 14 }, { dewPoint: 13.004 }, { name: 'X' }, { canChange: false }, { switch: 0 }, { id: 7 }]) expect(sameRaw210(raw(), raw(o))).toBe(false)
+    expect(sameRaw210(raw({ controlType: -1, dewPoint: 13 }), raw({ controlType: -1, dewPoint: 14 }))).toBe(false)
+    expect(sameRaw210(raw({ humiditySet: 65536 }), raw({ humiditySet: -100 }))).toBe(false)
+    expect(sameRaw210(raw(), null)).toBe(false)
   })
 
   it('sameSettings 比对整份读数；describeChanges 文案', () => {

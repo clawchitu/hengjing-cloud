@@ -3,7 +3,8 @@
 //   确认      页面（FreshAir.tsx 的设置面板，真正发起下发的组件）里 useConfirm()；确认后同步复核项目、锁、草稿
 //   加锁      runOp 里 acquire(project)：用户点了确认之后才加；target `fa:<设备 id>` 只是结果条的标签，锁仍按控制屏
 //   预检      新读 202 + 210（useFreshPair）：202 原始回包里目标设备 id 恰好一次、设备在线；210 的 id 相符；用这份新读的 210 调
-//             build204 重新组装，与确认时的 Query 相同，且整份 210 读数（含没改的项、can_change、名称）与确认时相同，否则不发
+//             build204 重新组装，与确认时的 Query 相同，且 210 原始解码读数（全部字段，含没改的项、can_change、名称；
+//             不经视图折叠、不取整）与确认时逐字段严格相同（sameRaw210），否则不发
 //   发送前    record204 → checkSentRecord（runOp 里，不过就放锁并提示原因）
 //   beforeSend sameSession() && sameProject() && present() && claim(token)，claim 在链末（runOp）
 //   登记      拿到 Promise 立刻 markSent（runOp）
@@ -20,18 +21,21 @@ import type { FieldResult } from '@/api/writeLock'
 import { describeFields } from '@/api/writeLockVerify'
 import { can } from '@/data/session'
 import { runOp, type RunResult, type WriteResult } from '@/features/thermostat/writes'
-import { build204, sameQuery, sameSettings, TEXT_WRITE_FORBIDDEN, TEXT_WRITE_OFF, type FaDraft } from './edit'
+import { build204, sameQuery, sameRaw210, TEXT_WRITE_FORBIDDEN, TEXT_WRITE_OFF, type FaDraft } from './edit'
 import { FRESH_ROUTES, type FreshPair } from './hooks'
 import { match204, reading210, record204, unitCount, type Verify204Read } from './lockVerify'
-import type { SettingsView } from './model'
+import type { Raw210, SettingsView } from './model'
 import { freshAirSource } from './source'
 
 /** 结果条的标签（runOp 的 target）：不参与加锁 */
 export const faTarget = (deviceId: number) => `fa:${deviceId}`
 export const NOUN = '新风设置'
 
-/** 确认时的内容：组装好的 Query、组装所用的 210 读数、草稿 */
-export interface Confirmed { query: WriteQuery<204>; view: SettingsView; draft: FaDraft }
+/**
+ * 确认时的内容：组装好的 Query、组装所用的 210 读数（视图 + 原始解码读数，两者来自同一次读取）、草稿。
+ * 预检按 raw 逐字段严格比对（sameRaw210），不用折叠后的视图
+ */
+export interface Confirmed { query: WriteQuery<204>; view: SettingsView; raw: Raw210; draft: FaDraft }
 
 export type ReadPair = (signal: AbortSignal, opts?: { defer?: boolean }) => Promise<FreshPair>
 
@@ -93,7 +97,8 @@ export function runFreshAirSet(o: FreshAirOp): Promise<RunResult> {
       if (w) return { ok: false, reason: w }
       const again = build204(s.view, s.raw, o.confirmed.draft, { online: true, fresh: true, connected: true, writable: null })
       if (!again.ok) return { ok: false, reason: again.reason }
-      if (!sameQuery(again.query, o.confirmed.query) || !sameSettings(s.view, o.confirmed.view)) return { ok: false, reason: '确认后重新读取到的新风设置与确认时不一致' }
+      // 整份 210 原始读数（含没改的项、name、can_change，-1 / 65536 / -100 按原值，数值不取整）必须与确认时完全相同
+      if (!sameQuery(again.query, o.confirmed.query) || !sameRaw210(s.raw, o.confirmed.raw)) return { ok: false, reason: '确认后重新读取到的新风设置与确认时不一致' }
       return { ok: true, payload: again.query }
     },
     send: (q, beforeSend) => freshAirSource().setRunning(p, q, beforeSend),

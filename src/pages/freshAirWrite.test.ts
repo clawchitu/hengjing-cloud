@@ -307,6 +307,26 @@ describe('预检（确认后新读 202 + 210）', () => {
     })
   }
 
+  // #68 Codex 必须修 1：预检比对 210 原始读数，不比折叠后的视图（control_type = -1 时露点 / 湿度在视图里都是 null）、不取整
+  for (const [what, start, change] of [
+    ['control_type = -1 时露点 13 → 14', { controlType: -1, dewPoint: 13, humiditySet: 55 }, { dewPoint: 14 }],
+    ['control_type = -1 时湿度 55 → 56', { controlType: -1, dewPoint: 13, humiditySet: 55 }, { humiditySet: 56 }],
+    ['湿度在两个不同的无效值之间变化（65536 → -100）', { humiditySet: 65536 }, { humiditySet: -100 }],
+    ['露点设定值的小数差异（13 → 13.004，取整到 0.01 时相同）', { controlType: 0, dewPoint: 13 }, { dewPoint: 13.004 }],
+  ] as const) {
+    it(`预检读到${what}：不下发（0 个 204 请求），提示重新核对`, async () => {
+      r210 = S210(start)
+      const be = backend()
+      await draftWindAndSend()
+      r210 = { ...r210, ...change }
+      await confirmOk()
+      await waitFor(() => expect(toasts()).toContain('确认后重新读取到的新风设置与确认时不一致，本次未下发'))
+      expect(be.callsTo(R204)).toHaveLength(0)
+      expect(writes(be)).toHaveLength(0)
+      expect(lockOf(P12 as never)).toBeNull()
+    })
+  }
+
   it('确认后、预检读取期间离开页面：不下发、放锁，不向别处提示', async () => {
     let gate = () => {}
     let hold = false
