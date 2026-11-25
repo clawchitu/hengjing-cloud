@@ -175,8 +175,10 @@ export interface Reconciled {
 export function reconcileDraft(draft: RoomDraft | null, room: RoomView | undefined, ctx: EditCtx): Reconciled {
   if (!draft) return { draft: null, conflict: [] }
   if (!room) return { draft: null, cleared: 'gone', conflict: [] }
-  // 只改末端的草稿：房间关着也可以改（endBlock），不因房间关着清掉
-  const onlyEnds = draft.temp === undefined && draft.eco === undefined
+  // 只改末端的草稿：房间关着也可以改（endBlock），不因房间关着清掉。
+  // 温度 / 节能已被面板追平的项不算（与 buildRoomSet 按实际改动选 endBlock 一致），否则 editBlock 短路会跳过末端冲突检查
+  const onlyEnds = (draft.temp === undefined || (room.setTemp !== null && same(draft.temp, room.setTemp)))
+    && (draft.eco === undefined || draft.eco === room.eco)
   if ((onlyEnds ? endBlock : editBlock)(room, { ...ctx, fresh: true })) return { draft: null, cleared: 'blocked', conflict: [] }
   const d: RoomDraft = { ...draft }
   if (d.temp !== undefined && room.setTemp !== null && same(d.temp, room.setTemp)) delete d.temp

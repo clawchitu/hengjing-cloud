@@ -294,6 +294,17 @@ describe('末端选择（点标签）', () => {
     expect(buildRoomSet(off, editDraft(off, d, { temp: 24 }), OK, R).ok).toBe(false)
     expect(buildRoomSet(off, editDraft(off, null, { ends: [false, false] }), OK, R)).toEqual({ ok: false, reason: '至少选择一个末端' })
   })
+  it('温度已被面板追平、房间关着：剩下的末端照常做冲突检查，外部改了末端就不下发', () => {
+    const E3 = (s: boolean[]) => ['风盘', '顶辐射', '地冷'].map((n, i) => ({ optionName: n, type: [0, 1, 3][i], isSelected: s[i], isChange: true, switch: 0 }))
+    // 编辑时：温度 25.5、末端 [T,F,F]；草稿：温度 26、选中顶辐射。之后外部把温度设成 26、选中地冷、关房间
+    const off = room({ on: false, switchKnown: true, setTemp: 26, wireEndModes: E3([true, false, true]) })
+    const d = draft({ base: { setTemp: 25.5, eco: 0, ends: [true, false, false] }, temp: 26, ends: [true, true, false] })
+    expect(reconcileDraft(d, off, OK)).toMatchObject({ conflict: ['ends'] })
+    expect(buildRoomSet(off, d, OK, R)).toEqual({ ok: false, reason: '面板设定值已在外部变化，请重新核对' })
+    // 末端没被外部改：只剩末端改动，房间关着照样可以发
+    const off2 = room({ on: false, switchKnown: true, setTemp: 26, wireEndModes: E3([true, false, false]) })
+    expect(q(buildRoomSet(off2, d, OK, R))).toMatchObject({ temperature: -1, endModes: [{ isSelected: true }, { isSelected: true }, { isSelected: false }] })
+  })
   it('sameEnds：个数、顺序、名称、类型、is_change、is_selected 都要一致，switch 不比；sameQuery 同样不比末端 switch', () => {
     expect(sameEnds(E, E.map((m) => ({ ...m, switch: 0 })))).toBe(true)
     expect(sameEnds(E, [E[1], E[0]])).toBe(false)

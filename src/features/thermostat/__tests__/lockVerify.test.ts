@@ -1,6 +1,8 @@
 // 温控接共用写锁的核对数据与比对：201 / 206 的持久化数据，页面读数 → 200 形状（演示数据核对用），逐字段四态。
 import { describe, expect, it } from 'vitest'
 import { buildRoomTemperatureSet } from '@/api/ctrl'
+import { parseStored } from '@/api/writeLock'
+import { matchRoomSet } from '@/api/writeLockVerify'
 import { match201, match206, record201, record206, roomsAsReply } from '../lockVerify'
 import type { RoomView } from '../model'
 
@@ -89,6 +91,14 @@ describe('末端核对（201 改了 end_modes：逐个比对 is_selected，switc
   it('核对数据：改了末端带 ends（按顺序 type:选中），没改末端不带', () => {
     expect(record201(q())).toEqual({ msg: 201, deviceId: 7, target: { temperature: -1, eco: -1, switch: -1, ends: '0:1,1:1,3:0' } })
     expect(record201(buildRoomTemperatureSet(7, { temperature: 26, endModes: [] })).target).not.toHaveProperty('ends')
+  })
+  it('带 ends 的写锁记录落盘后能还原（刷新后仍按末端核对）', () => {
+    const now = Date.now()
+    const stored = { v: 1, op: 'op1', keys: ['project:p1'], projectId: 'p1', userId: null, sentAt: now - 1000, ...record201(q()) }
+    const back = parseStored(JSON.stringify(stored), now)
+    expect(back).toMatchObject({ msg: 201, deviceId: 7, target: { ends: '0:1,1:1,3:0' } })
+    expect(matchRoomSet(back!, withEnds(sent), { switchReported: true })).toMatchObject({ verdict: 'applied', fields: { ends: 'applied' } })
+    expect(matchRoomSet(back!, withEnds(E), { switchReported: true })).toMatchObject({ verdict: 'unchanged' })
   })
   it('选中一致 → 已生效（末端 switch 不同也不影响）', () => {
     expect(match201(q(), withEnds(sent))).toEqual({ verdict: 'applied', fields: { ends: 'applied' } })
