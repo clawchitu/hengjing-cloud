@@ -11,7 +11,6 @@ async function expectFocus(el: Locator, ring: boolean) {
   if (ring) expect(await outline(el)).not.toBe('none')
   else expect(await outline(el)).toBe('none')
 }
-/** 真实键盘导航到 el（从顶栏搜索框起按 Tab） */
 /** 首页天气城市选择：打开、输入、回车（同 e2e/weather.spec.ts） */
 async function pickCity(page: Page, q: string) {
   await page.getByRole('button', { name: /^天气城市：/ }).click()
@@ -22,6 +21,7 @@ async function pickCity(page: Page, q: string) {
   await page.clock.runFor(50)
 }
 
+/** 真实键盘导航到 el（从顶栏搜索框起按 Tab） */
 async function tabTo(page: Page, el: Locator) {
   await page.getByPlaceholder('搜索项目名称 / 项目ID').focus()
   for (let i = 0; i < 200; i++) {
