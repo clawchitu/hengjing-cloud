@@ -1,6 +1,6 @@
-// 首页天气的纯函数（S7b）：天气图标、/weather 不可用时顶替用的小时、城市搜索匹配。组件在 ./WeatherSection.tsx。
+// 首页天气的纯函数（S7b）：天气图标、/weather 不可用时顶替用的小时、城市搜索匹配和省 → 市两级的辅助。组件在 ./WeatherSection.tsx。
 import { faSun, faCloudSun, faCloudRain, faCloud, faSnowflake, faSmog, faCloudBolt, type IconDefinition } from '@fortawesome/free-solid-svg-icons'
-import type { City, HourForecast } from '../../features/weather'
+import { PROVINCES, type City, type HourForecast, type Province } from '../../features/weather'
 
 // 天气图标：按天气现象代码（00 晴、01 多云、02 阴、03–12 雨、13–17 雪、18 / 53 雾霾……）
 
@@ -43,3 +43,12 @@ export const matchCity = (c: City, provinceName: string, q: string) => {
   return !s || c.name.includes(s) || provinceName.includes(s)
 }
 
+
+/** 只有一个市的省（直辖市）：省份列表里点了直接选中这个市 */
+export const isSingleCity = (p: Province) => p.cities.length === 1
+
+/** 搜索：关键字为空返回空列表；否则平铺所有匹配的城市（按城市文件顺序），带所在省 */
+export function searchCities(q: string): { city: City; province: Province }[] {
+  if (!q.trim()) return []
+  return PROVINCES.flatMap((p) => p.cities.filter((c) => matchCity(c, p.name, q)).map((c) => ({ city: c, province: p })))
+}
