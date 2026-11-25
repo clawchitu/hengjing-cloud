@@ -218,6 +218,8 @@ test.describe('经销商账号', () => {
     await expect(menu(page).getByText('没有匹配“杭州独有”的项目')).toBeVisible()
     await expect(menu(page).getByText('只显示你名下的项目')).toBeVisible()
     await expect(menu(page).getByRole('link', { name: /去集成项目页搜索/ })).toHaveCount(0)
+    await menu(page).getByRole('link', { name: '查看全部项目 →' }).click()
+    await expect(page).toHaveURL(/\/groups/)
   })
 })
 
@@ -300,6 +302,8 @@ test.describe('平台账号', () => {
     await expect(menu(page).getByText('没有匹配“不存在的项目”的项目')).toBeVisible()
     await expect(menu(page).getByRole('link', { name: /去集成项目页搜索/ })).toHaveCount(0)
     await expect(menu(page).getByText('只显示你名下的项目')).toHaveCount(0)
+    await menu(page).getByRole('link', { name: '查看全部项目 →' }).click()
+    await expect(page).toHaveURL(/\/groups/)
   })
 })
 
