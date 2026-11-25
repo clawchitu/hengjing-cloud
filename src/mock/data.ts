@@ -54,7 +54,8 @@ export interface FreshAir {
   control: 'dew' | 'hum'
   dewSet: number
   humSet: number
-  fan: '低' | '中' | '高'
+  /** 演示数据的风速；「自动」只在 S10c 的演示下发后出现（210 的 wind_speed = 2） */
+  fan: '低' | '中' | '高' | '自动'
   rpm: number
   airflow: number
   compressor: boolean

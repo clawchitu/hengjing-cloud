@@ -1,5 +1,6 @@
 // 新风页的数据 hooks（TanStack Query，沿用 S4 QueryClient 默认值：网络 / 超时 / 服务器错误重试 1 次，
-// 控制屏未连接 503、无权限、ctrl 业务错误不重试）。只读；这一段没有写操作。
+// 控制屏未连接 503、无权限、ctrl 业务错误不重试）。只读；204 下发在 writes.ts（经 source.setRunning），这里只给确认后预检、
+// 写后核对用的新读（useFreshPair：新读 202 + 210）。
 // 不发请求的情况（docs/分工.md 第 3 节第 6 条、plan S10a）：
 // - 没有当前项目、项目离线（真实接口）、账号没有该路由的权限（can()，返回 forbidden）；
 // - 210 另外要求：项目 app_code == 12（独立空气系统）、设备 id 有效（来自 202，恰好出现一次）、202 里该设备在线。
@@ -18,13 +19,13 @@ import { can } from '@/data/session'
 import type { Project } from '@/data/org'
 import { isStandalone } from '@/data/org/capabilities'
 import { currentSessionKey } from '@/features/thermostat/writes'
-import type { SettingsView, UnitView } from './model'
+import { SettingsMismatch, type Raw202, type Raw210, type SettingsView, type UnitView } from './model'
 import { freshAirSource, type SettingsResult, type UnitsResult } from './source'
 
 export const UNITS_POLL_MS = 15_000
 export const SETTINGS_POLL_MS = 30_000
 /** 网关按 permission_paths（/v1/... 路由模板）拦截；没有就不发请求 */
-export const FRESH_ROUTES = { units: '/v1/ctrl/fresh-dehumidifier-get', settings: '/v1/ctrl/running-ctrl-get' } as const
+export const FRESH_ROUTES = { units: '/v1/ctrl/fresh-dehumidifier-get', settings: '/v1/ctrl/running-ctrl-get', write: '/v1/ctrl/running-ctrl-set' } as const
 
 type FreshProject = Pick<Project, 'id' | 'online' | 'programCode'>
 type Kind = 'real' | 'mock'
@@ -105,8 +106,8 @@ export type UnitsView =
   /** staleError：有数据时后台刷新失败（仍显示这份数据并提示） */
   | { kind: 'ready'; units: UnitView[]; updatedAt: number; staleError: ApiError | null; retry: () => void }
 
-/** ctrl 202：当前项目的新风 / 除湿设备 */
-export function useUnits(project: FreshProject | null): UnitsView {
+/** ctrl 202：当前项目的新风 / 除湿设备。paused：写锁核对在途期间暂停轮询（核对结束恢复） */
+export function useUnits(project: FreshProject | null, paused = false): UnitsView {
   const src = freshAirSource()
   const pid = project?.id ?? ''
   const permitted = can(FRESH_ROUTES.units)
@@ -116,7 +117,7 @@ export function useUnits(project: FreshProject | null): UnitsView {
     queryFn: ({ signal }): Promise<UnitsData> => runSeq(key, pid, () => src.units(pid, signal)),
     enabled: canRead(project, src.kind) && permitted,
     staleTime: src.kind === 'real' ? 10_000 : Infinity,
-    refetchInterval: src.kind === 'real' ? UNITS_POLL_MS : false,
+    refetchInterval: src.kind === 'real' && !paused ? UNITS_POLL_MS : false,
   })
   const qRefetch = q.refetch
   const retry = useCallback(() => { void qRefetch() }, [qRefetch])
@@ -148,10 +149,11 @@ export type SettingsState =
   /** 控制屏回「该软件类型不支持此控制」：该项目不支持新风控制（不是故障） */
   | { kind: 'unsupported'; message: string; detail: string }
   | { kind: 'error'; error: ApiError; retry: () => void }
-  | { kind: 'ready'; settings: SettingsView; updatedAt: number; staleError: ApiError | null; retry: () => void }
+  /** raw：这份设置对应的 210 原始回包（204 组装的兜底检查 blocked204 用） */
+  | { kind: 'ready'; settings: SettingsView; raw: Raw210; updatedAt: number; staleError: ApiError | null; retry: () => void }
 
-/** ctrl 210：当前选中设备的运行设置（只对 app_code 12、在线、id 有效的设备请求） */
-export function useSettings(project: FreshProject | null, unit: Pick<UnitView, 'deviceId' | 'connected'> | null | undefined): SettingsState {
+/** ctrl 210：当前选中设备的运行设置（只对 app_code 12、在线、id 有效的设备请求）。paused 同 useUnits */
+export function useSettings(project: FreshProject | null, unit: Pick<UnitView, 'deviceId' | 'connected'> | null | undefined, paused = false): SettingsState {
   const src = freshAirSource()
   const pid = project?.id ?? ''
   const deviceId = unit?.deviceId ?? null
@@ -163,7 +165,7 @@ export function useSettings(project: FreshProject | null, unit: Pick<UnitView, '
     queryFn: ({ signal }): Promise<SettingsData> => runSeq(key, pid, () => src.settings(pid, deviceId!, signal)),
     enabled: active && permitted,
     staleTime: src.kind === 'real' ? 10_000 : Infinity,
-    refetchInterval: (query) => (src.kind === 'real' && query.state.data?.kind !== 'unsupported' ? SETTINGS_POLL_MS : false),
+    refetchInterval: (query) => (src.kind === 'real' && !paused && query.state.data?.kind !== 'unsupported' ? SETTINGS_POLL_MS : false),
   })
   const qRefetch = q.refetch
   const retry = useCallback(() => { void qRefetch() }, [qRefetch])
@@ -177,7 +179,7 @@ export function useSettings(project: FreshProject | null, unit: Pick<UnitView, '
   const err = q.error ? toApiError(q.error) : null
   if (!q.data || !valid(pid, q.data)) return noData(err, retry)
   if (q.data.kind === 'unsupported') return { kind: 'unsupported', message: q.data.message, detail: q.data.detail }
-  return { kind: 'ready', settings: q.data.view, updatedAt: q.dataUpdatedAt, staleError: err, retry }
+  return { kind: 'ready', settings: q.data.view, raw: q.data.raw, updatedAt: q.dataUpdatedAt, staleError: err, retry }
 }
 
 // ---------------------------------------------------------------------------
@@ -211,5 +213,70 @@ export function useFreshRead(project: Pick<Project, 'id'> | null) {
     if (!opts.defer) apply()
     const latest = () => startedSeq.get(JSON.stringify(key)) === seq && !((qc.getQueryData<SettingsData>(key)?.seq ?? 0) > seq)
     return { ...r, apply, latest }
+  }, [qc, pid])
+}
+
+/** 一次新读的 202（同 FreshRead） */
+export type FreshUnits = UnitsResult & { apply: () => void; latest: () => boolean }
+
+/** 新读一次 202（同 useFreshRead 的做法：先取消在途、直接发新请求、按序号写缓存、绑定会话；defer 只返回候选） */
+export function useFreshUnits(project: Pick<Project, 'id'> | null) {
+  const qc = useQueryClient()
+  const pid = project?.id ?? ''
+  return useCallback(async (signal?: AbortSignal, opts: { defer?: boolean } = {}): Promise<FreshUnits> => {
+    if (!pid) throw new Error('没有当前项目')
+    const session = currentSessionKey()
+    const src = freshAirSource()
+    const key = unitsKey(src.kind, pid)
+    await qc.cancelQueries({ queryKey: key, exact: true })
+    const { seq, ...r } = await runSeq(key, pid, () => src.units(pid, signal))
+    if (signal?.aborted) throw new Error('读取已中止，结果已丢弃')
+    if (currentSessionKey() !== session) throw new Error('读取期间登录状态已变化，结果已丢弃')
+    const apply = () => {
+      if (currentSessionKey() !== session) return
+      qc.setQueryData<UnitsData>(key, (old) => putNewer(old, { ...r, seq }))
+    }
+    if (!opts.defer) apply()
+    const latest = () => startedSeq.get(JSON.stringify(key)) === seq && !((qc.getQueryData<UnitsData>(key)?.seq ?? 0) > seq)
+    return { ...r, apply, latest }
+  }, [qc, pid])
+}
+
+/** 210 回包的 id 与请求的设备 id 不符（source.ts 的 settingsOf 抛出的 ApiError，cause 是 SettingsMismatch） */
+export const isSettingsMismatch = (e: unknown) => isApiError(e) && e.kind === 'ctrl' && (e as { cause?: unknown }).cause instanceof SettingsMismatch
+
+/**
+ * 下发用的一次新读：202（设备在不在、出现几次、在不在线）+ 210（运行设置）。
+ * settings 为 null：210 回包 id 与设备不符（含空回包），由调用方按「没有读数」处理（预检不发、核对记无法核对）；
+ * 其他读取错误照常抛出（预检不发、核对记结果未知）。apply / latest 同时作用于两份读数
+ */
+export interface FreshPair { units: Raw202; unitList: UnitView[]; settings: SettingsResult | null; apply: () => void; latest: () => boolean }
+export function useFreshPair(project: Pick<Project, 'id'> | null) {
+  const units = useFreshUnits(project)
+  const settings = useFreshRead(project)
+  return useCallback(async (deviceId: number | null, signal?: AbortSignal, opts: { defer?: boolean } = {}): Promise<FreshPair> => {
+    const u = await units(signal, opts)
+    let s: FreshRead | null = null
+    try { s = await settings(deviceId, signal, opts) } catch (e) { if (!isSettingsMismatch(e)) throw e }
+    const result: SettingsResult | null = !s ? null : s.kind === 'ok' ? { kind: 'ok', view: s.view, raw: s.raw } : { kind: 'unsupported', message: s.message, detail: s.detail }
+    return {
+      units: u.raw,
+      unitList: u.list,
+      settings: result,
+      apply: () => { u.apply(); s?.apply() },
+      latest: () => u.latest() && (s ? s.latest() : true),
+    }
+  }, [units, settings])
+}
+
+/** 重新读当前项目的 202 和 210（写锁到期强制重读、锁放开后用；只重读启用中的查询） */
+export function useRefetchFreshAir(project: Pick<Project, 'id'> | null) {
+  const qc = useQueryClient()
+  const pid = project?.id ?? ''
+  return useCallback(() => {
+    if (!pid) return
+    const real = freshAirSource().kind === 'real'
+    void qc.refetchQueries({ queryKey: real ? ['ctrl', 202, pid] : ['freshAir-mock', 'units', pid] })
+    void qc.refetchQueries({ queryKey: real ? ['ctrl', 210, pid] : ['freshAir-mock', 'settings', pid] })
   }, [qc, pid])
 }
