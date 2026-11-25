@@ -9,7 +9,7 @@
 //   dealerNames / defaultSections / searchProjects                             侧栏切换器的列表规则
 export * from './types'
 export { APP_CODE, capabilitiesOf, hasRooms, isStandalone, toAppCode, type Capabilities } from './capabilities'
-export { dealerSections, type DealerSection, isOnlineEntity, joinScope, PLATFORM_DEALER, PLATFORM_DEALER_ID, withPlatformDealer, projectsInGroup, projectsInGroups, resolveCurrentProject, resolveDealerId } from './map'
+export { isOnlineEntity, joinScope, PLATFORM_DEALER, PLATFORM_DEALER_ID, withPlatformDealer, projectsInGroup, projectsInGroups, resolveCurrentProject, resolveDealerId } from './map'
 export { orgKeys, SET_PROJECT_FAIL_TEXT, useApps, useCapabilities, useCurrentProject, useDealerPick, useDealers, useFrequentProjects, useIntegratedProjects, useOrgScope, useOrgStat, useProjects, useResetOnAccountChange, type CurrentProject, type FrequentProject, type Loadable, type OrgScope, type OrgStat, type SetProjectResult, whenProjectSet } from './hooks'
 export { getPinned, getRecent, recordRecent, togglePinned, useProjectPrefs, RECENT_SHOWN } from './prefs'
 export { dealerNames, defaultSections, matchProject, searchProjects, SECTION_LABEL, uniqueById, type DealerNames, type SectionKey, type SwitchSection } from './switcher'

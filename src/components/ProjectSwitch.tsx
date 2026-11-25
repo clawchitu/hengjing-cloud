@@ -5,7 +5,7 @@
 // - 每行：在线状态点（离线再加「离线」两字，照常可选、不排后）+ 项目名 + 副标题经销商名（经销商账号的默认列表不显示）+ 星标置顶；
 // - 最近使用、已置顶按账号存在 localStorage（data/org/prefs.ts）。打开时给分段拍一次快照：开着菜单点星标只改星标，
 //   不让行在分段间跳动（也避开 cmdk「高亮项被卸载就跳到第一项」）；下次打开按新的置顶排；
-// - 搜不到：提示 + 「去集成项目页搜索 →」（带上关键词）；经销商账号多一行「只显示你名下的项目」；
+// - 搜不到：提示；经销商账号多一行「只显示你名下的项目」（「去集成项目页搜索」入口暂不做：集成项目页还不能跨集成项目搜索，见 docs/待办.md）；
 // - 底部固定一行「查看全部项目 →」，不跟列表滚动。
 //
 // 键盘与焦点：
@@ -41,9 +41,6 @@ export function OrgHint({ text, onRetry }: { text: string; onRetry: () => void }
     </div>
   )
 }
-
-/** 集成项目页带关键词（Groups.tsx 读 ?q= 填进项目搜索框） */
-export const groupsSearchHref = (q: string) => `/groups?q=${encodeURIComponent(q.trim())}`
 
 export function ProjectSwitch() {
   const { project, setProjectId, toast } = useApp()
@@ -285,7 +282,6 @@ export function ProjectSwitch() {
             {searching && (
               <CommandEmpty className="px-2.5 py-3 text-[12.5px] text-muted-foreground">
                 <div>没有匹配“{q.trim()}”的项目</div>
-                <Link to={groupsSearchHref(q)} className="mt-1.5 inline-block text-primary hover:underline" onClick={() => setOpen(false)}>去集成项目页搜索 →</Link>
                 {dealerAccount && <small className="mt-1 block text-[11px] text-faint">只显示你名下的项目</small>}
               </CommandEmpty>
             )}

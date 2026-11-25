@@ -208,7 +208,7 @@ test.describe('经销商账号', () => {
     await expect(trigger(page)).toContainText('离线')
   })
 
-  test('搜不到：提示、去集成项目页搜索（带关键词）、只显示你名下的项目', async ({ page, login }) => {
+  test('搜不到：提示、只显示你名下的项目；没有「去集成项目页搜索」入口', async ({ page, login }) => {
     await open(page, login, 'dealer')
     await openMenu(page)
     // 别家经销商的项目搜不到
@@ -217,10 +217,7 @@ test.describe('经销商账号', () => {
     await expect(options(page)).toHaveCount(0)
     await expect(menu(page).getByText('没有匹配“杭州独有”的项目')).toBeVisible()
     await expect(menu(page).getByText('只显示你名下的项目')).toBeVisible()
-    await menu(page).getByRole('link', { name: '去集成项目页搜索 →' }).click()
-    await tick(page)
-    await expect(page).toHaveURL(/\/groups\?q=%E6%9D%AD%E5%B7%9E%E7%8B%AC%E6%9C%89$/)
-    await expect(page.getByPlaceholder('项目名称 / ID')).toHaveValue('杭州独有')
+    await expect(menu(page).getByRole('link', { name: /去集成项目页搜索/ })).toHaveCount(0)
   })
 })
 
@@ -295,15 +292,60 @@ test.describe('平台账号', () => {
     await expect(footer).toBeInViewport({ ratio: 1 })
   })
 
-  test('搜不到：提示和去集成项目页搜索，没有「只显示你名下的项目」', async ({ page, login }) => {
+  test('搜不到：只有提示，没有「只显示你名下的项目」，也没有「去集成项目页搜索」', async ({ page, login }) => {
     await open(page, login, 'admin')
     await openMenu(page)
     await input(page).fill('不存在的项目')
     await tick(page)
     await expect(menu(page).getByText('没有匹配“不存在的项目”的项目')).toBeVisible()
-    await expect(menu(page).getByRole('link', { name: '去集成项目页搜索 →' })).toHaveAttribute('href', '/groups?q=' + encodeURIComponent('不存在的项目'))
+    await expect(menu(page).getByRole('link', { name: /去集成项目页搜索/ })).toHaveCount(0)
     await expect(menu(page).getByText('只显示你名下的项目')).toHaveCount(0)
   })
+})
+
+test('同一浏览器换账号：已置顶和最近使用按账号隔离，换回来各自保留（项目两边都看得见）', async ({ page, login }) => {
+  // 换账号 = 改本地登录态后刷新（演示数据模式的登录态就是 hjc-auth）
+  const as = async (role: Role) => {
+    await page.evaluate((r) => localStorage.setItem('hjc-auth', JSON.stringify({ username: r === 'dealer' ? 'cosyhome' : 'hjadmin', role: r })), role)
+    await page.reload()
+    await tick(page, 1500)
+  }
+  const pin = async (name: string, q: string) => {
+    await openMenu(page)
+    await input(page).fill(q)
+    await tick(page)
+    await star(page, name).click()
+    await tick(page)
+    await page.keyboard.press('Escape')
+    await tick(page)
+  }
+  const sectionNames = (label: string) => section(page, label).getByRole('option').evaluateAll((els) => els.map((e) => (e.querySelector('.truncate')?.textContent ?? '').trim()))
+  await open(page, login, 'dealer')
+  // 经销商：置顶 BULK-030，切到 BULK-020（两个项目平台账号也看得见）
+  await pin(bulkName(30), bulkId(30))
+  await pickBySearch(page, bulkId(20), bulkName(20))
+  // 换平台账号：看不到经销商的记录
+  await as('admin')
+  await openMenu(page)
+  await expect(section(page, '已置顶')).toHaveCount(0)
+  await expect(section(page, '最近使用')).toHaveCount(0)
+  await page.keyboard.press('Escape')
+  await tick(page)
+  // 平台账号自己的记录
+  await pin(bulkName(40), bulkId(40))
+  await pickBySearch(page, bulkId(50), bulkName(50))
+  // 换回经销商：只有经销商自己的记录
+  await as('dealer')
+  await openMenu(page)
+  expect(await sectionNames('已置顶')).toEqual([bulkName(30)])
+  expect(await sectionNames('最近使用')).toEqual([bulkName(20)])
+  await page.keyboard.press('Escape')
+  await tick(page)
+  // 再换平台账号：自己的记录还在，没有经销商的
+  await as('admin')
+  await openMenu(page)
+  expect(await sectionNames('已置顶')).toEqual([bulkName(40)])
+  expect(await sectionNames('最近使用')).toEqual([bulkName(50)])
 })
 
 test('Cmd+K / Ctrl+K 聚焦顶栏搜索', async ({ page, login }) => {
