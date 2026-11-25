@@ -177,11 +177,11 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks(); setConfig(null) })
 
 describe('读取（ctrl 200）', () => {
-  it('房间卡：末端按 end_modes 动态显示（选中蓝 / 未选中灰，开 / 关取 switch），风速档位与自动，65536 隐藏，设定湿度去除', async () => {
+  it('房间卡：末端按 end_modes 动态显示（选中实心 / 未选中白底，开 / 关取 switch），风速档位与自动，65536 隐藏，设定湿度去除', async () => {
     const be = backend()
     const c = await openRooms()
-    const ends = [...c.querySelectorAll('.modes-row [data-slot=badge]')].map((b) => [b.textContent, b.getAttribute('data-variant')])
-    expect(ends).toEqual([['风盘 开', 'blue'], ['顶辐射 关', 'blue'], ['地冷 关', 'gray']])
+    const ends = [...c.querySelectorAll('.modes-row .end-tag')].map((b) => [b.textContent, b.getAttribute('data-selected')])
+    expect(ends).toEqual([['风盘·开', 'true'], ['顶辐射·关', 'true'], ['地冷·关', 'false']])
     expect(c.textContent).toContain('3 档')
     expect(c.textContent).toContain('湿度 51%')
     expect(c.textContent).not.toContain('设定湿度')
@@ -189,7 +189,7 @@ describe('读取（ctrl 200）', () => {
     expect(c.textContent).not.toContain('406658286')
     const off = card('主卧')
     expect(off.textContent).not.toContain('湿度') // 65536 隐藏
-    expect(off.querySelectorAll('.modes-row [data-slot=badge]')).toHaveLength(1)
+    expect(off.querySelectorAll('.modes-row .end-tag')).toHaveLength(1)
     expect((be.callsTo('/ctrl/room-temperature-data-get')[0].body as { project_id: string }).project_id).toBe(P1.id)
   })
 
@@ -218,6 +218,20 @@ describe('读取（ctrl 200）', () => {
     expect(sw.map((x) => [x.textContent, x.getAttribute('title')])).toEqual([['开', '开/关由控制屏自动控制'], ['关', '开/关由控制屏自动控制'], ['关', '开/关由控制屏自动控制']])
     // 开 / 关本身不是按钮（只读）
     expect(sw.every((x) => x.tagName === 'SPAN')).toBe(true)
+  })
+
+  it('末端标签为实心填充单层：按钮是唯一带底色 / 边框的元素（内层无 badge），文字「名称 · 开 / 关」，保留开（绿）/ 关（灰）小圆点', async () => {
+    backend()
+    const c = await openRooms()
+    const tags = within(c.querySelector('.modes-row') as HTMLElement).getAllByRole('button')
+    for (const t of tags) {
+      expect(t.querySelector('[data-slot=badge]')).toBeNull()
+      expect(t.querySelector('.end-dot')).not.toBeNull()
+    }
+    expect(tags.map((t) => t.textContent)).toEqual(['风盘·开', '顶辐射·关', '地冷·关'])
+    expect(tags.map((t) => t.getAttribute('data-selected'))).toEqual(['true', 'true', 'false'])
+    expect(tags.map((t) => t.querySelector('.end-dot')!.getAttribute('data-on'))).toEqual(['true', 'false', 'false'])
+    expect(c.querySelector('.end-lock')).toBeNull()
   })
 
   it('S13：app_code 12 的页头和说明只写程序名称，不写程序编码', async () => {
@@ -2057,12 +2071,22 @@ describe('末端选择下发（201 end_modes）', () => {
     expect(card('客厅').textContent).toContain('风盘、顶辐射 → 风盘、顶辐射、地冷')
   })
 
+  it('is_change = false 且未选中：同样显示小锁图标，提示「不允许修改」', async () => {
+    rooms = [{ ...ROOM, endModes: [{ optionName: '全空气', type: 4, isSelected: false, isChange: false, switch: 0 }, ...ENDS] }, OFF_ROOM]
+    backend()
+    const c = await openRooms()
+    const air = endTag(c, '全空气')
+    expect(air.querySelector('.end-lock svg[data-icon=lock]')).not.toBeNull()
+    expect(air.getAttribute('title')).toContain('不允许修改')
+  })
+
   it('is_change = false（全空气）：已选中的标「不可取消」，点击无效并提示，不进草稿', async () => {
     rooms = [{ ...ROOM, endModes: [{ optionName: '全空气', type: 4, isSelected: true, isChange: false, switch: 1 }, ...ENDS] }, OFF_ROOM]
     const be = backend({ '/ctrl/room-temperature-set': ok201Ends })
     const c = await openRooms()
     const air = endTag(c, '全空气')
     expect(air.textContent).toContain('不可取消')
+    expect(air.querySelector('.end-lock svg[data-icon=lock]')).not.toBeNull()
     expect(air.getAttribute('aria-disabled')).toBe('true')
     fireEvent.click(air)
     expect(toasts()).toContain('客厅：「全空气」不可取消')
