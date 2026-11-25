@@ -10,7 +10,7 @@
 //   对 localStorage 里恢复来的、结果未知的锁，按 resolveProject 能不能解析出项目决定要不要再核对一次（两份数据谁先到都行）。
 import type { QueryClient } from '@tanstack/react-query'
 import { configureWriteLock, lockKeysOf, lockOf, parseStored, STORAGE_PREFIX, verify, type LockTarget, type StoredLock, type VerifyOutcome, type Scalar, type SentRecord } from '@/api/writeLock'
-import type { WriteQuery } from '@/api/ctrl'
+import { MODE_UNCHANGED, type WriteQuery } from '@/api/ctrl'
 import { orgKeys } from '@/data/org/hooks'
 import { getSessionView } from '@/data/session'
 import type { Group, Project } from '@/data/org/types'
@@ -33,7 +33,7 @@ export function recordOf(q: WriteQuery<203>): SentRecord {
 
 /** 这次下发能不能回读核对：没改系统开关 / 运行模式，并且改了房间开关或温度 */
 export function verifiable203(t: { [k: string]: Scalar }): boolean {
-  if (t.systemSwitch !== -1 || t.systemMode !== 0) return false
+  if (t.systemSwitch !== -1 || t.systemMode !== -1) return false
   return t.roomSwitch !== -1 || t.roomTemp !== -1
 }
 
@@ -44,7 +44,7 @@ export function verifiable203(t: { [k: string]: Scalar }): boolean {
 export function match203(t: { [k: string]: Scalar }, snap: UnifiedSnapshot): boolean {
   if (!verifiable203(t) || !snap || snap.rooms <= 0 || snap.offline) return false
   if (typeof t.roomSwitch !== 'number' || typeof t.roomTemp !== 'number') return false
-  const q: WriteQuery<203> = { systemSwitch: -1, systemMode: 0, roomSwitch: t.roomSwitch, roomTemp: t.roomTemp }
+  const q: WriteQuery<203> = { systemSwitch: -1, systemMode: MODE_UNCHANGED, roomSwitch: t.roomSwitch, roomTemp: t.roomTemp }
   return echoMismatches(q, snap).length === 0
 }
 

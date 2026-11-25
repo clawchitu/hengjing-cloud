@@ -180,14 +180,17 @@ export function buildRoomTemperatureSet(equipmentId: number, changes: Changes<20
 }
 
 /**
- * 203 统一控制：开关/温度不改为 -1；运行模式是枚举，不改为 0（OPERATION_MODE_NONE）。
- * 后端 11/25 答复「所有字段不变一律传 -1」，但 proto 里 system_mode 是枚举，明确写了 OPERATION_MODE_NONE = 0 是「不变」，-1 不在枚举里，
- * 所以这一项仍按 proto 传 0，已列入待后端确认
+ * 203 的运行模式「不变」：-1（后端 11/25 答复第 4 条：所有字段不变一律传 -1，0 是真实值）。
+ * system_mode 是 proto 枚举，-1 不是枚举成员；proto3 枚举是开放枚举，protobuf-es 按 int32 编码（负数是 10 字节 varint），
+ * 线上确实带上 -1，见 __tests__/writeEncode.test.ts。不能用 OPERATION_MODE_NONE（0）：proto3 里 0 线上省略，设备收到的就是 0。
  */
+export const MODE_UNCHANGED = U as pb.UnifiedCtrlSetQuery_OperatingMode
+
+/** 203 统一控制：没给的项（系统开关、运行模式、房间开关、房间温度）一律 -1 */
 export function buildUnifiedCtrlSet(changes: Changes<203, never> = {}): WriteQuery<203> {
   return {
     systemSwitch: changes.systemSwitch ?? U,
-    systemMode: changes.systemMode ?? pb.UnifiedCtrlSetQuery_OperatingMode.OPERATION_MODE_NONE,
+    systemMode: changes.systemMode ?? MODE_UNCHANGED,
     roomSwitch: changes.roomSwitch ?? U,
     roomTemp: changes.roomTemp ?? U,
   }

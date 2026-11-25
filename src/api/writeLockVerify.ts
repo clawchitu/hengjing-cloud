@@ -1,6 +1,6 @@
 // 写锁核对用的纯比对函数（不发请求，读取由调用方注入）：把持久化的核对数据（消息号、设备 id、目标字段与值）与回读结果比对。
 // 按消息类型回读：201 / 206 → 200（房间温控数据）；204 → 210（运行控制数据，matchRunningCtrl）。
-// 下发时「不变」一律传 -1（后端 11/25 答复第 4 条，201 / 204 / 206 所有字段；203 的 system_mode 例外，见 ctrl.ts）。
+// 下发时「不变」一律传 -1（后端 11/25 答复第 4 条，201 / 203 / 204 / 206 所有字段，含 203 的 system_mode；0 是真实值）。
 //
 // 比对口径（11/24 Fable 裁定；与统一控制 src/features/unified/batch.ts 的 summarizeRooms 同一套读数规则）：
 // - 200 的 switch、set_temp、eco 是 proto3 普通标量，值为 0 时线上本来就省略，解码出来的 0 就是真实读数，直接比对。
@@ -44,10 +44,10 @@ export const VERIFIABLE_FIELDS: Readonly<Record<number, readonly string[]>> = Ob
 /** 某消息号的某个写入字段能不能核对 */
 export const isVerifiableField = (msg: number, field: string) => (VERIFIABLE_FIELDS[msg] ?? []).includes(field)
 /**
- * 按消息类型判断写入字段是否为「不改」（唯一口径，写锁与比对函数都用它）：标量 -1；203 的 systemMode 是枚举，
- * 0（OPERATION_MODE_NONE）= 不改
+ * 按消息类型判断写入字段是否为「不改」（唯一口径，写锁与比对函数都用它）：所有消息、所有字段都只认 -1（后端 11/25 答复第 4 条），
+ * 0 是真实值。203 的 systemMode 也是 -1 = 不改；旧版本落盘的 systemMode = 0 按「改了」处理（无法核对，锁到期释放），偏保守
  */
-export const isNoChange = (msg: number, field: string, v: unknown) => v === -1 || (msg === 203 && field === 'systemMode' && v === 0)
+export const isNoChange = (_msg: number, _field: string, v: unknown) => v === -1
 
 /** 混合字段的整体优先级（数字越大越优先）：结果未知 > 未变化 > 无法核对 > 已生效（Fable 裁定 B）。只在这里改 */
 const PRIORITY: Record<FieldResult, number> = { unknown: 3, unchanged: 2, unverifiable: 1, applied: 0 }

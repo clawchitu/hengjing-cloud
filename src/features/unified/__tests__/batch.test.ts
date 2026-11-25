@@ -1,4 +1,5 @@
 // S12b 批量控制器：逐个项目走 S12a 状态机。下发函数、回读都注入假的，不连任何接口。
+import { MODE_UNCHANGED } from '@/api/ctrl'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { __resetWriteLockForTests, lockOf } from '@/api/writeLock'
 import { ApiError } from '@/api/errors'
@@ -42,13 +43,13 @@ describe('summarizeRooms（ctrl 200 → 回读快照）', () => {
   it('房间开关未上报（后端 11/25 答复第 1 条）：开关读数一律 null（核对时无法核对），温度照常；-100 无效、0 有效', () => {
     const s = summarizeRooms([{ switch: 0, setTemp: 26 }, { switch: 1, setTemp: 26 }], { switchReported: false })
     expect(s).toEqual({ rooms: 2, roomSwitch: null, roomTemp: 26, switchUnreported: true, perRoom: { roomSwitch: [null, null], roomTemp: [26, 26] } })
-    expect(echoMismatches({ systemSwitch: -1, systemMode: 0, roomSwitch: 1, roomTemp: -1 }, s).map((m) => m.kind)).toEqual(['missing'])
+    expect(echoMismatches({ systemSwitch: -1, systemMode: MODE_UNCHANGED, roomSwitch: 1, roomTemp: -1 }, s).map((m) => m.kind)).toEqual(['missing'])
     expect(summarizeRooms([{ switch: 0, setTemp: -100 }], { switchReported: true })).toMatchObject({ roomSwitch: 0, roomTemp: null })
     // 开关可信时，开关读数不是 0 / 1 按没回报：203 核对记无法核对，不判未变化
     const odd = summarizeRooms([{ switch: 2, setTemp: 26 }, { switch: 1, setTemp: 26 }], { switchReported: true })
     expect(odd.perRoom?.roomSwitch).toEqual([null, 1])
-    expect(echoMismatches({ systemSwitch: -1, systemMode: 0, roomSwitch: 0, roomTemp: -1 }, { roomSwitch: null, perRoom: { roomSwitch: [null] } }).map((m) => m.kind)).toEqual(['missing'])
-    expect(echoMismatches({ systemSwitch: -1, systemMode: 0, roomSwitch: 1, roomTemp: -1 }, odd).map((m) => m.kind)).toEqual(['missing'])
+    expect(echoMismatches({ systemSwitch: -1, systemMode: MODE_UNCHANGED, roomSwitch: 0, roomTemp: -1 }, { roomSwitch: null, perRoom: { roomSwitch: [null] } }).map((m) => m.kind)).toEqual(['missing'])
+    expect(echoMismatches({ systemSwitch: -1, systemMode: MODE_UNCHANGED, roomSwitch: 1, roomTemp: -1 }, odd).map((m) => m.kind)).toEqual(['missing'])
   })
 
   it('逐房间温度保留原始读数核对（不先四舍五入）：24.494 与 24.5 差 0.006 算一致', async () => {
@@ -135,7 +136,7 @@ describe('start：逐个下发，三种结果，不重试', () => {
     expect(send).toHaveBeenCalledTimes(2)
     expect(send.mock.calls[0][0]).toBe(a)
     expect(send.mock.calls[1][0]).toBe(b)
-    expect(send.mock.calls[0][1]).toEqual({ systemSwitch: -1, systemMode: 0, roomSwitch: 1, roomTemp: -1 })
+    expect(send.mock.calls[0][1]).toEqual({ systemSwitch: -1, systemMode: MODE_UNCHANGED, roomSwitch: 1, roomTemp: -1 })
     expect(readBack.mock.calls.map((c) => c[0])).toEqual(['a', 'a', 'b', 'b'])
     expect(done.phase).toBe('done')
     expect(done.rows.map((r) => r.status)).toEqual(['success', 'success'])

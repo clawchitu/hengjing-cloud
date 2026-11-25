@@ -408,13 +408,21 @@ describe('候选结果提交（#33）与无效核对', () => {
     expect(lockOf(PA)).toMatchObject({ owner: 'other-account', label: '', projectId: '' })
     expect(lockOf(PA)?.lastFields).toBeUndefined()
   })
-  it('回读失败时只把「改了的字段」记为结果未知：203 的 systemMode 0 = 不改', async () => {
+  it('回读失败时只把「改了的字段」记为结果未知：203 的 systemMode -1 = 不改', async () => {
+    const t = take(); claim(t)
+    markSent(t, Promise.resolve(), { msg: 203, deviceId: null, target: { systemSwitch: -1, systemMode: -1, roomSwitch: 1, roomTemp: -1 } })
+    requireVerify(t, async () => { throw new Error('网络错误') })
+    settle(t, 'unknown')
+    await flush()
+    expect(lockOf(PA)?.lastFields).toEqual({ roomSwitch: 'unknown' })
+  })
+  it('203 的 systemMode 0 是真实值（旧版本落盘的 0 也按「改了」记，偏保守）', async () => {
     const t = take(); claim(t)
     markSent(t, Promise.resolve(), { msg: 203, deviceId: null, target: { systemSwitch: -1, systemMode: 0, roomSwitch: 1, roomTemp: -1 } })
     requireVerify(t, async () => { throw new Error('网络错误') })
     settle(t, 'unknown')
     await flush()
-    expect(lockOf(PA)?.lastFields).toEqual({ roomSwitch: 'unknown' })
+    expect(lockOf(PA)?.lastFields).toEqual({ systemMode: 'unknown', roomSwitch: 'unknown' })
   })
 })
 

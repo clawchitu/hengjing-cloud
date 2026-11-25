@@ -1,10 +1,11 @@
 // 统一控制的规则与校验（纯函数，不发请求）。
 // - app_code 决定温度设定是否可用：1 可用；8、12 不可用；其他/缺失按不可用处理（白名单）。
 // - 项目离线不允许下发。
-// - 组装 203 Query 一律走 ctrl.ts 的 buildUnifiedCtrlSet()：不改的开关/温度填 -1，模式填 0（不变）。
-import { buildUnifiedCtrlSet, type WriteQuery } from '@/api/ctrl'
+// - 组装 203 Query 一律走 ctrl.ts 的 buildUnifiedCtrlSet()：不改的四项（含运行模式）一律填 -1（后端 11/25 答复第 4 条）；0 是真实值。
+// - 运行模式只能选 MODE_OPTIONS 里的 14 种；草稿里「不变」= 不给这一项（undefined）。0（OPERATION_MODE_NONE）、-1 等其他值都算无效模式，拒绝下发。
+import { buildUnifiedCtrlSet, MODE_UNCHANGED, type WriteQuery } from '@/api/ctrl'
 import { UnifiedCtrlSetQuery_OperatingMode as Mode } from '@/api/gen/ctrl200_pb.js'
-import { hasChanges, UNCHANGED } from '@/api/values'
+import { UNCHANGED } from '@/api/values'
 import {
   DEFAULT_TEMP_RANGE, MODE_OPTIONS, SWITCH_OFF, SWITCH_ON, TEMP_DISABLED_APP_CODES, TEMP_ENABLED_APP_CODES, TEXT,
   type SwitchValue, type TempRange,
@@ -79,7 +80,7 @@ export interface Issue { code: IssueCode; message: string }
 
 export type Validation = { ok: true; query: WriteQuery<203> } | { ok: false; errors: string[]; issues: Issue[] }
 
-/** 下发前的完整校验，通过时给出组装好的 203 Query（不改的字段全是 -1 / 模式 0） */
+/** 下发前的完整校验，通过时给出组装好的 203 Query（不改的字段全是 -1，含运行模式） */
 export function validateUnified(draft: UnifiedDraft, ctx: UnifiedContext | null | undefined): Validation {
   const issues: Issue[] = []
   const add = (code: IssueCode, message: string) => { issues.push({ code, message }) }
@@ -90,8 +91,8 @@ export function validateUnified(draft: UnifiedDraft, ctx: UnifiedContext | null 
   const d = draft ?? {}
   if (d.systemSwitch !== undefined && !isSwitch(d.systemSwitch)) add('BAD_SWITCH', TEXT.badSwitch(TEXT.systemSwitch))
   if (d.roomSwitch !== undefined && !isSwitch(d.roomSwitch)) add('BAD_SWITCH', TEXT.badSwitch(TEXT.roomSwitch))
-  // 0 是「不变」（OPERATION_MODE_NONE），等同于没选
-  if (d.systemMode !== undefined && d.systemMode !== Mode.OPERATION_MODE_NONE && !MODE_VALUES.has(d.systemMode)) add('BAD_MODE', TEXT.badMode)
+  // 「不变」只能是不给（undefined）；0（OPERATION_MODE_NONE）不是可下发的模式，原样发出去设备会当真实值，按无效模式拒绝
+  if (d.systemMode !== undefined && !MODE_VALUES.has(d.systemMode)) add('BAD_MODE', TEXT.badMode)
   if (d.roomTemp !== undefined) {
     const avail = tempAvailability(ctx.appCode)
     if (!avail.enabled) add('TEMP_DISABLED', avail.reason)
@@ -109,8 +110,7 @@ export function validateUnified(draft: UnifiedDraft, ctx: UnifiedContext | null 
     roomSwitch: d.roomSwitch,
     roomTemp: d.roomTemp,
   })
-  const changed = hasChanges(query, ['systemSwitch', 'roomSwitch', 'roomTemp'] as const) || query.systemMode !== Mode.OPERATION_MODE_NONE
-  if (!changed) add('NO_CHANGES', TEXT.noChanges)
+  if (!changedFields(query).length) add('NO_CHANGES', TEXT.noChanges)
 
   return issues.length ? fail() : { ok: true, query }
 }
@@ -120,7 +120,7 @@ export function describeQuery(q: WriteQuery<203>): Array<{ label: string; value:
   const sw = (v: number) => (v === SWITCH_ON ? TEXT.on : TEXT.off)
   const out: Array<{ label: string; value: string }> = []
   if (q.systemSwitch !== UNCHANGED) out.push({ label: TEXT.systemSwitch, value: sw(q.systemSwitch) })
-  if (q.systemMode !== Mode.OPERATION_MODE_NONE) out.push({ label: TEXT.systemMode, value: MODE_OPTIONS.find((o) => o.value === q.systemMode)?.label ?? String(q.systemMode) })
+  if (q.systemMode !== MODE_UNCHANGED) out.push({ label: TEXT.systemMode, value: MODE_OPTIONS.find((o) => o.value === q.systemMode)?.label ?? String(q.systemMode) })
   if (q.roomSwitch !== UNCHANGED) out.push({ label: TEXT.roomSwitch, value: sw(q.roomSwitch) })
   if (q.roomTemp !== UNCHANGED) out.push({ label: TEXT.roomTemp, value: `${q.roomTemp}${TEXT.tempUnit}` })
   return out
@@ -153,13 +153,13 @@ export const ECHO_FIELDS: readonly EchoField[] = ['systemSwitch', 'systemMode', 
  */
 export interface EchoMismatch { field: EchoField; kind: 'missing' | 'differ' | 'unreadable'; message: string }
 
-/** 本次下发改了哪些字段（-1 / 模式 0 的不算） */
+/** 本次下发改了哪些字段（-1 的不算；0 是真实值，算改了） */
 export function changedFields(q: WriteQuery<203>): EchoField[] {
-  return ECHO_FIELDS.filter((k) => (k === 'systemMode' ? q.systemMode !== Mode.OPERATION_MODE_NONE : q[k] !== UNCHANGED))
+  return ECHO_FIELDS.filter((k) => q[k] !== UNCHANGED)
 }
 
 const FIELD_LABEL: Record<EchoField, string> = { systemSwitch: TEXT.systemSwitch, systemMode: TEXT.systemMode, roomSwitch: TEXT.roomSwitch, roomTemp: TEXT.roomTemp }
-const NONE: WriteQuery<203> = { systemSwitch: UNCHANGED, systemMode: Mode.OPERATION_MODE_NONE, roomSwitch: UNCHANGED, roomTemp: UNCHANGED }
+const NONE: WriteQuery<203> = { systemSwitch: UNCHANGED, systemMode: MODE_UNCHANGED, roomSwitch: UNCHANGED, roomTemp: UNCHANGED }
 const valid = (v: number | null | undefined): v is number => typeof v === 'number' && Number.isFinite(v)
 
 /**

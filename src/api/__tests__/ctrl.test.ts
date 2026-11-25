@@ -168,7 +168,7 @@ describe('callCtrl', () => {
     setConfig({ apiBase: '/api', apiEnv: 'test' })
     const be = fakeBackend({ '/ctrl/unified-ctrls-send': () => json({ batch_id: 'b1', total: 2 }) })
     const q = buildUnifiedCtrlSet({ roomTemp: 26 })
-    expect(q).toEqual({ systemSwitch: -1, systemMode: 0, roomSwitch: -1, roomTemp: 26 })
+    expect(q).toEqual({ systemSwitch: -1, systemMode: -1, roomSwitch: -1, roomTemp: 26 })
     await expect(sendUnifiedCtrls([P1, P2, { ...P1 }], q)).resolves.toEqual({ batch_id: 'b1', total: 2 })
     const body = be.calls[0].body as { project_ids: string[]; body: string; user_id?: string }
     expect(body.project_ids).toEqual([P1.id, P2.id])
@@ -347,7 +347,7 @@ describe('写消息不依赖 proto 默认值', () => {
   it('build* 收到 null 或不传 changes 时一律按不变（-1）处理，不会落成 0', () => {
     expect(buildRoomTemperatureSet(1, { switch: null, eco: null } as never)).toMatchObject({ switch: -1, eco: -1 })
     expect(buildRoomTemperatureSet(1, undefined as never)).toMatchObject({ temperature: -1, switch: -1, endModes: [] })
-    expect(buildUnifiedCtrlSet(undefined as never)).toEqual({ systemSwitch: -1, systemMode: 0, roomSwitch: -1, roomTemp: -1 })
+    expect(buildUnifiedCtrlSet(undefined as never)).toEqual({ systemSwitch: -1, systemMode: -1, roomSwitch: -1, roomTemp: -1 })
     expect(buildRunningCtrlSet(1, 'x', undefined as never)).toMatchObject({ controlType: -1, switch: -1 })
   })
 
