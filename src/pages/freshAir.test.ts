@@ -74,7 +74,10 @@ const panel = () => screen.getByRole('region', { name: '运行设置' })
 const row = (f: string) => panel().querySelector(`[data-field="${f}"]`) as HTMLElement
 const lockOf = (f: string) => within(row(f)).queryByRole('img', { name: /不能设置/ })
 const valueOf = (f: string) => row(f).querySelector('.sv')!.textContent
-const noWrites = (b: { calls: Call[] }) => expect(b.calls.filter((c) => WRITE_ROUTES.test(c.path))).toEqual([])
+const noWrites = (b: { calls: Call[] }) => {
+  expect(b.calls.some((c) => c.url.includes(R202))).toBe(true) // 确认按 url 过滤是有效的
+  expect(b.calls.filter((c) => WRITE_ROUTES.test(c.url))).toEqual([])
+}
 
 const UNIT = (o: object = {}) => ({ id: 11, name: 'TXFS500', supplyTemp: 18.5, returnTemp: 25.5, windLevel: 2, windSpeed: 1300, dehumidifierStatus: 1, dehumidifierFreq: 48, filterLife: 30, filterLifeP: 0, filterRunning: 1200, runningMode: '除湿', runningTime: 36, switch: 1, isConnected: true, ...o })
 
