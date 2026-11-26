@@ -41,9 +41,14 @@ export interface Project {
   name: string
   /** 第一个包含它的集成项目（只用于侧栏分组展示）；判断归属用 Group.projectIds */
   groupId: string
-  /** 演示数据的城市 / 区县名；真实接口只有行政区划码（region），名称由 S6b/S7 解析，这里为空串 */
+  /** 演示数据的城市 / 区县名；真实接口只有行政区划码（region），这里为空串，名称见 area */
   city: string
   district: string
+  /**
+   * 「区域」列显示的文字：真实接口由 region 的区划码转成「市 区县」（map.ts toProject），
+   * 码查不到为「原码（未知）」；演示数据为「城市 区县」。空串表示没有设置区域
+   */
+  area: string
   kind: string
   /** 后端 online 只在 true 时出现，缺失即离线 */
   online: boolean

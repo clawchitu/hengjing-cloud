@@ -6,6 +6,7 @@ import { getApps, getCtrlProjects, getDistributors, getIntegratedProjects } from
 import { isMockMode } from '../../api/config'
 import { gatewayOf, scopeOf } from '../../api'
 import { PLATFORM_DEALER_ID, toDealer, toGroup, toProject } from './map'
+import { loadRegionNames, type RegionNames } from '../region'
 import type { Dealer, Group, Project, User } from './types'
 
 export interface OrgContext {
@@ -30,6 +31,9 @@ export interface OrgSource {
 // ---------------------------------------------------------------------------
 // mock：同步函数，结果按用户缓存，同一用户多次取到同一批对象
 
+/** 演示数据的区域文字：「城市 区县」（真实数据的格式见 regionText） */
+const mockArea = (p: { city?: string; district?: string }) => [p.city, p.district].filter(Boolean).join(' ')
+
 const viewCache = new Map<string, { dealers: Dealer[]; groups: Group[]; projects: Project[] }>()
 function mockView(user: User) {
   const key = user.username + '|' + user.role
@@ -37,7 +41,7 @@ function mockView(user: User) {
   if (!v) {
     const s = scopeOf(user)
     // 演示项目没有控制屏编号，沿用演示版的网关编号（GW-xxxxx）作控制屏编号，连接状态页与离线横幅显示它
-    const projects: Project[] = s.projects.map((p) => ({ ...p, code: p.id, controlScreenId: gatewayOf(p.id) }))
+    const projects: Project[] = s.projects.map((p) => ({ ...p, code: p.id, area: mockArea(p), controlScreenId: gatewayOf(p.id) }))
     const groups: Group[] = s.groups.map((g) => ({ ...g, code: g.id, projectIds: s.projects.filter((p) => p.groupId === g.id).map((p) => p.id) }))
     v = withMockExtra(user, { dealers: s.dealers.map((d) => ({ ...d })), groups, projects })
     viewCache.set(key, v)
@@ -68,7 +72,7 @@ function withMockExtra(user: User, v: { dealers: Dealer[]; groups: Group[]; proj
     dealers: [...v.dealers, ...(user.role === 'admin' ? x.dealers ?? [] : [])],
     groups: [...merged, ...newGroups],
     // 只追加落在本账号可见集成项目里的项目（经销商账号看不到别家的额外项目）
-    projects: [...v.projects, ...(x.projects ?? []).filter((p) => !known.has(p.id) && visible.has(p.id))],
+    projects: [...v.projects, ...(x.projects ?? []).filter((p) => !known.has(p.id) && visible.has(p.id)).map((p) => ({ ...p, area: p.area ?? mockArea(p) }))],
   }
 }
 
@@ -103,7 +107,14 @@ export const realSource: OrgSource = {
     if (dealerId === PLATFORM_DEALER_ID) return (await getIntegratedProjects({}, { signal })).map(toGroup).filter((g) => g.dealerId === PLATFORM_DEALER_ID)
     return (await getIntegratedProjects({ distributorId: dealerId }, { signal })).map(toGroup)
   },
-  projects: async (_ctx, filter, signal) => (await getCtrlProjects({ onlyOnline: filter.onlyOnline }, { signal })).map(toProject),
+  projects: async (_ctx, filter, signal) => {
+    // 区划名称表与项目列表并行加载；名称表加载失败不影响列表，区域列退回显示原码
+    const [entities, names] = await Promise.all([
+      getCtrlProjects({ onlyOnline: filter.onlyOnline }, { signal }),
+      loadRegionNames().catch((): RegionNames | null => null),
+    ])
+    return entities.map((e) => toProject(e, names))
+  },
   apps: async (_ctx, signal) => Object.fromEntries((await getApps({ signal })).filter((a) => a.id).map((a) => [a.id, a.name ?? ''])),
 }
 

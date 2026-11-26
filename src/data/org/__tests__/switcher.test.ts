@@ -6,7 +6,7 @@ import { PLATFORM_DEALER, PLATFORM_DEALER_ID } from '../map'
 import type { Dealer, Group, Project } from '../types'
 
 const P = (id: string, name: string, online = true, extra: Partial<Project> = {}): Project =>
-  ({ id, code: 'C' + id, name, groupId: '', city: '', district: '', kind: '', online, version: '', devices: 0, programCode: 1, ...extra })
+  ({ id, code: 'C' + id, name, groupId: '', city: '', district: '', area: '', kind: '', online, version: '', devices: 0, programCode: 1, ...extra })
 const G = (id: string, dealerId: string, projectIds: string[]): Group =>
   ({ id, code: id, dealerId, name: id, type: '', typeColor: 'cyan', desc: '', created: '', projectIds })
 const kxj: Dealer = { id: 'D1', name: '科希家研发有限公司', short: '科希家研发', region: '' }

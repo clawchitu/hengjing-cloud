@@ -15,9 +15,12 @@ import { projectsInGroup, projectsInGroups, whenProjectSet, useApps, useDealerPi
 import { defaultText } from '../api/errors'
 import { PROGRAMS } from '../api'
 
-/** 真实接口只有行政区划码、没有区县名：空值归到「未知区域」（Radix Select 不允许空字符串选项） */
-const UNKNOWN_AREA = '未知区域'
-const areaOf = (p: { district: string }) => p.district || UNKNOWN_AREA
+/**
+ * 区域文字（Project.area）：真实数据由区划码转成「市 区县」，查不到的是「原码（未知）」。
+ * 没有设置区域的项目，表格显示「—」，筛选里归到「未设置区域」（Radix Select 不允许空字符串选项），排在最后
+ */
+const NO_AREA = '未设置区域'
+const areaOf = (p: { area: string }) => p.area || NO_AREA
 const pctOf = (on: number, total: number) => (total ? (on / total) * 100 : 0)
 
 export default function Groups() {
@@ -75,7 +78,7 @@ export default function Groups() {
     )
   }
   const inG = projectsInGroup(g, projects)
-  const areas = ['全部区域', ...new Set(inG.map(areaOf))]
+  const areas = ['全部区域', ...new Set(inG.map((p) => p.area).filter(Boolean)), ...(inG.some((p) => !p.area) ? [NO_AREA] : [])]
   // 下拉显示和列表过滤用同一个有效值：不在当前集成项目里的区域一律按「全部区域」
   const areaV = areas.includes(area) ? area : '全部区域'
   // 同名集成项目用序号区分，不显示编码（S13 走查）
@@ -143,7 +146,7 @@ export default function Groups() {
                 {shown.map((p) => (
                   <TableRow key={p.id} className={p.id === projectId ? 'cur-row' : ''}>
                     <TableCell style={{ fontWeight: 600 }}><span className="bico"><Icon icon={faBuilding} /></span>{p.name}</TableCell>
-                    <TableCell className="num">{p.code}</TableCell><TableCell>{p.city && p.district ? <>{p.city} · {p.district}</> : p.city || p.district || UNKNOWN_AREA}</TableCell>
+                    <TableCell className="num">{p.code}</TableCell><TableCell>{p.area || '—'}</TableCell>
                     <TableCell><Badge variant={p.online ? 'green' : 'gray'} style={{ color: p.online ? undefined : 'var(--muted)' }}><span className="dot" style={{ width: 5, height: 5 }} />{p.online ? '在线' : '离线'}</Badge></TableCell>
                     <TableCell className="num">{p.version}</TableCell>
                     <TableCell><Badge variant={p.programCode === 12 ? 'purple' : 'gray'} style={{ color: p.programCode === 12 ? undefined : 'var(--muted)' }}>{p.appName || PROGRAMS[p.programCode] || '未知应用'} <span className="num">({p.programCode})</span></Badge></TableCell>
