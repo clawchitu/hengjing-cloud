@@ -11,7 +11,7 @@
 // - 读取类 Reply：控制屏把错误文案放在 #2 字段（proto 里没有这个字段，或 210 里 #2 是 name 但
 //   回复里只有 #2），见 docs/api/实测记录-1124.md。
 import { create, fromBinary, toBinary, ScalarType, type DescMessage, type MessageShape } from '@bufbuild/protobuf'
-import { base64Decode, base64Encode, BinaryReader, WireType } from '@bufbuild/protobuf/wire'
+import { base64Decode, base64Encode, BinaryReader, BinaryWriter, WireType } from '@bufbuild/protobuf/wire'
 import { getCurrentUserId } from './auth'
 import { getConfig } from './config'
 import { ApiError } from './errors'
@@ -85,8 +85,40 @@ function toPlain(v: unknown): unknown {
   return v
 }
 
+/**
+ * 值为 0 时也要显式写上线的字段（白名单，按消息全名登记顶层字段号；只能是 int32 标量）。
+ * proto3 里值为默认值 0 的标量线上省略：206 只有 switch 一个字段，关 = 0 编码后是空串，后端回「body不能为空」，
+ * 指令根本没发出去（实测记录-1125-下发 第十节 A5）。显式写出 tag + 0（0x08 0x00，base64 "CAA="）是 protobuf 合法的编码，
+ * 解码端照常读成 0。只登记 206 switch，其他消息的编码不变（201/203/204 的 -1、0 语义见下面写消息一节）。
+ */
+export const EXPLICIT_ZERO_FIELDS: Readonly<Record<string, readonly number[]>> = Object.freeze({
+  [pb.ProjectRoomSwitchSetQuerySchema.typeName]: Object.freeze([1]),
+})
+
+/** 白名单里的字段值为 0 时，在 proto3 编码后追加 tag + varint 0（字段顺序不影响解码） */
+function explicitZeros(schema: DescMessage, plain: Record<string, unknown>): Uint8Array | null {
+  const nos = EXPLICIT_ZERO_FIELDS[schema.typeName]
+  if (!nos?.length) return null
+  const w = new BinaryWriter()
+  let any = false
+  for (const no of nos) {
+    const f = schema.fields.find((x) => x.number === no)
+    if (!f || f.fieldKind !== 'scalar' || f.scalar !== ScalarType.INT32) throw new ApiError('bad_request', `显式写 0 的白名单字段不是 int32：${schema.typeName} #${no}`)
+    if (plain[f.localName] === 0) { w.tag(no, WireType.Varint).int32(0); any = true }
+  }
+  return any ? w.finish() : null
+}
+
 export function encodeMessage(schema: DescMessage, plain: object = {}): string {
-  const bytes = toBinary(schema, create(schema, toInit(schema, plain as Record<string, unknown>) as never))
+  const init = toInit(schema, plain as Record<string, unknown>)
+  let bytes = toBinary(schema, create(schema, init as never))
+  const extra = explicitZeros(schema, init)
+  if (extra) {
+    const out = new Uint8Array(bytes.length + extra.length)
+    out.set(bytes)
+    out.set(extra, bytes.length)
+    bytes = out
+  }
   return bytes.length ? base64Encode(bytes) : ''
 }
 
@@ -238,6 +270,7 @@ export function buildRunningCtrlSet(id: number, name: string, changes: Changes<2
 /**
  * 206 全部房间开关：必须明确 true 开 / false 关。0 是「全项目房间关闭」，破坏面最大，
  * 所以不做任何真假值转换：undefined、null、'false'、0/1 等非布尔值一律拒绝（值可能来自 any）。
+ * 线上：关 = "CAA="（switch 显式写 0，见 EXPLICIT_ZERO_FIELDS），开 = "CAE="；发送边界只认这两个（guard.ts BODY_206）。
  */
 export function buildProjectRoomSwitchSet(on: boolean): WriteQuery<206> {
   if (typeof on !== 'boolean') throw new ApiError('bad_request', `206 全部房间开关须明确传 true 或 false，收到：${on === null ? 'null' : typeof on}`)
@@ -260,6 +293,8 @@ export function encodeWrite(op: WriteOp, schema: DescMessage, query: object): st
     if (e instanceof ApiError) throw e
     throw new ApiError('bad_request', `写消息编码失败，未下发：${e instanceof Error ? e.message : String(e)}`, { cause: e })
   }
+  // 空 body 后端一律拒收（「body不能为空」），也说明有字段没上线：不发
+  if (!body) throw new ApiError('write_blocked', '写消息编码为空，未下发')
   assertEnumsDefined(schema, decoded)
   assertNoImplicitZero(op, decoded, explicitFieldsOf(query))
   return body

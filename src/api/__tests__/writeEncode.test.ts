@@ -4,7 +4,7 @@
 import { fromBinary, ScalarType, type DescMessage } from '@bufbuild/protobuf'
 import { base64Decode } from '@bufbuild/protobuf/wire'
 import { describe, expect, it } from 'vitest'
-import { CTRL, ENUM_UNCHANGED, MODE_UNCHANGED, WRITE_CTRL, assertEnumsDefined, buildProjectRoomSwitchSet, buildRoomTemperatureSet, buildRunningCtrlSet, buildUnifiedCtrlSet, decodeReply, encodeMessage, encodeWrite, unchangedOf, validateWriteQuery } from '../ctrl'
+import { CTRL, ENUM_UNCHANGED, EXPLICIT_ZERO_FIELDS, MODE_UNCHANGED, WRITE_CTRL, assertEnumsDefined, buildProjectRoomSwitchSet, buildRoomTemperatureSet, buildRunningCtrlSet, buildUnifiedCtrlSet, decodeReply, encodeMessage, encodeWrite, unchangedOf, validateWriteQuery } from '../ctrl'
 import * as pb from '../gen/ctrl200_pb.js'
 import { OPERATING_MODES } from '../values'
 import { buildRoomSet, buildRoomSwitch, newDraft, editDraft, resolveTempRange } from '@/features/thermostat/edit'
@@ -86,6 +86,57 @@ describe('206 ProjectRoomSwitchSetQuery 线上字节', () => {
     expect(Q206).toBe(pb.ProjectRoomSwitchSetQuerySchema)
     expect(Q206.fields.map((f) => f.localName)).toEqual(['switch'])
   })
+  it('switch 是 field 1、int32（显式写 0 的前提）', () => {
+    const f = Q206.fields.find((x) => x.localName === 'switch')!
+    expect(f.number).toBe(1)
+    expect(f.fieldKind === 'scalar' && f.scalar).toBe(ScalarType.INT32)
+  })
+  it('关 → "CAA="（0x08 0x00，switch 显式写 0，不再是空 body），开 → "CAE="；解码回来分别是 0 和 1', () => {
+    const off = encodeWrite('ctrl-206', Q206, buildProjectRoomSwitchSet(false))
+    const on = encodeWrite('ctrl-206', Q206, buildProjectRoomSwitchSet(true))
+    expect(off).toBe('CAA=')
+    expect(on).toBe('CAE=')
+    expect([...base64Decode(off)]).toEqual([0x08, 0x00])
+    expect([...base64Decode(on)]).toEqual([0x08, 0x01])
+    expect(fromBinary(Q206, base64Decode(off)).switch).toBe(0)
+    expect(fromBinary(Q206, base64Decode(on)).switch).toBe(1)
+    expect(decodeReply(Q206, off)).toEqual({ switch: 0 })
+    expect(decodeReply(Q206, on)).toEqual({ switch: 1 })
+  })
+  it('显式写 0 的白名单只有 206 switch（#1）；不是 build* 组装的 { switch: 0 } 仍按「不明确的 0」拒发', () => {
+    expect(Object.isFrozen(EXPLICIT_ZERO_FIELDS)).toBe(true)
+    expect(EXPLICIT_ZERO_FIELDS).toEqual({ [pb.ProjectRoomSwitchSetQuerySchema.typeName]: [1] })
+    expect(() => encodeWrite('ctrl-206', Q206, { switch: 0 })).toThrow(expect.objectContaining({ kind: 'write_blocked' }))
+  })
+  it('写消息编码为空一律拒发（旧的「206 关 = 空 body」路径不再存在）', () => {
+    // 借一个编码为空的真实 schema（200 的 Query 没有字段）模拟「编出来是空串」
+    const empty = pb.RoomTemperatureDataGetQuerySchema
+    expect(encodeMessage(empty, {})).toBe('')
+    expect(() => encodeWrite('ctrl-206', empty, {})).toThrow(expect.objectContaining({ kind: 'write_blocked', message: expect.stringMatching(/编码为空/) }))
+  })
+})
+
+describe('回归：201 / 203 / 204 的线上编码与修复前逐字节相同（显式写 0 只对 206 生效）', () => {
+  // 期望值由修复前的 main（b6b2857）同样的组装 + encodeWrite 生成；203 只改温度 21.5 与实测记录第九节真机请求体一致
+  const ENDS2 = ENDS.slice(0, 2)
+  const cases: Array<[string, () => string, string]> = [
+    ['201 nothing', () => encodeWrite('ctrl-201', Q201, buildRoomTemperatureSet(EQ)), 'CO659MEBFQAAgL8dAACAvyD///////////8BQP///////////wFI////////////AQ=='],
+    ['201 temp', () => encodeWrite('ctrl-201', Q201, buildRoomTemperatureSet(EQ, { temperature: 24.5 })), 'CO659MEBFQAAxEEdAACAvyD///////////8BQP///////////wFI////////////AQ=='],
+    ['201 switch0', () => encodeWrite('ctrl-201', Q201, buildRoomTemperatureSet(EQ, { switch: 0 })), 'CO659MEBFQAAgL8dAACAvyD///////////8BQP///////////wE='],
+    ['201 eco0', () => encodeWrite('ctrl-201', Q201, buildRoomTemperatureSet(EQ, { eco: 0 })), 'CO659MEBFQAAgL8dAACAvyD///////////8BSP///////////wE='],
+    ['201 ends', () => encodeWrite('ctrl-201', Q201, buildRoomTemperatureSet(EQ, { temperature: 25, endModes: ENDS2 })), 'CO659MEBFQAAyEEdAACAvyD///////////8BQP///////////wFI////////////AVIOCgbpo47nm5gYASABKAFSDAoG5Zyw5Ya3EAMgAQ=='],
+    ['203 nothing', () => encodeWrite('ctrl-203', Q203, buildUnifiedCtrlSet()), 'CP///////////wEY////////////ASUAAIC/'],
+    ['203 roomSwitch1', () => encodeWrite('ctrl-203', Q203, buildUnifiedCtrlSet({ roomSwitch: 1 })), 'CP///////////wEYASUAAIC/'],
+    ['203 roomSwitch0', () => encodeWrite('ctrl-203', Q203, buildUnifiedCtrlSet({ roomSwitch: 0 })), 'CP///////////wElAACAvw=='],
+    ['203 systemSwitch0', () => encodeWrite('ctrl-203', Q203, buildUnifiedCtrlSet({ systemSwitch: 0 })), 'GP///////////wElAACAvw=='],
+    ['203 mode4', () => encodeWrite('ctrl-203', Q203, buildUnifiedCtrlSet({ systemMode: 4 })), 'CP///////////wEQBBj///////////8BJQAAgL8='],
+    ['203 temp21.5', () => encodeWrite('unified-ctrls-send', Q203, buildUnifiedCtrlSet({ roomTemp: 21.5 })), 'CP///////////wEY////////////ASUAAKxB'],
+    ['204 nothing', () => encodeWrite('ctrl-204', Q204, buildRunningCtrlSet(1, '新风1')), 'CAESB+aWsOmjjjEY////////////ASUAAIC/LQAAgL8w////////////ATj///////////8B'],
+    ['204 switch0', () => encodeWrite('ctrl-204', Q204, buildRunningCtrlSet(1, '新风1', { switch: 0 })), 'CAESB+aWsOmjjjEY////////////ASUAAIC/LQAAgL8w////////////AQ=='],
+    ['204 ctype0', () => encodeWrite('ctrl-204', Q204, buildRunningCtrlSet(1, '新风1', { controlType: 0 })), 'CAESB+aWsOmjjjElAACAvy0AAIC/MP///////////wE4////////////AQ=='],
+    ['204 wind2', () => encodeWrite('ctrl-204', Q204, buildRunningCtrlSet(1, '新风1', { windSpeed: 2 })), 'CAESB+aWsOmjjjEY////////////ASUAAIC/LQAAgL8wAjj///////////8B'],
+  ]
+  for (const [name, enc, want] of cases) it(name, () => expect(enc()).toBe(want))
 })
 
 describe('页面层（S9 房间卡片）组装后的 201 线上字节', () => {

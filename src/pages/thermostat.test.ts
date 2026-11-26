@@ -805,6 +805,29 @@ describe('房间开关（201 switch）与全部开关（206）', () => {
     await waitFor(() => expect(toasts()).toContain('已生效：全部开启（2 个房间）'))
   })
 
+  it('全部关闭：确认后发 206，请求体是 "CAA="（switch 显式写 0，不是空 body），回读全关 → 已生效', async () => {
+    const be = backend({ '/ctrl/project-room-switch-set': ok206 })
+    await openRooms()
+    fireEvent.click(screen.getByRole('button', { name: '全部关闭' }))
+    await confirmOk()
+    await waitFor(() => expect(writes(be)).toHaveLength(1))
+    const w = writes(be)[0]
+    expect(w.url).toBe('/api/ctrl/project-room-switch-set')
+    expect((w.body as { project_id: string }).project_id).toBe(P1.id)
+    expect((w.body as { body: string }).body).toBe('CAA=')
+    expect(decodeReply(pb.ProjectRoomSwitchSetQuerySchema, (w.body as { body: string }).body)).toEqual({ switch: 0 })
+    await waitFor(() => expect(toasts()).toContain('已生效：全部关闭（2 个房间）'))
+  })
+
+  it('全部开启：请求体是 "CAE="', async () => {
+    const be = backend({ '/ctrl/project-room-switch-set': ok206 })
+    await openRooms()
+    fireEvent.click(screen.getByRole('button', { name: '全部开启' }))
+    await confirmOk()
+    await waitFor(() => expect(writes(be)).toHaveLength(1))
+    expect((writes(be)[0].body as { body: string }).body).toBe('CAE=')
+  })
+
   it('全部关闭失败（success=false）：提示失败；504：结果未知', async () => {
     let mode: 'fail' | 'timeout' = 'fail'
     backend({ '/ctrl/project-room-switch-set': () => (mode === 'fail' ? json({ body: encodeMessage(pb.ProjectRoomSwitchSetReplySchema, { success: false, msg: '控制屏拒绝' }) }) : json({ code: 4, message: 'x' }, 504)) })

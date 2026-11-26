@@ -450,6 +450,31 @@ describe('发送边界：直接调 requestWrite 也绕不过枚举检查', () =>
     await expect(requestWrite('ctrl-203', [P1], { user_id: 1, body: ok } as never)).rejects.toMatchObject({ kind: 'write_blocked' })
     expect(be.calls).toHaveLength(0)
   })
+  it('206：只认 "CAA="（关）和 "CAE="（开）；空 body（旧的「关」编码，后端回「body不能为空」）和其他写法一律拒发', async () => {
+    const be = fakeBackend(routes)
+    // 同样解成 switch=0/1 的非标准写法（重复字段、多余未知字段、-1）也不放
+    const other = ['', 'CAB/', 'CP///////////wE=', 'CAAIAA==', 'CAEQAQ==', 'CAI=']
+    for (const body of other) {
+      await expect(requestWrite('ctrl-206', [P1], { user_id: 'u1', body }), JSON.stringify(body)).rejects.toMatchObject({ kind: 'write_blocked' })
+    }
+    expect(be.calls).toHaveLength(0)
+    await requestWrite('ctrl-206', [P1], { user_id: 'u1', body: 'CAA=' })
+    await requestWrite('ctrl-206', [P1], { user_id: 'u1', body: 'CAE=' })
+    expect(be.calls.map((c) => (c.body as { body: string }).body)).toEqual(['CAA=', 'CAE='])
+  })
+  it('任何写接口的空 body 都在发送边界拒发', async () => {
+    const be = fakeBackend(routes)
+    await expect(requestWrite('ctrl-203', [P1], { user_id: 'u1', body: '' })).rejects.toMatchObject({ kind: 'write_blocked', message: expect.stringMatching(/为空/) })
+    await expect(requestWrite('unified-ctrls-send', [P1], { body: '' })).rejects.toMatchObject({ kind: 'write_blocked', message: expect.stringMatching(/为空/) })
+    await expect(requestWrite('ctrl-206', [P1], { user_id: 'u1', body: '' })).rejects.toMatchObject({ kind: 'write_blocked', message: expect.stringMatching(/为空/) })
+    expect(be.calls).toHaveLength(0)
+  })
+  it('writeCtrl(206) 关 / 开：请求体分别是 "CAA=" / "CAE="', async () => {
+    const be = fakeBackend(routes)
+    await writeCtrl(206, P1, buildProjectRoomSwitchSet(false))
+    await writeCtrl(206, P1, buildProjectRoomSwitchSet(true))
+    expect(be.calls.map((c) => (c.body as { body: string }).body)).toEqual(['CAA=', 'CAE='])
+  })
   it('body 缺失、不是字符串、解不出来 → write_blocked，不发请求', async () => {
     const be = fakeBackend(routes)
     for (const b of [{}, { body: 1 }, { body: null }, { body: '////' }]) {
