@@ -183,6 +183,9 @@ describe('isStoredQuery203（页面存下的锁引用）', () => {
     expect(isStoredQuery203(q(100))).toBe(true)
     expect(isStoredQuery203(q(-1))).toBe(false)
     expect(isStoredQuery203(q(7))).toBe(false)
+    // 11/26 停用的 9 种（曾经可下发，旧标签页里可能存着）：锁引用丢掉，行照常显示
+    for (const m of [6, 8, 9, 10, 11, 12, 13, 14, 15]) expect(isStoredQuery203(q(m)), String(m)).toBe(false)
+    for (const m of [2, 3, 4, 5]) expect(isStoredQuery203(q(m)), String(m)).toBe(true)
     expect(isStoredQuery203(q('0'))).toBe(false)
     expect(isStoredQuery203({ systemSwitch: -1, systemMode: 0, roomSwitch: 1 })).toBe(false)
     expect(isStoredQuery203(null)).toBe(false)

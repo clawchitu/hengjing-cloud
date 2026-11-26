@@ -1,4 +1,4 @@
-import { hasRooms as realHasRooms } from '../data/org/capabilities'
+import { hasRooms as realHasRooms, isStandalone as realIsStandalone } from '../data/org/capabilities'
 // Org structure: 经销商 (dealer) → 集成项目 (integration group) → 项目 (project).
 // A dealer account only sees its own 集成项目; the admin account sees every dealer's.
 
@@ -106,6 +106,6 @@ export const projects: Project[] = [
 ]
 
 export const dealerOf = (groupId: string) => groups.find((g) => g.id === groupId)?.dealerId
-export const isStandalone = (p: Pick<Project, 'programCode'>) => p.programCode === FRESH_AIR_STANDALONE
+export const isStandalone = (p: Pick<Project, 'programCode'>) => realIsStandalone(p)
 /** 有房间温控：与真实口径同一来源（capabilities.ts：8、12 没有房间） */
 export const hasRooms = (p: Pick<Project, 'programCode'>) => realHasRooms(p)
