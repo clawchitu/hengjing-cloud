@@ -6,6 +6,7 @@ import { base64Decode } from '@bufbuild/protobuf/wire'
 import { describe, expect, it } from 'vitest'
 import { CTRL, ENUM_UNCHANGED, MODE_UNCHANGED, WRITE_CTRL, assertEnumsDefined, buildProjectRoomSwitchSet, buildRoomTemperatureSet, buildRunningCtrlSet, buildUnifiedCtrlSet, decodeReply, encodeMessage, encodeWrite, unchangedOf, validateWriteQuery } from '../ctrl'
 import * as pb from '../gen/ctrl200_pb.js'
+import { OPERATING_MODES } from '../values'
 import { buildRoomSet, buildRoomSwitch, newDraft, editDraft, resolveTempRange } from '@/features/thermostat/edit'
 import { toRoomView } from '@/features/thermostat/model'
 import { validateUnified } from '@/features/unified/rules'
@@ -293,8 +294,8 @@ describe('通用：所有写消息的枚举字段，线上编码值都必须是�
     203: [
       ['什么都不改', buildUnifiedCtrlSet()], ['只开房间', buildUnifiedCtrlSet({ roomSwitch: 1 })], ['只改温度', buildUnifiedCtrlSet({ roomTemp: 24 })],
       ['只关系统', buildUnifiedCtrlSet({ systemSwitch: 0 })],
-      ...Object.values(pb.UnifiedCtrlSetQuery_OperatingMode).filter((v): v is number => typeof v === 'number')
-        .map((v) => [`运行模式 ${v}`, buildUnifiedCtrlSet({ systemMode: v })] as [string, object]),
+      // 可下发的运行模式只有 5 种 + 0（不变）（后端 11/26 08:34）；其余枚举值见下面「已停用的 9 种」
+      ...[MODE_UNCHANGED, ...OPERATING_MODES].map((v) => [`运行模式 ${v}`, buildUnifiedCtrlSet({ systemMode: v })] as [string, object]),
     ],
     204: [['什么都不改', buildRunningCtrlSet(DEV, '新风1')], ['改风速', buildRunningCtrlSet(DEV, '新风1', { windSpeed: 2 })]],
     206: [['开', buildProjectRoomSwitchSet(true)], ['关', buildProjectRoomSwitchSet(false)]],
@@ -323,6 +324,15 @@ describe('通用：所有写消息的枚举字段，线上编码值都必须是�
       expect(() => encodeWrite('ctrl-203', Q203, buildUnifiedCtrlSet({ systemMode: v as never })), String(v)).toThrow(expect.objectContaining({ kind: 'write_blocked' }))
       expect(() => encodeWrite('unified-ctrls-send', Q203, buildUnifiedCtrlSet({ systemMode: v as never, roomSwitch: 1 })), String(v)).toThrow(expect.objectContaining({ kind: 'write_blocked' }))
       expect(() => assertEnumsDefined(Q203, { systemSwitch: -1, systemMode: v, roomSwitch: -1, roomTemp: -1 }), String(v)).toThrow(/不在枚举/)
+    }
+  })
+  it('已停用的 9 种运行模式（6、8–15）虽在枚举里，编码前一律拒发 write_blocked（203 与 unified-ctrls-send 同一道检查）', () => {
+    const all = Object.values(pb.UnifiedCtrlSetQuery_OperatingMode).filter((v): v is number => typeof v === 'number')
+    const retired = all.filter((v) => v !== MODE_UNCHANGED && !OPERATING_MODES.has(v))
+    expect(retired.sort((a, b) => a - b)).toEqual([6, 8, 9, 10, 11, 12, 13, 14, 15])
+    for (const v of retired) {
+      expect(() => encodeWrite('ctrl-203', Q203, buildUnifiedCtrlSet({ systemMode: v })), String(v)).toThrow(expect.objectContaining({ kind: 'write_blocked' }))
+      expect(() => encodeWrite('unified-ctrls-send', Q203, buildUnifiedCtrlSet({ systemMode: v, roomSwitch: 1 })), String(v)).toThrow(expect.objectContaining({ kind: 'write_blocked' }))
     }
   })
   it('没登记「不变」值的枚举不进底板（不猜），缺字段由 validateWriteQuery 拒发', () => {

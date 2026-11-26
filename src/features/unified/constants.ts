@@ -13,42 +13,18 @@ export const TEMP_STEP = 0.5
 export interface TempRange { min: number; max: number; step: number }
 export const DEFAULT_TEMP_RANGE: Readonly<TempRange> = Object.freeze({ min: TEMP_MIN, max: TEMP_MAX, step: TEMP_STEP })
 
-/** 应用类型（项目的 app_code） */
-export const APP_CODE = {
-  /** 通用版：温度设定可用 */
-  GENERAL: 1,
-  /** 空气系统单机版：温度设定不可用 */
-  AIR_STANDALONE: 8,
-  /** 独立空气系统：温度设定不可用，房间开关仍可用（Q6①） */
-  AIR_INDEPENDENT: 12,
-} as const
-
-/** 温度设定可用的 app_code（白名单；没列出的一律不可用，宁可少开不误开） */
-export const TEMP_ENABLED_APP_CODES: readonly number[] = [APP_CODE.GENERAL]
-/** 明确禁用温度设定的 app_code（文案不同于「未知应用类型」） */
-export const TEMP_DISABLED_APP_CODES: readonly number[] = [APP_CODE.AIR_STANDALONE, APP_CODE.AIR_INDEPENDENT]
-
 /** 开关取值（203 的 system_switch / room_switch）：-1 不变由组装函数填，这里只给可选值 */
 export const SWITCH_ON = 1
 export const SWITCH_OFF = 0
 export type SwitchValue = typeof SWITCH_ON | typeof SWITCH_OFF
 
-/** 运行模式选项（不含 0「不变」）。Q6③ 还没答复开放哪些，先列全部 14 个。
- * 名称去掉末尾「模式」二字，按钮里不换行（S13 走查 C）；13 是「冷热过渡」，proto 注释写的「过度」是错字（S13 走查 P8） */
+/** 运行模式选项（不含 0「不变」）：固定 5 种，顺序和名称按后端 11/26 08:34 答复「夏季、冬季、除湿、通风、自动」；其余 9 种不再显示。
+ * 按钮里不换行（S13 走查 C）；可下发集合以 src/api/values.ts 的 OPERATING_MODES 为准，两者一致由测试钉住 */
 export const MODE_OPTIONS: ReadonlyArray<{ value: Mode; label: string }> = [
   { value: Mode.OPERATION_MODE_SUMMER, label: '夏季' },
   { value: Mode.OPERATION_MODE_WINTER, label: '冬季' },
-  { value: Mode.OPERATION_MODE_VENTILATION, label: '通风' },
   { value: Mode.OPERATION_MODE_DEHUMIDIFY, label: '除湿' },
-  { value: Mode.OPERATION_MODE_FREE_COOLING, label: '免费制冷' },
-  { value: Mode.OPERATION_MODE_HEATING_DEHUMIDIFY, label: '制热除湿' },
-  { value: Mode.OPERATION_MODE_HEATING, label: '供热' },
-  { value: Mode.OPERATION_MODE_HEATING_HUMIDIFY, label: '供热加湿' },
-  { value: Mode.OPERATION_MODE_HUMIDIFY, label: '加湿' },
-  { value: Mode.OPERATION_MODE_REFRIGERATION, label: '供冷' },
-  { value: Mode.OPERATION_MODE_REFRIGERATION_HUMIDIFY, label: '供冷加湿' },
-  { value: Mode.OPERATION_MODE_REFRIGERATION_DEHUMIDIFY, label: '供冷除湿' },
-  { value: Mode.OPERATION_MODE_REFRIGERATION_HEATING, label: '冷热过渡' },
+  { value: Mode.OPERATION_MODE_VENTILATION, label: '通风' },
   { value: Mode.OPERATION_MODE_AUTO, label: '自动' },
 ]
 

@@ -12,16 +12,16 @@ describe('常量', () => {
     expect(DEFAULT_TEMP_RANGE).toEqual({ min: 16, max: 30, step: 0.5 })
     expect(Object.isFrozen(DEFAULT_TEMP_RANGE)).toBe(true)
   })
-  it('运行模式 14 个，不含 0（不变）', () => {
-    expect(MODE_OPTIONS).toHaveLength(14)
+  it('运行模式固定 5 种：夏季 2、冬季 3、除湿 5、通风 4、自动 100，不含 0（不变）（后端 11/26 08:34）', () => {
+    expect(MODE_OPTIONS.map((o) => [o.label, o.value])).toEqual([['夏季', 2], ['冬季', 3], ['除湿', 5], ['通风', 4], ['自动', 100]])
     expect(MODE_OPTIONS.map((o) => o.value)).not.toContain(0)
   })
 })
 
 describe('app_code 规则', () => {
-  it('1 可设温度', () => expect(tempAvailability(1)).toEqual({ enabled: true }))
+  it.each([1, 4, 6, 7, 9, 11, 1000])('黑名单（负责人 11/26 08:47）：%s 和 1 一样可设温度', (code) => expect(tempAvailability(code)).toEqual({ enabled: true }))
   it.each([12, 8])('%s 禁用温度', (code) => expect(tempAvailability(code)).toEqual({ enabled: false, reason: TEXT.tempDisabledByApp }))
-  it.each([4, 7, 9, 1000, 0, NaN, null, undefined])('其他或缺失（%s）按未知处理、禁用', (code) => {
+  it.each([0, NaN, -1, 1.5, null, undefined])('缺失或无效（%s）按未知处理、禁用', (code) => {
     expect(tempAvailability(code as number)).toEqual({ enabled: false, reason: TEXT.tempDisabledUnknownApp })
   })
   it.each([12, 8])('app %s：带温度的下发被拒，开关和模式照常可下发', (appCode) => {
@@ -183,6 +183,9 @@ describe('isStoredQuery203（页面存下的锁引用）', () => {
     expect(isStoredQuery203(q(100))).toBe(true)
     expect(isStoredQuery203(q(-1))).toBe(false)
     expect(isStoredQuery203(q(7))).toBe(false)
+    // 11/26 停用的 9 种（曾经可下发，旧标签页里可能存着）：锁引用丢掉，行照常显示
+    for (const m of [6, 8, 9, 10, 11, 12, 13, 14, 15]) expect(isStoredQuery203(q(m)), String(m)).toBe(false)
+    for (const m of [2, 3, 4, 5]) expect(isStoredQuery203(q(m)), String(m)).toBe(true)
     expect(isStoredQuery203(q('0'))).toBe(false)
     expect(isStoredQuery203({ systemSwitch: -1, systemMode: 0, roomSwitch: 1 })).toBe(false)
     expect(isStoredQuery203(null)).toBe(false)

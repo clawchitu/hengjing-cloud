@@ -42,8 +42,10 @@ const jwt = (sub: string, n = 1) => `h.${btoa(JSON.stringify({ sub, n }))}.s`
 const P1 = { id: '66cfd7959fb60d63c917fd0a', code: '240829001', name: '测试项目0829', app_code: '1', app_name: '通用版', online: true, control_screen_id: 'SCREEN-T' }
 const P2 = { id: 'p2', code: '261124009', name: '另一个项目', app_code: '1', app_name: '通用版', online: true, control_screen_id: 'SCREEN-T' }
 const P12 = { id: 'p12', code: '260911001', name: '独立空气系统测试', app_code: '12', app_name: '独立空气系统', online: true }
+const P4 = { id: 'p4', code: '230202001', name: '水舒适测试', app_code: '4', app_name: '水舒适', online: true, control_screen_id: 'SCREEN-4' }
+const P8 = { id: 'p8', code: '230101001', name: '空气单机测试', app_code: '8', app_name: '空气系统单机版', online: true }
 const POFF = { id: 'poff', code: '221031001', name: '科希家办公室', app_code: '1', app_name: '通用版' }
-const GROUPS = [{ id: 'g1', code: '2', name: '五恒集成项目', distributor_id: 'D1', project_ids: [P1.id, P2.id, P12.id, POFF.id] }]
+const GROUPS = [{ id: 'g1', code: '2', name: '五恒集成项目', distributor_id: 'D1', project_ids: [P1.id, P2.id, P12.id, P8.id, P4.id, POFF.id] }]
 
 /** 现有用例按房间开关可信写（roomSwitchReported = true）；开关未上报的情况单独一组 */
 const SW = { roomSwitchReported: true }
@@ -84,7 +86,7 @@ function backend(routes: Record<string, Handler> = {}) {
   return fakeBackend({
     '/auth/login': () => json({ access_token: jwt('admin-1'), refresh_token: 'R1', expires_in: 7200 }),
     '/me': () => json({ user_entity: { id: 'admin-1', name: '测试' }, permission_paths: ['/v1/ctrl/device-summary-get'] }),
-    '/ctrl/projects': () => json({ project_entities: [P1, P2, P12, POFF] }),
+    '/ctrl/projects': () => json({ project_entities: [P1, P2, P12, P8, P4, POFF] }),
     // 下发前的控制屏实时预检（ctrl 205）：默认在线
     '/ctrl/device-summary-get': () => json({ body: '' }),
     '/integrated-projects': () => json({ entities: GROUPS }),
@@ -255,6 +257,27 @@ describe('读取（ctrl 200）', () => {
     await screen.findByText('该项目无房间温控面板')
     await flush(50)
     expect(be.callsTo('/ctrl/room-temperature-data-get')).toHaveLength(0)
+  })
+
+  it('app_code 8 按 12 处理（后端 11/26）：显示「该项目无房间温控面板」，不读 ctrl 200、不发 201；不提新风运行设置（只有 12 有）', async () => {
+    const be = backend()
+    await open(P8)
+    await screen.findByText('该项目无房间温控面板')
+    await flush(50)
+    expect(be.callsTo('/ctrl/room-temperature-data-get')).toHaveLength(0)
+    expect(be.callsTo('/ctrl/room-temperature-set')).toHaveLength(0)
+    const ph = document.querySelector('.placeholder')!.textContent!
+    expect(ph).toContain('不包含房间温控面板')
+    expect(ph).not.toMatch(/运行设置|新风单机版/)
+    expect(screen.queryByRole('button', { name: '下发' })).toBeNull()
+  })
+
+  it('app_code 4 等其他类型照常显示温控面板、读 ctrl 200（只有 8、12 无面板，负责人 11/26 08:47）', async () => {
+    const be = backend()
+    await open(P4)
+    await screen.findByText('客厅', { selector: '.room-name' })
+    expect(screen.queryByText('该项目无房间温控面板')).toBeNull()
+    expect(be.callsTo('/ctrl/room-temperature-data-get').length).toBeGreaterThan(0)
   })
 
   it('项目离线：设备页不挂载（Layout 空态，S11），不读 ctrl 200', async () => {
