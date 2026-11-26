@@ -10,7 +10,8 @@ import { Toaster } from '@/components/ui/sonner'
 import { ConfirmControllerContext as Ctl, createConfirmController, routeScope, showToast, useConfirm, type ConfirmOptions, type ExpireReason } from './feedback'
 import type { Project, Role, Scope, User } from '../api'
 import type { ApiError } from '../api/errors'
-import type { SessionInfo } from '../api/session'
+import { IDLE_LOGOUT_TEXT } from '../api/idle'
+import { isIdleLogout, type SessionInfo } from '../api/session'
 import { can, getSessionView, logout, mockSignIn, useSession, useSessionBoot } from '../data/session'
 import { useCurrentProject, useOrgScope, useResetOnAccountChange, type LoadStatus, type SetProjectResult } from '../data/org'
 import { getStoredProjectId } from '../data/org/current'
@@ -128,9 +129,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
   useState(() => { registerAllVerifiers(qc); return null })
   const sess = useSession()
   const prevAuthed = useRef(sess.authed)
+  const prevReason = useRef(sess.reason)
   useEffect(() => {
+    const anon = !sess.authed && !sess.authLoading
+    // 无操作超时（idle.ts）：运行中超时、别的标签页超时、启动时（Chrome 恢复会话、刷新）发现超时，都提示一次
+    if (anon && isIdleLogout(sess.reason)) { if (sess.reason !== prevReason.current) showToast(IDLE_LOGOUT_TEXT, true) }
     // 已登录 → 被动变成未登录（续期失败、令牌失效）时提示一次；主动退出不带 reason
-    if (prevAuthed.current && !sess.authed && !sess.authLoading && sess.reason?.kind === 'unauthenticated') showToast('登录已过期，请重新登录', true)
+    else if (prevAuthed.current && anon && sess.reason?.kind === 'unauthenticated') showToast('登录已过期，请重新登录', true)
+    prevReason.current = sess.reason
     // 登出、会话失效、换账号后不能留着确认弹窗（只关所属会话已过期的请求）
     ctl.cancelStale()
     prevAuthed.current = sess.authed

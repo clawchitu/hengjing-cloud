@@ -30,7 +30,7 @@ export async function login(mobile: string, password: string, opts: { store?: bo
     auth: false,
     body: { mobile, password, isdp: true },
   })
-  const t = tokensFromResponse(r)
+  const t = { ...tokensFromResponse(r), loginAt: Date.now() }
   // store=false：由调用方确认本次登录仍然有效后再写（session.ts）
   if (opts.store !== false) writeTokens(t)
   return t

@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { writeLastActivity } from '../idle'
 import { setConfig } from '../config'
 import { __resetHttpForTests, onSessionExpired, refreshSession, request, requestWrite, WRITE_ACCOUNT_TEXT, WRITE_AUTH_TEXT, WRITE_LOGIN_ABNORMAL_TEXT, WRITE_CANCELLED_TEXT, WRITE_OFFLINE_TEXT, WRITE_RECHECK_TEXT } from '../http'
 import { clearTokens, readTokens, writeTokens } from '../tokens'
@@ -23,7 +24,8 @@ function rotatingRefresh(delayMs = 5, mk: (gen: number) => string = (g) => `A${g
   }
 }
 
-beforeEach(() => { setConfig({ apiBase: '/api' }); __resetHttpForTests(); clearTokens() })
+// 刚有过操作（无操作超时另见 idle.test.ts）
+beforeEach(() => { setConfig({ apiBase: '/api' }); __resetHttpForTests(); clearTokens(); writeLastActivity() })
 afterEach(() => { vi.unstubAllGlobals(); vi.useRealTimers() })
 
 describe('请求封装', () => {
@@ -224,7 +226,7 @@ describe('写请求：不重放、发送前同步复核（S12b）', () => {
 
   it('beforeSend 在令牌续期完成之后才执行：续期期间页面卸载 / 项目离线 → 不发', async () => {
     for (const what of ['卸载', '离线']) {
-      __resetHttpForTests(); clearTokens()
+      __resetHttpForTests(); clearTokens(); writeLastActivity()
       login(J(1), 'R1', 10_000) // 快过期，要先续期
       let release!: () => void
       const gate = new Promise<void>((r) => { release = r })
@@ -287,7 +289,7 @@ describe('写请求：不重放、发送前同步复核（S12b）', () => {
 
   it('令牌解析不出 sub（发起时或续期后）：一律不发，提示「登录状态异常，请重新登录后下发」，按未执行（本地拦截、无 status）', async () => {
     for (const [what, start, next] of [['发起时', 'A1', J(2)], ['续期后', J(1), 'A2']] as const) {
-      __resetHttpForTests(); clearTokens()
+      __resetHttpForTests(); clearTokens(); writeLastActivity()
       writeTokens({ accessToken: start, refreshToken: 'R1', expiresAt: Date.now() + 10_000 })
       const be = fakeBackend({ [route]: () => json({ body: '' }), '/auth/refresh': () => json({ access_token: next, refresh_token: 'R2', expires_in: 7200 }) })
       const beforeSend = vi.fn(() => true)

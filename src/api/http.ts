@@ -10,6 +10,7 @@
 // 令牌存 sessionStorage，各标签页各存一份（新开的标签页从已登录的标签页要来同一份），所以续期成功后
 // 用 BroadcastChannel 把「旧 refresh → 新令牌」告诉其他标签页（sessionChannel.ts），还持有旧值的标签页
 // 直接换上新令牌。广播发出后再占住锁一小会儿（ROTATION_SETTLE_MS），让排队的标签页先收到广播再拿锁。
+// 续期前先查无操作超时（idle.ts）：已超时就不续期，交给 session.ts 退出。
 //
 // 写接口只能走 requestWrite()（先过 guard.ts 防护、不重试、超时/断网提示结果未知）；
 // request() 遇到写接口路径直接拒绝。写请求不走上面的「未认证 → 续期 → 重放」：发送前先确保令牌有效，
@@ -17,6 +18,7 @@
 import { getConfig } from './config'
 import { ApiError, errorFromResponse, errorFromThrown } from './errors'
 import { assertWriteAllowed, assertWriteBodyEnums, isNonCanonicalPath, isWritePath, WRITE_ROUTES, type WriteOp, type WriteProject } from './guard'
+import { __resetIdleForTests, IDLE_LOGOUT_TEXT, isIdleExpired, notifyIdleExpired } from './idle'
 import { __resetSessionChannelForTests, hasSessionChannel, postSession, type SessionMessage } from './sessionChannel'
 import { clearTokens, isTokens, jwtSub, readTokens, tokensFromResponse, writeTokens, type Tokens } from './tokens'
 
@@ -145,6 +147,12 @@ let releaseHold: (() => void) | null = null
 /** 刷新令牌。页内并发调用共用同一个请求，多标签页之间串行。失败时清掉登录态并通知过期 */
 export function refreshSession(): Promise<Tokens> {
   if (inflight) return inflight
+  // 无操作超时（idle.ts）：不续期，直接退出。退出由 session.ts 处理；没接上 session.ts（单独测 http）时按过期清掉
+  if (isIdleExpired(readTokens())) {
+    const err = new ApiError('unauthenticated', IDLE_LOGOUT_TEXT)
+    if (!notifyIdleExpired()) expireSession(err)
+    return Promise.reject(err)
+  }
   const seen = readTokens()?.refreshToken
   let rotated = false
   inflight = withRefreshLock(async () => {
@@ -155,7 +163,8 @@ export function refreshSession(): Promise<Tokens> {
     try {
       const r = await send<{ access_token?: string; refresh_token?: string; expires_in?: number }>(
         '/auth/refresh', { body: { refresh_token: cur.refreshToken } }, cur.accessToken)
-      const next = tokensFromResponse(r)
+      // 续期沿用登录时刻（无操作超时按它判断「最后操作早于登录」）
+      const next: Tokens = cur.loginAt === undefined ? tokensFromResponse(r) : { ...tokensFromResponse(r), loginAt: cur.loginAt }
       // 刷新途中退出或重新登录了：不能用旧会话的结果覆盖新会话
       const now = readTokens()
       if (!now || now.refreshToken !== cur.refreshToken) {
@@ -361,4 +370,5 @@ export function __resetHttpForTests() {
   listeners.clear()
   releaseHold?.()
   __resetSessionChannelForTests()
+  __resetIdleForTests()
 }

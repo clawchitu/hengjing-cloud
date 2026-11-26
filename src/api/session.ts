@@ -13,9 +13,12 @@
 //   别的标签页登录 → 已登录或恢复中的标签页换上新令牌（同一账号的 refresh_token 只有最新的有效），换了账号
 //   （JWT 的 sub 变了）→ 回到 loading 重新取 /me，期间不渲染页面，避免「旧用户的身份 + 新用户的令牌」。
 //   在登录页（anon）的标签页不因别处登录而自动登录。
+// - 无操作超时（idle.ts）：启动和恢复时、运行中每分钟、切回标签页和网络恢复时、续期前、记录操作前检查；超时 →
+//   清令牌、尽力调 invalidate、广播退出（reason: 'idle'），转为 anon，reason 文案「长时间未操作，请重新登录」。
 import { can as matchPath, isDealer, logout, login, me, setCurrentUserId, type MeUser } from './auth'
 import { ApiError } from './errors'
 import { adoptRotation, onSessionExpired, refreshSession, REFRESH_LEEWAY_MS } from './http'
+import { ACTIVITY_EVENTS, IDLE_CHECK_MS, IDLE_LOGOUT_TEXT, isIdleExpired, onIdleExpired, recordActivity, writeLastActivity } from './idle'
 import { hasSessionChannel, onSessionMessage, postSession, type SessionMessage } from './sessionChannel'
 import { clearTokens, isTokens, jwtSub, purgeLegacyTokens, readTokens, writeTokens, type Tokens } from './tokens'
 
@@ -44,12 +47,41 @@ function set(next: SessionState) {
   state = next
   if (next.status !== 'authed') lastSub = null
   schedule()
+  scheduleIdleCheck()
   for (const fn of subs) fn(state)
 }
 function toAnon(reason?: ApiError) {
   ++gen
   setCurrentUserId('')
   set({ status: 'anon', info: null, reason })
+}
+
+/** 无操作超时退出的原因（页面据此提示「长时间未操作，请重新登录」） */
+export const idleError = () => new ApiError('unauthenticated', IDLE_LOGOUT_TEXT)
+export const isIdleLogout = (e: unknown) => e instanceof ApiError && e.kind === 'unauthenticated' && e.message === IDLE_LOGOUT_TEXT
+
+/**
+ * 无操作超时退出：清令牌、尽力调 invalidate（失败不管）、通知别的标签页、转为 anon。
+ * force：已经是 anon 也重新通知一次（启动时用，让登录页看到原因）；否则已是 anon 时不动状态，不打断本页正在进行的登录
+ */
+function expireIdle(force = false) {
+  const done = logout() // 同步部分先取出令牌并清掉本地
+  if (force || state.status !== 'anon') toAnon(idleError())
+  postSession({ type: 'logout', reason: 'idle' })
+  void done
+}
+
+/** 已登录且已超时 → 退出，返回 true */
+function checkIdle(): boolean {
+  if (state.status !== 'authed' || !isIdleExpired(readTokens())) return false
+  expireIdle()
+  return true
+}
+
+let idleTimer: ReturnType<typeof setInterval> | null = null
+function scheduleIdleCheck() {
+  if (state.status === 'authed') { if (!idleTimer) idleTimer = setInterval(checkIdle, IDLE_CHECK_MS) }
+  else if (idleTimer) { clearInterval(idleTimer); idleTimer = null }
 }
 
 export const getSession = () => state
@@ -88,6 +120,7 @@ export async function signIn(mobile: string, password: string, _legacyRemember?:
     const info = await fetchMe(t.accessToken)
     // 登录途中退出了、或又发起了一次登录 / 恢复：本次结果作废（令牌还没写，不会覆盖别的会话）
     if (g !== gen) throw new ApiError('aborted', '登录已取消')
+    writeLastActivity() // 先于令牌写：别的检查不会看到「有令牌、没有操作时间」
     writeTokens(t)
     accept(info, t.accessToken)
     // 同一账号只有最新的 refresh_token 有效：告诉别的已登录标签页换上这份，免得它们下次续期被拒
@@ -118,6 +151,8 @@ export async function restoreSession(): Promise<SessionState> {
   }
   // 没有令牌：总是通知一次（store 首屏可能自己先进了 loading，要让它看到 anon）
   if (!t) { if (state.status !== 'anon') toAnon(); else set({ status: 'anon', info: null }); return state }
+  // 无操作超时（含 Chrome 恢复上次会话、刷新页面）：不取 /me，直接退出并提示
+  if (isIdleExpired(t)) { expireIdle(true); return state }
   const g = ++gen
   if (state.status !== 'loading') set({ status: 'loading', info: null })
   try {
@@ -188,6 +223,7 @@ function schedule() {
 /** 剩余时长进入续期窗口就续期，否则按剩余时长重排。定时器、切回标签页、网络恢复时调用 */
 async function renewIfDue() {
   if (state.status !== 'authed') return
+  if (checkIdle()) return // 已超时：不续期，直接退出
   const cur = readTokens()
   if (cur && cur.expiresAt - Date.now() > REFRESH_LEEWAY_MS) { schedule(); return }
   try { await refreshSession() } catch { /* 失败的过期处理在 http.ts（通知 → anon） */ }
@@ -233,7 +269,7 @@ function onMessage(m: SessionMessage) {
       // 令牌一律清掉：登录页上的标签页也可能留着令牌（恢复时断网不清），不清的话刷新又能进去。
       // 已是 anon 时不 toAnon()，不打断本页正在进行的登录（signIn 确认之后才写令牌，清存储不影响它）
       clearTokens()
-      if (state.status !== 'anon') toAnon()
+      if (state.status !== 'anon') toAnon(m.reason === 'idle' ? idleError() : undefined)
       return
   }
 }
@@ -247,21 +283,33 @@ export function initSession(): () => void {
   const offMessages = onSessionMessage(onMessage)
   // 已经是 anon 时不处理：没有令牌的零星请求也会发过期通知，不能因此作废正在进行的登录
   const offExpired = onSessionExpired((reason) => { if (state.status !== 'anon') toAnon(reason) })
+  // http.ts 续期前发现已超时
+  const offIdle = onIdleExpired(() => expireIdle())
   // 后台标签页的定时器会被浏览器推迟，休眠唤醒后也可能错过：切回前台、网络恢复时补查一次
   const onWake = () => {
     if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return
-    if (state.status === 'authed') void renewIfDue()
+    if (state.status === 'authed') void renewIfDue() // renewIfDue 先查无操作超时
   }
+  // 用户的真实操作（只在已登录时记；记之前先查超时，超时后的第一下点击不能把会话续上）
+  const onActivity = () => {
+    if (state.status !== 'authed' || checkIdle()) return
+    recordActivity()
+  }
+  const activityOpts: AddEventListenerOptions = { capture: true, passive: true }
   const w = typeof window !== 'undefined' ? window : null
   const d = typeof document !== 'undefined' ? document : null
   w?.addEventListener('online', onWake)
   d?.addEventListener('visibilitychange', onWake)
+  for (const ev of ACTIVITY_EVENTS) w?.addEventListener(ev, onActivity, activityOpts)
   return () => {
     offExpired()
+    offIdle()
+    for (const ev of ACTIVITY_EVENTS) w?.removeEventListener(ev, onActivity, activityOpts)
     offMessages()
     w?.removeEventListener('online', onWake)
     d?.removeEventListener('visibilitychange', onWake)
     clearTimer()
+    if (idleTimer) { clearInterval(idleTimer); idleTimer = null }
     wired = false
   }
 }
@@ -269,6 +317,7 @@ export function initSession(): () => void {
 /** 仅供测试：重置模块内状态 */
 export function __resetSessionForTests() {
   clearTimer()
+  if (idleTimer) { clearInterval(idleTimer); idleTimer = null }
   gen = 0
   lastSub = null
   for (const finish of [...asks.values()]) finish(null)

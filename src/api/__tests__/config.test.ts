@@ -7,6 +7,7 @@ describe('运行时配置', () => {
     expect(resolveConfig([])).toEqual({
       apiBase: '/api', apiEnv: 'prod', dataSource: 'mock', writeMode: 'test-only', writeProjectCodes: ['260911001', '240829001'],
       requestTimeoutMs: 10_000, ctrlTimeoutMs: 12_000, features: FEATURE_DEFAULTS, icp: ICP_DEFAULT,
+      idleTimeoutHours: 8,
     })
   })
   it('功能开关：不写全部取默认值', () => {
