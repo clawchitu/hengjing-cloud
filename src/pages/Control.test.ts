@@ -186,15 +186,63 @@ describe('温度区', () => {
 })
 
 describe('S13 走查', () => {
-  it('运行模式按钮去掉末尾「模式」、不换行；13 写「冷热过渡」；没有写死的「推荐夏季 26°C」；项目列表不显示项目 ID 和版本号', async () => {
+  it('运行模式按钮去掉末尾「模式」、不换行；没有写死的「推荐夏季 26°C」；项目列表不显示项目 ID 和版本号', async () => {
     backend()
     await mount()
     const modes = [...within(screen.getByRole('group', { name: '运行模式' })).getAllByRole('button')].map((b) => b.textContent)
-    expect(modes).toEqual(['夏季', '冬季', '通风', '除湿', '免费制冷', '制热除湿', '供热', '供热加湿', '加湿', '供冷', '供冷加湿', '供冷除湿', '冷热过渡', '自动', '不变'])
     expect(modes.every((m) => m!.length <= 4)).toBe(true)
     expect(document.body.textContent).not.toMatch(/推荐夏季|冷热过度/)
     const list = screen.getByText('测试项目0829').closest('.pick')!.textContent!
     expect(list).not.toMatch(/240829001|4\.3\.9/)
+  })
+})
+
+describe('运行模式只有 5 种（后端 11/26 08:34）', () => {
+  const RETIRED = ['免费制冷', '制热除湿', '供热', '供热加湿', '加湿', '供冷', '供冷加湿', '供冷除湿', '冷热过渡']
+  it('按钮依次是 夏季、冬季、除湿、通风、自动，加「不变」；其余 9 种不再显示', async () => {
+    backend()
+    await mount()
+    await click(screen.getByText('测试项目0829'))
+    const modes = [...within(screen.getByRole('group', { name: '运行模式' })).getAllByRole('button')].map((b) => b.textContent)
+    expect(modes).toEqual(['夏季', '冬季', '除湿', '通风', '自动', '不变'])
+    for (const m of RETIRED) expect(document.body.textContent).not.toContain(m)
+  })
+
+  it.each([['夏季', 2], ['冬季', 3], ['除湿', 5], ['通风', 4], ['自动', 100]] as const)('勾选项目 → 点「%s」→ 指令预览、确认框、请求体（system_mode=%i）、结果卡一致', async (label, value) => {
+    let be!: ReturnType<typeof backend>
+    be = backend({ '/ctrl/room-temperature-data-get': () => rooms(1, 26), '/ctrl/unified-ctrl-set': () => reply(true) })
+    await mount()
+    await click(screen.getByText('测试项目0829'))
+    await click(within(screen.getByRole('group', { name: '运行模式' })).getByRole('button', { name: label }))
+    const pv = [...document.querySelectorAll('.pv-row')].find((r) => r.textContent!.startsWith('运行模式'))!
+    expect(pv.textContent).toBe('运行模式' + label)
+    await click(screen.getByRole('button', { name: '确认下发' }))
+    const dlg = await screen.findByRole('alertdialog')
+    expect(dlg.textContent).toContain('运行模式' + label)
+    await click(within(dlg).getByRole('button', { name: '确认下发' }))
+    await waitFor(() => expect(be.callsTo('/ctrl/unified-ctrl-set')).toHaveLength(1))
+    const body = be.callsTo('/ctrl/unified-ctrl-set')[0].body as { body: string }
+    expect(decodeReply(pb.UnifiedCtrlSetQuerySchema, body.body)).toEqual({ systemSwitch: -1, systemMode: value, roomSwitch: -1, roomTemp: -1 })
+    // 运行模式没有回读：结果卡和「下发核对」都显示「已下发，正在核对…」（写锁按有效期放开）
+    const card = await screen.findByRole('region', { name: '最近一次执行结果' }, { timeout: 3000 })
+    await waitFor(() => expect(card.textContent).toContain(TEXT.verifying))
+    expect(await openNotes()).toContain(TEXT.verifying)
+    for (const m of RETIRED) expect(document.body.textContent).not.toContain(m)
+  })
+})
+
+describe('app_code 8 按 12 处理（后端 11/26 08:34）', () => {
+  it.each([['空气单机', '空气单机测试'], ['独立空气系统', '独立空气系统测试']])('组「%s」：勾选项目「%s」后温度禁用、提示「该应用类型不支持温度设定」；房间开关、运行模式仍可用', async (group, name) => {
+    backend({ '/ctrl/room-temperature-data-get': () => json({ body: '' }) })
+    await mount()
+    await pickGroup(group)
+    await click(screen.getByText(name))
+    expect(screen.getByText(name).closest('.pick')!.className).toContain('on')
+    expect(screen.getByText(/该应用类型不支持温度设定/)).toBeTruthy()
+    expect(keep().hasAttribute('disabled')).toBe(true)
+    await expectTempLocked()
+    expect(screen.getByRole('button', { name: '全部开启' }).hasAttribute('disabled')).toBe(false)
+    expect(within(screen.getByRole('group', { name: '运行模式' })).getByRole('button', { name: '自动' }).hasAttribute('disabled')).toBe(false)
   })
 })
 

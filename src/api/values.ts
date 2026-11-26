@@ -19,15 +19,13 @@ export const UNCHANGED = -1
 export const MODE_UNCHANGED: Mode = Mode.OPERATION_MODE_NONE
 
 /**
- * 203 运行模式可以下发的值：界面可选的 14 个模式（src/features/unified/constants.ts 的 MODE_OPTIONS 必须与此一致，有测试钉住）。
- * 「不变」是 0（MODE_UNCHANGED = OPERATION_MODE_NONE）；-1 和其他枚举外的值一律不发（guard.ts assertNoImplicitZero、writeLock checkSentRecord）
+ * 203 运行模式可以下发的值：固定 5 种——夏季 2、冬季 3、除湿 5、通风 4、自动 100（后端唐学未、周强 11/26 08:34 答复，其余 9 种不再显示、不再下发）。
+ * src/features/unified/constants.ts 的 MODE_OPTIONS 必须与此一致，有测试钉住。
+ * 「不变」是 0（MODE_UNCHANGED = OPERATION_MODE_NONE）；-1 和其他值一律不发（guard.ts assertNoImplicitZero、writeLock checkSentRecord）
  */
 export const OPERATING_MODES: ReadonlySet<number> = new Set<number>([
-  Mode.OPERATION_MODE_SUMMER, Mode.OPERATION_MODE_WINTER, Mode.OPERATION_MODE_VENTILATION, Mode.OPERATION_MODE_DEHUMIDIFY,
-  Mode.OPERATION_MODE_FREE_COOLING, Mode.OPERATION_MODE_HEATING_DEHUMIDIFY, Mode.OPERATION_MODE_HEATING,
-  Mode.OPERATION_MODE_HEATING_HUMIDIFY, Mode.OPERATION_MODE_HUMIDIFY, Mode.OPERATION_MODE_REFRIGERATION,
-  Mode.OPERATION_MODE_REFRIGERATION_HUMIDIFY, Mode.OPERATION_MODE_REFRIGERATION_DEHUMIDIFY,
-  Mode.OPERATION_MODE_REFRIGERATION_HEATING, Mode.OPERATION_MODE_AUTO,
+  Mode.OPERATION_MODE_SUMMER, Mode.OPERATION_MODE_WINTER, Mode.OPERATION_MODE_DEHUMIDIFY, Mode.OPERATION_MODE_VENTILATION,
+  Mode.OPERATION_MODE_AUTO,
 ])
 /** 203 运行模式能不能下发：0（不变，OPERATION_MODE_NONE）或 OPERATING_MODES 里的模式；-1 不行 */
 export const isSendableMode = (v: unknown): boolean => v === MODE_UNCHANGED || (typeof v === 'number' && OPERATING_MODES.has(v))

@@ -534,7 +534,10 @@ export default function Thermostat() {
       <Card className="placeholder">
         <div className="ph-ico"><Icon icon={faFan} /></div>
         <h3>该项目无房间温控面板</h3>
-        <p>「{project.name}」为<b>新风单机版</b>项目，仅接入新风除湿机，不包含房间温控面板。<br />新风机的运行数据与运行设置请前往「新风除湿机」查看。</p>
+        {/* 8、12 都没有房间（后端 11/26）；只有 12 有新风运行设置 */}
+        {caps.freshAirSettings
+          ? <p>「{project.name}」为<b>新风单机版</b>项目，仅接入新风除湿机，不包含房间温控面板。<br />新风机的运行数据与运行设置请前往「新风除湿机」查看。</p>
+          : <p>「{project.name}」的应用类型不包含房间温控面板。<br />新风机的运行数据请前往「新风除湿机」查看。</p>}
       </Card>
     </div>
   )

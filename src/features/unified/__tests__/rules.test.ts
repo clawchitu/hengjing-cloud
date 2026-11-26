@@ -12,8 +12,8 @@ describe('常量', () => {
     expect(DEFAULT_TEMP_RANGE).toEqual({ min: 16, max: 30, step: 0.5 })
     expect(Object.isFrozen(DEFAULT_TEMP_RANGE)).toBe(true)
   })
-  it('运行模式 14 个，不含 0（不变）', () => {
-    expect(MODE_OPTIONS).toHaveLength(14)
+  it('运行模式固定 5 种：夏季 2、冬季 3、除湿 5、通风 4、自动 100，不含 0（不变）（后端 11/26 08:34）', () => {
+    expect(MODE_OPTIONS.map((o) => [o.label, o.value])).toEqual([['夏季', 2], ['冬季', 3], ['除湿', 5], ['通风', 4], ['自动', 100]])
     expect(MODE_OPTIONS.map((o) => o.value)).not.toContain(0)
   })
 })

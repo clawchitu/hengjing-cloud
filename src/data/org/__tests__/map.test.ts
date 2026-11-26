@@ -34,19 +34,25 @@ describe('app_code 能力', () => {
     expect(toAppCode('1.5')).toBe(0)
   })
   it('1 通用版：有房间温控、温度可设、没有新风运行设置', () => {
-    expect(capabilitiesOf(APP_CODE.GENERAL)).toEqual({ appCode: 1, thermostat: true, roomTemp: true, freshAirSettings: false, supported: true })
+    expect(capabilitiesOf(APP_CODE.GENERAL)).toEqual({ appCode: 1, thermostat: true, roomTemp: true, freshAirSettings: false })
   })
   it('12 独立空气系统：没有房间温控、温度不可设、有新风运行设置', () => {
-    expect(capabilitiesOf('12')).toEqual({ appCode: 12, thermostat: false, roomTemp: false, freshAirSettings: true, supported: true })
+    expect(capabilitiesOf('12')).toEqual({ appCode: 12, thermostat: false, roomTemp: false, freshAirSettings: true })
   })
-  it('8 暂不用本平台：标为不支持；缺失编码同样不支持，但页面按「非 12」处理', () => {
-    expect(capabilitiesOf(8)).toMatchObject({ supported: false, thermostat: true, freshAirSettings: false })
-    expect(capabilitiesOf(null)).toMatchObject({ appCode: 0, supported: false, thermostat: true })
+  it('8 按 12 处理（后端 11/26）：没有房间温控、没有房间；但没有新风运行设置（只给 12）', () => {
+    expect(capabilitiesOf(8)).toEqual({ appCode: 8, thermostat: false, roomTemp: false, freshAirSettings: false })
+    expect(capabilitiesOf('8')).toEqual(capabilitiesOf(8))
+  })
+  it('缺失编码和其他编码保持现状：有房间温控、没有新风运行设置（统一控制温度另由白名单决定）', () => {
+    for (const c of [null, undefined, '', 'abc', 0, 4, 6, 7, 9, 11, 1000]) expect(capabilitiesOf(c as never), String(c)).toMatchObject({ thermostat: true, roomTemp: true, freshAirSettings: false })
+    expect(Object.keys(capabilitiesOf(1))).not.toContain('supported')
   })
   it('hasRooms / isStandalone 与能力一致（演示数据的 11/21/31 都有房间）', () => {
     for (const c of [1, 11, 21, 31]) { expect(hasRooms({ programCode: c })).toBe(true); expect(isStandalone({ programCode: c })).toBe(false) }
     expect(hasRooms({ programCode: 12 })).toBe(false)
     expect(isStandalone({ programCode: 12 })).toBe(true)
+    expect(hasRooms({ programCode: 8 })).toBe(false)
+    expect(isStandalone({ programCode: 8 })).toBe(false)
   })
 })
 

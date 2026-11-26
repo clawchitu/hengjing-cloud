@@ -86,7 +86,7 @@
 | --- | --- | --- |
 | 经销商、集成项目、项目勾选列表 | 同集成项目页 | 离线项目不可勾选 |
 | 系统开关 | `UnifiedCtrlSetQuery.system_switch`（1 / 0 / -1） | |
-| 运行模式 | `system_mode`（枚举 14 个值） | 演示版只有 制冷/制热/除湿/通风/自动/不变 6 项，与枚举对不上，开放哪些待确认 Q6 ③ |
+| 运行模式 | `system_mode`（枚举 14 个值） | 演示版只有 制冷/制热/除湿/通风/自动/不变 6 项，与枚举对不上，开放哪些待确认 Q6 ③（11/26 已答复：固定 5 种 夏季/冬季/除湿/通风/自动） |
 | 房间开关 | `room_switch`（1 / 0 / -1） | |
 | 房间温度设定 | `room_temp`（-1 不变） | 按所选集成项目组的 `app_code` 决定是否禁用：`app_code` 为 12 的项目温度设定不可用（后端已确认；app_code 8 暂不用本平台，主要支持 1 与 12） |
 | 下发 | `POST /v1/ctrl/unified-ctrls-send` · `project_ids` + `body`（protobuf → base64）→ `batch_id/total` | 一次请求只有一个 body；只能选同一集成项目组内的项目，同组 `app_code` 相同，不存在混选 |
@@ -429,4 +429,4 @@ CI（GitHub Actions，每个 PR 触发）：`oxlint` → `tsc -b` → `vitest` �
 - 城市选择用 /wx/city-list（测试服只有无锡、苏州，正式服全量；返回城市名，天气接口接受城市名）；经销商需开 /wx/city-list 权限（负责人 11/24 10:13）。
 - 城市选择照数据平台 WeatherRecord.vue：/wx/city-list 返回 city_names，与本地全国省市级联数据（cosydata_fable/src/utils/cascader_disdrict.js）取交集做省→市二级选择；露点复用 utils/dewPoint.js。
 - 项目列表与在线筛选用 POST /v1/ctrl/projects（{only_online:true} 只返回在线；条目带 online:true，缺失即离线；字段比 /projects 多 mode、app_version 等）（后端 11/24 10:22，已实测）。
-- app_code 8 暂不用本平台，不测；主要支持 1 与 12（负责人 11/24 10:37）。
+- app_code 8 暂不用本平台，不测；主要支持 1 与 12（负责人 11/24 10:37）。（11/26 后端：8 按 12 处理，没有房间、没有新风运行控制）

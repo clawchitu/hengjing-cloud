@@ -3,7 +3,7 @@
 // 确认弹窗在本组件里用 useConfirm() 取（分工第 7 条）；写入口拿到的是整个 Project（见 batch.ts）。
 // 改动文档：app_code 为 8、12 时房间温度设定不可用（房间开关仍可用）；最近一次执行结果只显示 项目、项目 ID、状态、操作时间。
 import { useEffect, useState, useSyncExternalStore, type ReactNode } from 'react'
-import { faMagnifyingGlass, faCircleInfo, faLayerGroup, faChevronDown, faChevronUp, faPowerOff, faWandMagicSparkles, faSnowflake, faSun, faDropletSlash, faDroplet, faWind, faRobot, faMinus, faArrowsRotate, faDoorOpen, faTemperatureHalf, faPaperPlane, faTriangleExclamation, faSpinner } from '@fortawesome/free-solid-svg-icons'
+import { faMagnifyingGlass, faCircleInfo, faLayerGroup, faChevronDown, faChevronUp, faPowerOff, faWandMagicSparkles, faSnowflake, faSun, faDropletSlash, faWind, faRobot, faMinus, faDoorOpen, faTemperatureHalf, faPaperPlane, faTriangleExclamation, faSpinner } from '@fortawesome/free-solid-svg-icons'
 import type { IconDefinition } from '@fortawesome/fontawesome-svg-core'
 import { Icon } from '../components/legacy'
 import { Badge } from '@/components/ui/badge'
@@ -41,17 +41,8 @@ type RoomTri = '全部开启' | '全部关闭' | '不变'
 const MODE_ICON: Partial<Record<Mode, [IconDefinition, string]>> = {
   [Mode.OPERATION_MODE_SUMMER]: [faSnowflake, '#0891b2'],
   [Mode.OPERATION_MODE_WINTER]: [faSun, '#f97316'],
-  [Mode.OPERATION_MODE_VENTILATION]: [faWind, '#0ea5e9'],
   [Mode.OPERATION_MODE_DEHUMIDIFY]: [faDropletSlash, '#10b981'],
-  [Mode.OPERATION_MODE_FREE_COOLING]: [faSnowflake, '#0891b2'],
-  [Mode.OPERATION_MODE_HEATING_DEHUMIDIFY]: [faSun, '#f97316'],
-  [Mode.OPERATION_MODE_HEATING]: [faSun, '#f97316'],
-  [Mode.OPERATION_MODE_HEATING_HUMIDIFY]: [faSun, '#f97316'],
-  [Mode.OPERATION_MODE_HUMIDIFY]: [faDroplet, '#0ea5e9'],
-  [Mode.OPERATION_MODE_REFRIGERATION]: [faSnowflake, '#0891b2'],
-  [Mode.OPERATION_MODE_REFRIGERATION_HUMIDIFY]: [faSnowflake, '#0891b2'],
-  [Mode.OPERATION_MODE_REFRIGERATION_DEHUMIDIFY]: [faSnowflake, '#0891b2'],
-  [Mode.OPERATION_MODE_REFRIGERATION_HEATING]: [faArrowsRotate, '#8b5cf6'],
+  [Mode.OPERATION_MODE_VENTILATION]: [faWind, '#0ea5e9'],
   [Mode.OPERATION_MODE_AUTO]: [faRobot, '#8b5cf6'],
 }
 const MODES: Array<{ value: Mode; label: string }> = [...MODE_OPTIONS, { value: MODE_UNCHANGED, label: TEXT.unchanged }]
@@ -446,7 +437,7 @@ export default function Control() {
           <div className="sec-h"><span><Icon icon={faPowerOff} className="muted" />系统开关</span></div>
           <div className="opt3" role="group" aria-label="系统开关">{(['开启', '关闭', '不变'] as const).map((x) => opt(power, x, setPower, x, x))}</div>
           <div className="sec-h"><span><Icon icon={faWandMagicSparkles} className="muted" />运行模式</span></div>
-          <div className="modes" role="group" aria-label="运行模式" style={{ gridTemplateColumns: 'repeat(5, 1fr)' }}>
+          <div className="modes" role="group" aria-label="运行模式" style={{ gridTemplateColumns: 'repeat(6, 1fr)' }}>
             {MODES.map((m) => {
               const [ic, c] = MODE_ICON[m.value] ?? [faMinus, '#94a3b8']
               return <button key={m.value} type="button" className={'mode' + (mode === m.value ? ' on' : '')} aria-pressed={mode === m.value} disabled={busy} onClick={() => setMode(m.value)}><Icon icon={ic} style={{ color: c }} />{m.label}</button>
