@@ -297,16 +297,19 @@ export async function writeCtrl<T extends WriteCtrlType>(type: T, project: Write
   return decodeReply(def.reply, res.body) as CtrlReply<T>
 }
 
-/** 批量统一控制：POST /ctrl/unified-ctrls-send（操作人由后端取登录用户，不传 user_id） */
-export async function sendUnifiedCtrls(projects: readonly WriteProject[], query: WriteQuery<203>) {
+/**
+ * 批量统一控制：POST /ctrl/unified-ctrls-send（操作人由后端取登录用户，不传 user_id）。立即返回 { batch_id, total }，
+ * 执行结果异步写进记录（getUnifiedCtrlsRecords）。beforeSend 同 writeCtrl：写锁 claim 放在链的最后。不重试
+ */
+export async function sendUnifiedCtrls(projects: readonly WriteProject[], query: WriteQuery<203>, opts: { beforeSend?: () => boolean } = {}) {
   validateWriteQuery(pb.UnifiedCtrlSetQuerySchema, query)
   const body = encodeWrite('unified-ctrls-send', pb.UnifiedCtrlSetQuerySchema, query)
-  return requestWrite<{ batch_id?: string; total?: number }>('unified-ctrls-send', projects,
+  return requestWrite<{ batch_id?: string; total?: number | string }>('unified-ctrls-send', projects,
     { body },
-    { timeoutMs: getConfig().ctrlTimeoutMs })
+    { timeoutMs: getConfig().ctrlTimeoutMs, beforeSend: opts.beforeSend })
 }
 
-/** 批量统一控制执行记录（只读） */
-export function getUnifiedCtrlsRecords(filter: { batch_id?: string; project_id?: string } = {}, signal?: AbortSignal) {
-  return request<{ records?: Array<Record<string, unknown>>; total?: string | number }>('/ctrl/unified-ctrls-records', { body: filter, signal })
+/** 批量统一控制执行记录（只读）；timeoutMs 不给用默认请求超时 */
+export function getUnifiedCtrlsRecords(filter: { batch_id?: string; project_id?: string } = {}, signal?: AbortSignal, timeoutMs?: number) {
+  return request<{ records?: Array<Record<string, unknown>>; total?: string | number }>('/ctrl/unified-ctrls-records', { body: filter, signal, timeoutMs })
 }

@@ -24,6 +24,7 @@ import Control, { lastResultKey } from './Control'
 import { setCurrentUserId } from '../api/auth'
 import { __resetWriteLockForTests, lockOf, OTHER_ACCOUNT_TEXT, RETRY_DELAYS_MS, STORAGE_PREFIX } from '../api/writeLock'
 import { TEXT } from '../features/unified/constants'
+import { RECORD_TEXT } from '../features/unified/records'
 
 beforeAll(() => {
   const proto = Element.prototype as unknown as Record<string, unknown>
@@ -51,7 +52,36 @@ const rooms = (sw: number, t: number) => json({ body: encodeMessage(pb.RoomTempe
 const reply = (success: boolean, msg = '') => json({ body: encodeMessage(pb.UnifiedCtrlSetReplySchema, { success, msg }) })
 
 type Handler = (c: Call, n: number) => Response | Promise<Response>
+/**
+ * 统一控制改走 unified-ctrls-send + 执行记录（后端 11/26 08:43）。用例仍按「控制屏应答」写 203 形状的处理函数（success / msg、
+ * 非 200、永不返回）：这里把它换成 send（返回 batch_id）+ records（成功 2 / 失败 3）。/ctrl/unified-ctrl-set 本身不再注册，
+ * 页面要是还调 203 会拿到 403
+ */
+const batches = new Map<string, { pid: string; success: boolean; msg: string }>()
+function viaRecords(h203: Handler): Record<string, Handler> {
+  return {
+    '/ctrl/unified-ctrls-send': async (c, n) => {
+      const r = await h203(c, n)
+      if (r.status !== 200) return r
+      const rep = decodeReply(pb.UnifiedCtrlSetReplySchema, ((await r.json()) as { body?: string }).body) as { success?: boolean; msg?: string }
+      const id = `B${batches.size + 1}`
+      batches.set(id, { pid: (c.body as { project_ids: string[] }).project_ids[0], success: rep.success === true, msg: rep.msg ?? '' })
+      return json({ batch_id: id, total: 1 })
+    },
+    '/ctrl/unified-ctrls-records': (c) => {
+      const id = (c.body as { batch_id?: string }).batch_id ?? ''
+      const b = batches.get(id)
+      return json(b ? { records: [{ id: 'r-' + id, batch_id: id, project_id: b.pid, result: b.success ? 2 : 3, message: b.msg }], total: '1' } : {})
+    },
+  }
+}
+/** 发出去的统一控制请求（unified-ctrls-send）里的项目 */
+const sentPid = (c: Call) => { const b = c.body as { project_id?: string; project_ids?: string[] } | undefined; return b?.project_id ?? b?.project_ids?.[0] }
 function backend(routes: Record<string, Handler> = {}) {
+  const r = { ...routes }
+  const h = r['/ctrl/unified-ctrl-set']
+  delete r['/ctrl/unified-ctrl-set']
+  if (h) Object.assign(r, viaRecords(h), routes['/ctrl/unified-ctrls-records'] ? { '/ctrl/unified-ctrls-records': routes['/ctrl/unified-ctrls-records'] } : {})
   return fakeBackend({
     '/auth/login': () => json({ access_token: J('dealer-1'), refresh_token: 'R1', expires_in: 7200 }),
     '/me': () => json({ user_entity: { id: 'dealer-1', name: '测试', type: 1 }, permission_paths: ['/v1/ctrl/device-summary-get'] }),
@@ -60,7 +90,7 @@ function backend(routes: Record<string, Handler> = {}) {
     '/ctrl/device-summary-get': () => json({ body: '' }),
     '/integrated-projects': () => json({ entities: GROUPS }),
     '/distributors': () => json({ distributor_entities: [{ id: 'D1', name: '科希家研发苏州main' }] }),
-    ...routes,
+    ...r,
   })
 }
 let navigate: NavigateFunction
@@ -127,6 +157,7 @@ async function expectTempLocked() {
 }
 
 beforeEach(() => {
+  batches.clear()
   __resetWriteLockForTests()
   setConfig({ apiBase: '/api', dataSource: 'real', apiEnv: 'test', features: { roomSwitchReported: true } })
   localStorage.clear(); sessionStorage.clear()
@@ -220,8 +251,8 @@ describe('运行模式只有 5 种（后端 11/26 08:34）', () => {
     const dlg = await screen.findByRole('alertdialog')
     expect(dlg.textContent).toContain('运行模式' + label)
     await click(within(dlg).getByRole('button', { name: '确认下发' }))
-    await waitFor(() => expect(be.callsTo('/ctrl/unified-ctrl-set')).toHaveLength(1))
-    const body = be.callsTo('/ctrl/unified-ctrl-set')[0].body as { body: string }
+    await waitFor(() => expect(be.callsTo('/ctrl/unified-ctrls-send')).toHaveLength(1))
+    const body = be.callsTo('/ctrl/unified-ctrls-send')[0].body as { body: string }
     expect(decodeReply(pb.UnifiedCtrlSetQuerySchema, body.body)).toEqual({ systemSwitch: -1, systemMode: value, roomSwitch: -1, roomTemp: -1 })
     // 运行模式没有回读：结果卡和「下发核对」都显示「已下发，正在核对…」（写锁按有效期放开）
     const card = await screen.findByRole('region', { name: '最近一次执行结果' }, { timeout: 3000 })
@@ -256,8 +287,8 @@ describe('温度黑名单：只禁 8、12 和缺失，其他类型按 1 处理�
     const be = as(code)
     const dlg = await pickAndRaise()
     await click(within(dlg).getByRole('button', { name: '确认下发' }))
-    await waitFor(() => expect(be.callsTo('/ctrl/unified-ctrl-set')).toHaveLength(1))
-    const body = be.callsTo('/ctrl/unified-ctrl-set')[0].body as { body: string }
+    await waitFor(() => expect(be.callsTo('/ctrl/unified-ctrls-send')).toHaveLength(1))
+    const body = be.callsTo('/ctrl/unified-ctrls-send')[0].body as { body: string }
     expect(decodeReply(pb.UnifiedCtrlSetQuerySchema, body.body)).toEqual({ systemSwitch: -1, systemMode: 0, roomSwitch: -1, roomTemp: 26.5 })
   })
   it.each([
@@ -269,7 +300,7 @@ describe('温度黑名单：只禁 8、12 和缺失，其他类型按 1 处理�
     await click(within(dlg).getByRole('button', { name: '确认下发' }))
     await screen.findByText('未下发', { selector: '[data-slot=badge]' }, { timeout: 3000 })
     expect(be.callsTo('/ctrl/device-summary-get').length).toBeGreaterThan(0)
-    expect(be.callsTo('/ctrl/unified-ctrl-set')).toHaveLength(0)
+    expect(be.callsTo('/ctrl/unified-ctrls-send')).toHaveLength(0)
     expect(lockOf('project:p1')).toBeNull()
     expect(await openNotes()).toContain(text)
   })
@@ -340,7 +371,7 @@ describe('S13 同名序号（第 2 轮评审）', () => {
     await click(within(dlg).getByRole('button', { name: '确认下发' }))
     // 222 不在可下发白名单里，写防护拦下（未执行）；这里只核对结果表里的名称
     await screen.findByText('失败（未执行）', { selector: '[data-slot=badge]' }, { timeout: 3000 })
-    expect(be.callsTo('/ctrl/unified-ctrl-set')).toHaveLength(0)
+    expect(be.callsTo('/ctrl/unified-ctrls-send')).toHaveLength(0)
     expect(resultNames()).toEqual(['同名项目 (2)'])
   })
 
@@ -407,7 +438,7 @@ describe('下发', () => {
   const okIn = (dlg: HTMLElement) => within(dlg).getByRole('button', { name: '确认下发' })
   /** 200：203 发出之前返回 before，之后返回 after（选项目时的房间状态读取也走 200） */
   function room200(be: () => { callsTo: (p: string) => Call[] }, before: [number, number], after: [number, number] = before) {
-    return () => (be().callsTo('/ctrl/unified-ctrl-set').length ? rooms(...after) : rooms(...before))
+    return () => (be().callsTo('/ctrl/unified-ctrls-send').length ? rooms(...after) : rooms(...before))
   }
   const reads = (be: { callsTo: (p: string) => Call[] }) => be.callsTo('/ctrl/room-temperature-data-get').length
 
@@ -421,17 +452,21 @@ describe('下发', () => {
     expect(dlg.textContent).toContain('房间开关开启')
     expect(dlg.textContent).toContain('房间温度26.5°C')
     expect(dlg.textContent).toContain('设置温度不会开启房间，房间开启后按此温度运行')
-    expect(be.callsTo('/ctrl/unified-ctrl-set')).toHaveLength(0) // 确认前不发
+    expect(be.callsTo('/ctrl/unified-ctrls-send')).toHaveLength(0) // 确认前不发
     const r0 = reads(be)
     await click(okIn(dlg))
     const badge = await screen.findByText('已生效', { selector: '[data-slot=badge]' }, { timeout: 3000 })
     // 下发前读一次（203 发出时已读 1 次）、下发后读一次；之后页面再刷新一次房间状态
     expect(readsAtSend - r0).toBe(1)
     expect(reads(be) - r0).toBe(3)
-    const w = be.callsTo('/ctrl/unified-ctrl-set')
+    const w = be.callsTo('/ctrl/unified-ctrls-send')
     expect(w).toHaveLength(1)
-    const body = w[0].body as { project_id: string; body: string }
-    expect(body.project_id).toBe('p1')
+    const body = w[0].body as { project_ids: string[]; body: string }
+    expect(body.project_ids).toEqual(['p1'])
+    expect(Object.keys(body).sort()).toEqual(['body', 'project_ids']) // 不传 user_id（操作人由后端取登录用户）
+    // 结果从执行记录读：按这次的 batch_id 查；不再调 203
+    expect(be.callsTo('/ctrl/unified-ctrls-records').map((c) => c.body)).toContainEqual({ batch_id: 'B1' })
+    expect(be.calls.filter((c) => c.url.endsWith('/ctrl/unified-ctrl-set'))).toHaveLength(0)
     expect(decodeReply(pb.UnifiedCtrlSetQuerySchema, body.body)).toEqual({ systemSwitch: -1, systemMode: 0, roomSwitch: 1, roomTemp: 26.5 })
     expectFourCells(badge)
     const card = screen.getByRole('region', { name: '最近一次执行结果' })
@@ -456,7 +491,7 @@ describe('下发', () => {
     expect(n).toContain('设备忙')
     expect(n).toContain('未自动重试')
     await tick(300)
-    expect(be.callsTo('/ctrl/unified-ctrl-set')).toHaveLength(1)
+    expect(be.callsTo('/ctrl/unified-ctrls-send')).toHaveLength(1)
     expect(await screen.findByText(/失败 1 个/)).toBeTruthy()
   })
 
@@ -472,7 +507,7 @@ describe('下发', () => {
     await click(okIn(await prepare()))
     await screen.findByText('失败（未执行）', { selector: '[data-slot=badge]' }, { timeout: 3000 })
     await tick(300)
-    expect(be.callsTo('/ctrl/unified-ctrl-set')).toHaveLength(1)
+    expect(be.callsTo('/ctrl/unified-ctrls-send')).toHaveLength(1)
     expect(await openNotes()).toContain('登录状态已更新，请重新下发')
   })
 
@@ -488,16 +523,22 @@ describe('下发', () => {
     await click(okIn(dlg))
     await screen.findByText('未下发', { selector: '[data-slot=badge]' }, { timeout: 3000 })
     expect(be.callsTo('/ctrl/projects').length - before).toBe(1) // 每批强制刷新一次
-    expect(be.callsTo('/ctrl/unified-ctrl-set')).toHaveLength(0)
+    expect(be.callsTo('/ctrl/unified-ctrls-send')).toHaveLength(0)
     expect(await openNotes()).toContain('项目离线，不能下发')
   })
 
-  it('控制屏未连接（503 code 14）→ 失败（未执行），提示「控制屏未连接，未下发」，不重试', async () => {
-    const be = backend({ '/ctrl/room-temperature-data-get': () => rooms(1, 26), '/ctrl/unified-ctrl-set': () => json({ code: 14, message: 'no stream' }, 503) })
+  it('下发接口返回 503（含 code 14）→ 结果未知（批量接口对屏离线是记「失败」，这里的 503 含义未知，不能说「未下发」诱导重发），不重试', async () => {
+    fakeClock()
+    const be = backend({ '/ctrl/room-temperature-data-get': () => rooms(0, 26), '/ctrl/unified-ctrl-set': () => json({ code: 14, message: 'no stream' }, 503) })
     await click(okIn(await prepare()))
-    await screen.findByText('失败（未执行）', { selector: '[data-slot=badge]' }, { timeout: 3000 })
-    expect(be.callsTo('/ctrl/unified-ctrl-set')).toHaveLength(1)
-    expect(await openNotes()).toContain('控制屏未连接，未下发')
+    await runRetries()
+    await screen.findByText('结果未知', { selector: '[data-slot=badge]' }, { timeout: 3000 })
+    expect(screen.queryByText(/未执行|未下发/, { selector: '[data-slot=badge]' })).toBeNull()
+    expect(be.callsTo('/ctrl/unified-ctrls-send')).toHaveLength(1)
+    expect(be.callsTo('/ctrl/unified-ctrls-records')).toHaveLength(0) // 没有批次号，不查记录
+    const notes = await openNotes()
+    expect(notes).toContain(RECORD_TEXT.sendUnavailable)
+    expect(notes).not.toContain('控制屏未连接，未下发')
   })
 
   it('下发还没返回时：结果卡片仍是上一次的内容、没有说明；进度在卡片外；按钮「下发中…」禁用', async () => {
@@ -510,7 +551,7 @@ describe('下发', () => {
     const cardBefore = card().textContent
     expect(cardBefore).toBe('最近一次执行结果暂无执行记录')
     await click(okIn(dlg))
-    await waitFor(() => expect(be.callsTo('/ctrl/unified-ctrl-set')).toHaveLength(1))
+    await waitFor(() => expect(be.callsTo('/ctrl/unified-ctrls-send')).toHaveLength(1))
     expect(card().textContent).toBe(cardBefore)
     const progress = screen.getByRole('status')
     expect(progress.textContent).toContain('正在下发')
@@ -538,7 +579,7 @@ describe('下发', () => {
     writeTokens({ accessToken: J('someone-else'), refreshToken: 'R9', expiresAt: Date.now() + 3600_000 })
     release()
     await waitFor(() => expect(screen.queryByRole('status')).toBeNull(), { timeout: 3000 })
-    expect(be.callsTo('/ctrl/unified-ctrl-set')).toHaveLength(0)
+    expect(be.callsTo('/ctrl/unified-ctrls-send')).toHaveLength(0)
     // 结果记在发起时的账号下（换账号后的页面看不到，符合按账号隔离）
     await waitFor(() => expect(sessionStorage.getItem('hjc-unified-last:real:dealer-1') ?? '').toMatch(/"status":"(not-sent|failure)"/), { timeout: 3000 })
   })
@@ -550,7 +591,7 @@ describe('下发', () => {
     writeTokens({ accessToken: 'not-a-jwt', refreshToken: 'R1', expiresAt: Date.now() + 3600_000 })
     await click(okIn(dlg))
     await screen.findByText('失败（未执行）', { selector: '[data-slot=badge]' }, { timeout: 3000 })
-    expect(be.callsTo('/ctrl/unified-ctrl-set')).toHaveLength(0)
+    expect(be.callsTo('/ctrl/unified-ctrls-send')).toHaveLength(0)
     expect(be.callsTo('/ctrl/room-temperature-data-get').length).toBe(r0)
     expect(await openNotes()).toContain('登录状态异常，请重新登录后下发')
   })
@@ -562,7 +603,7 @@ describe('下发', () => {
     // 第一轮升到 26.5、第二轮降回 26：每轮下发后回读都一致
     let be!: ReturnType<typeof backend>
     be = backend({
-      '/ctrl/room-temperature-data-get': () => { const n = be.callsTo('/ctrl/unified-ctrl-set').length; return rooms(1, n === 1 ? 26.5 : 26) },
+      '/ctrl/room-temperature-data-get': () => { const n = be.callsTo('/ctrl/unified-ctrls-send').length; return rooms(1, n === 1 ? 26.5 : 26) },
       '/ctrl/unified-ctrl-set': async () => { if (gateNext) await gate; return reply(true) },
     })
     await click(okIn(await prepare()))
@@ -574,7 +615,7 @@ describe('下发', () => {
     await click(screen.getByRole('button', { name: '降低温度' }))
     await click(screen.getByRole('button', { name: '确认下发' }))
     await click(okIn(await screen.findByRole('alertdialog')))
-    await waitFor(() => expect(be.callsTo('/ctrl/unified-ctrl-set')).toHaveLength(2))
+    await waitFor(() => expect(be.callsTo('/ctrl/unified-ctrls-send')).toHaveLength(2))
     expect(card().textContent).toBe(prev)
     expect(card().textContent).not.toMatch(/正在下发|回读|核对/)
     expect(screen.getByRole('button', { name: '下发中…' }).hasAttribute('disabled')).toBe(true)
@@ -595,7 +636,7 @@ describe('下发', () => {
     expect(notes).toContain(TEXT.unapplied)
     expect(notes).toContain('房间开关下发 开启，回读 关闭')
     expect(notes).not.toContain(TEXT.success)
-    expect(be.callsTo('/ctrl/unified-ctrl-set')).toHaveLength(1)
+    expect(be.callsTo('/ctrl/unified-ctrls-send')).toHaveLength(1)
   })
 
   it('部分字段一致：房间开关已开、温度没变 → 总结果未变化；卡片状态列显示计数标题，逐字段明细在「下发核对」，只有温度带不一致说明', async () => {
@@ -626,7 +667,7 @@ describe('下发', () => {
   it('下发后 200 回包为空（{}，没有房间条目）→ 无法核对', async () => {
     fakeClock()
     let be!: ReturnType<typeof backend>
-    be = backend({ '/ctrl/room-temperature-data-get': () => (be.callsTo('/ctrl/unified-ctrl-set').length ? json({ body: '' }) : rooms(0, 26)), '/ctrl/unified-ctrl-set': () => reply(true) })
+    be = backend({ '/ctrl/room-temperature-data-get': () => (be.callsTo('/ctrl/unified-ctrls-send').length ? json({ body: '' }) : rooms(0, 26)), '/ctrl/unified-ctrl-set': () => reply(true) })
     await click(okIn(await prepare()))
     await runRetries() // 把自动再核对（5 / 20 / 60 秒）跑完，再断言最终显示
     await screen.findByText('无法核对', { selector: '[data-slot=badge]' }, { timeout: 3000 })
@@ -640,7 +681,7 @@ describe('下发', () => {
     function after203(nth: (n: number) => Response) {
       let be!: ReturnType<typeof backend>
       let n = 0
-      be = backend({ '/ctrl/room-temperature-data-get': () => (be.callsTo('/ctrl/unified-ctrl-set').length ? nth(++n) : rooms(0, 26)), '/ctrl/unified-ctrl-set': () => reply(true) })
+      be = backend({ '/ctrl/room-temperature-data-get': () => (be.callsTo('/ctrl/unified-ctrls-send').length ? nth(++n) : rooms(0, 26)), '/ctrl/unified-ctrl-set': () => reply(true) })
       return { be, reads: () => n }
     }
     /** 记录结果卡片状态列出现过的所有文案 */
@@ -668,7 +709,7 @@ describe('下发', () => {
       expect(all).not.toContain('未变化')
       expect(all).not.toContain('结果未知')
       expect(all.filter((t) => t !== TEXT.verifying && t !== '已生效')).toEqual([])
-      expect(be.callsTo('/ctrl/unified-ctrl-set')).toHaveLength(1)
+      expect(be.callsTo('/ctrl/unified-ctrls-send')).toHaveLength(1)
       // 定为已生效后存进本标签页：重新进入仍是已生效
       cleanup()
       await mount(false)
@@ -688,7 +729,7 @@ describe('下发', () => {
       const P5 = { id: 'p5', code: '240829005', name: '测试项目0905', app_code: '1', online: true }
       const sentTo = new Set<string>()
       let p1Reads = 0
-      const pid = (c: Call) => (c.body as { project_id?: string } | undefined)?.project_id
+      const pid = sentPid
       backend({
         '/ctrl/projects': () => json({ project_entities: [...PROJECTS, P5] }),
         '/integrated-projects': () => json({ entities: [{ ...GROUPS[0], project_ids: ['p1', 'p3', 'p5'] }, ...GROUPS.slice(1)] }),
@@ -849,25 +890,25 @@ describe('下发', () => {
       const gate = new Promise<void>((r) => { release = r })
       let be!: ReturnType<typeof backend>
       be = backend({
-        '/ctrl/room-temperature-data-get': () => (be.callsTo('/ctrl/unified-ctrl-set').length && sent ? rooms(1, 26.5) : rooms(0, 26)),
+        '/ctrl/room-temperature-data-get': () => (be.callsTo('/ctrl/unified-ctrls-send').length && sent ? rooms(1, 26.5) : rooms(0, 26)),
         '/ctrl/unified-ctrl-set': async () => { await gate; sent = true; return reply(true) },
       })
       let sent = false
       const dlg = await prepare()
       await click(okIn(dlg))
-      await waitFor(() => expect(be.callsTo('/ctrl/unified-ctrl-set')).toHaveLength(1))
+      await waitFor(() => expect(be.callsTo('/ctrl/unified-ctrls-send')).toHaveLength(1))
       await advance(36_000) // 过 35 秒批次截止：这一行按结果未知冻结，锁还在 sent（没收到应答）
       await screen.findByText('结果未知', { selector: '[data-slot=badge]' }, { timeout: 3000 })
       await act(async () => { release(); await new Promise((r) => setTimeout(r, 30)) }) // 应答 success 才到：写锁按结果未知待核对，自动核对读到一致
       await screen.findByText('已生效', { selector: '[data-slot=badge]' }, { timeout: 3000 })
-      expect(be.callsTo('/ctrl/unified-ctrl-set')).toHaveLength(1)
+      expect(be.callsTo('/ctrl/unified-ctrls-send')).toHaveLength(1)
     })
   })
 
   it('下发后回读请求失败（500）→ 结果未知，提示回读失败、刷新核对；不列「设备未回报」，不算无法核对', async () => {
     fakeClock()
     let be!: ReturnType<typeof backend>
-    be = backend({ '/ctrl/room-temperature-data-get': () => (be.callsTo('/ctrl/unified-ctrl-set').length ? text('oops', 500) : rooms(0, 26)), '/ctrl/unified-ctrl-set': () => reply(true) })
+    be = backend({ '/ctrl/room-temperature-data-get': () => (be.callsTo('/ctrl/unified-ctrls-send').length ? text('oops', 500) : rooms(0, 26)), '/ctrl/unified-ctrl-set': () => reply(true) })
     await click(okIn(await prepare()))
     await runRetries() // 把自动再核对（5 / 20 / 60 秒）跑完，再断言最终显示
     await screen.findByText('结果未知', { selector: '[data-slot=badge]' }, { timeout: 3000 })
@@ -883,7 +924,7 @@ describe('下发', () => {
     fakeClock()
     const off = () => json({ body: encodeMessage(pb.RoomTemperatureDataGetReplySchema, { data: [{ id: 1, name: '客厅', switch: 1, setTemp: 26.5, isConnected: false }, { id: 2, name: '主卧', switch: 1, setTemp: 26.5, isConnected: true }] }) })
     let be!: ReturnType<typeof backend>
-    be = backend({ '/ctrl/room-temperature-data-get': () => (be.callsTo('/ctrl/unified-ctrl-set').length ? off() : rooms(0, 26)), '/ctrl/unified-ctrl-set': () => reply(true) })
+    be = backend({ '/ctrl/room-temperature-data-get': () => (be.callsTo('/ctrl/unified-ctrls-send').length ? off() : rooms(0, 26)), '/ctrl/unified-ctrl-set': () => reply(true) })
     await click(okIn(await prepare()))
     await runRetries() // 把自动再核对（5 / 20 / 60 秒）跑完，再断言最终显示
     await screen.findByText('结果未知', { selector: '[data-slot=badge]' }, { timeout: 3000 })
@@ -898,7 +939,7 @@ describe('下发', () => {
     const badge = await screen.findByText('结果未知', { selector: '[data-slot=badge]' }, { timeout: 3000 })
     expectFourCells(badge)
     expect(await openNotes()).toContain('已下发，结果未知，请刷新查看')
-    expect(be.callsTo('/ctrl/unified-ctrl-set')).toHaveLength(1)
+    expect(be.callsTo('/ctrl/unified-ctrls-send')).toHaveLength(1)
   })
 
   it('结果在本标签页保留：卸载后重新进入页面仍显示（同一账号、同一数据源）', async () => {
@@ -918,7 +959,7 @@ describe('下发', () => {
     cleanup()
     await tick(300)
     expect(reads(be)).toBe(r0)
-    expect(be.callsTo('/ctrl/unified-ctrl-set')).toHaveLength(0)
+    expect(be.callsTo('/ctrl/unified-ctrls-send')).toHaveLength(0)
   })
 
   it('确认弹窗打开时路由变化：弹窗失效，点确认也不下发', async () => {
@@ -931,7 +972,7 @@ describe('下发', () => {
     await tick(300)
     expect(screen.getByText('别的页面')).toBeTruthy()
     expect(reads(be)).toBe(r0)
-    expect(be.callsTo('/ctrl/unified-ctrl-set')).toHaveLength(0)
+    expect(be.callsTo('/ctrl/unified-ctrls-send')).toHaveLength(0)
   })
 
   it('下发前读取期间页面卸载：不再发出 203', async () => {
@@ -947,7 +988,7 @@ describe('下发', () => {
     cleanup()
     release()
     await tick(300)
-    expect(be.callsTo('/ctrl/unified-ctrl-set')).toHaveLength(0)
+    expect(be.callsTo('/ctrl/unified-ctrls-send')).toHaveLength(0)
   })
 
   it('确认弹窗取消：不读不写', async () => {
@@ -958,7 +999,7 @@ describe('下发', () => {
     await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull())
     await tick(100)
     expect(reads(be)).toBe(r0)
-    expect(be.callsTo('/ctrl/unified-ctrl-set')).toHaveLength(0)
+    expect(be.callsTo('/ctrl/unified-ctrls-send')).toHaveLength(0)
   })
 
   it('没有改动：不弹确认，提示「没有要下发的设置」', async () => {
@@ -968,12 +1009,12 @@ describe('下发', () => {
     await click(screen.getByRole('button', { name: '确认下发' }))
     expect(screen.queryByRole('alertdialog')).toBeNull()
     expect(await screen.findByText('没有要下发的设置')).toBeTruthy()
-    expect(be.callsTo('/ctrl/unified-ctrl-set')).toHaveLength(0)
+    expect(be.callsTo('/ctrl/unified-ctrls-send')).toHaveLength(0)
   })
 
   describe('下发前控制屏实时预检（ctrl 205，赤兔 11/25）', () => {
     const offline205 = () => json({ code: 14, message: '控制屏消息发送失败' }, 503)
-    const pid = (c: Call) => (c.body as { project_id?: string } | undefined)?.project_id
+    const pid = sentPid
     const P5 = { id: 'p5', code: '240829005', name: '测试项目0905', app_code: '1', online: true }
     const two = (routes: Record<string, Handler>) => backend({
       '/ctrl/projects': () => json({ project_entities: [...PROJECTS, P5] }),
@@ -998,7 +1039,7 @@ describe('下发', () => {
       const r0 = reads(be)
       await click(okIn(dlg))
       await screen.findByText('未下发', { selector: '[data-slot=badge]' }, { timeout: 3000 })
-      expect(be.callsTo('/ctrl/unified-ctrl-set')).toHaveLength(0)
+      expect(be.callsTo('/ctrl/unified-ctrls-send')).toHaveLength(0)
       expect(be.callsTo('/ctrl/device-summary-get')).toHaveLength(1)
       expect(reads(be)).toBe(r0)
       expect(lockOf('project:p1')).toBeNull()
@@ -1015,7 +1056,7 @@ describe('下发', () => {
       await advance(5_000)
       await screen.findByText('未下发', { selector: '[data-slot=badge]' }, { timeout: 3000 })
       expect(be.callsTo('/ctrl/device-summary-get')).toHaveLength(2) // 只重查一次
-      expect(be.callsTo('/ctrl/unified-ctrl-set')).toHaveLength(0)
+      expect(be.callsTo('/ctrl/unified-ctrls-send')).toHaveLength(0)
       expect(lockOf('project:p1')).toBeNull()
       const notes = await openNotes()
       expect(notes).toContain('控制屏在线检查超时，未下发，请重试')
@@ -1033,10 +1074,12 @@ describe('下发', () => {
       fakeClock()
       await click(okIn(dlg))
       await advance(5_100)
+      // 重查放行后：下发 → 1 秒后查执行记录（假时钟里推进）
+      for (let i = 0; i < 4; i++) { await tick(30); await advance(1_000) }
       vi.useRealTimers()
       await waitFor(() => expect(row('测试项目0829')?.querySelector('[data-slot=badge]')?.textContent).toBe('已生效'), { timeout: 3000 })
       expect(be.callsTo('/ctrl/device-summary-get')).toHaveLength(2)
-      expect(be.callsTo('/ctrl/unified-ctrl-set')).toHaveLength(1)
+      expect(be.callsTo('/ctrl/unified-ctrls-send')).toHaveLength(1)
     })
     it('一离线一在线：只给在线的发 203，离线的标「未下发（控制屏未连接）」，在线的照常核对出结果（p5 离线在后，p1 在线在前）', async () => {
       const sentTo = new Set<string>()
@@ -1048,7 +1091,7 @@ describe('下发', () => {
       await click(okIn(await prepareTwo()))
       await waitFor(() => expect(row('测试项目0829')?.querySelector('[data-slot=badge]')?.textContent).toBe('已生效'), { timeout: 3000 })
       expect(row('测试项目0905').querySelector('[data-slot=badge]')!.textContent).toBe('未下发')
-      expect(be.callsTo('/ctrl/unified-ctrl-set').map(pid)).toEqual(['p1'])
+      expect(be.callsTo('/ctrl/unified-ctrls-send').map(pid)).toEqual(['p1'])
       expect(be.callsTo('/ctrl/device-summary-get').map(pid)).toEqual(['p1', 'p5'])
       expect(lockOf('project:p5')).toBeNull()
       expect(await openNotes()).toContain('未下发（控制屏未连接），可重新勾选下发')
@@ -1057,7 +1100,7 @@ describe('下发', () => {
       const be = backend({ '/ctrl/room-temperature-data-get': () => rooms(1, 26), '/ctrl/unified-ctrl-set': () => reply(true), '/ctrl/device-summary-get': () => text('no permission', 403) })
       await click(okIn(await prepare()))
       await screen.findByText('未下发', { selector: '[data-slot=badge]' }, { timeout: 3000 })
-      expect(be.callsTo('/ctrl/unified-ctrl-set')).toHaveLength(0)
+      expect(be.callsTo('/ctrl/unified-ctrls-send')).toHaveLength(0)
       expect(lockOf('project:p1')).toBeNull()
       const notes = await openNotes()
       expect(notes).toContain('未下发（当前账号无连接状态权限，无法确认控制屏在线，暂不能下发，请联系管理员）')
@@ -1090,7 +1133,7 @@ describe('写锁（页面）', () => {
     await syncLock(lockRec('dealer-1'))
     expect(await screen.findByText(/上一条下发还在处理中（测试项目0829）/)).toBeTruthy()
     expect(sendBtn().hasAttribute('disabled')).toBe(true)
-    expect(be.callsTo('/ctrl/unified-ctrl-set')).toHaveLength(0)
+    expect(be.callsTo('/ctrl/unified-ctrls-send')).toHaveLength(0)
   })
 
   it('被别的账号占着：只显示 OTHER_ACCOUNT_TEXT（不带项目名），按钮置灰', async () => {

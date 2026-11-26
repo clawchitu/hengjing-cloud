@@ -1,4 +1,4 @@
-// 统一控制页面（S12b）：对同一集成项目里选中的多个项目，逐个走 S12a 的单项目状态机（ctrl 203）。
+// 统一控制页面（S12b）：对同一集成项目里选中的多个项目，逐个走 S12a 的单项目状态机（unified-ctrls-send + 执行记录，见 records.ts）。
 //
 // - prepare(ids, draft)：为每个项目建一个控制器并 request(draft)（逐个校验：离线、app_code、温度范围、无改动…）。
 //   任一项目校验不过就整体不下发，全部 cancel，返回错误；全部通过则停在 confirming，等页面的二次确认。
@@ -20,7 +20,8 @@
 //   发起，互相并行），不够就直接按超时拦下；503、403、其他失败不重查。重查只发 205，不重发写请求。
 //   文案分开：503「未下发（控制屏未连接），可重新勾选下发」；两次超时 / 来不及重查「控制屏在线检查超时，未下发，请重试」；
 //   其他失败「控制屏在线检查失败，未下发，请重试」；403 单独标「未下发（当前账号无连接状态权限…）」、不标可重试
-import { callCtrl, writeCtrl, type CtrlReply, type WriteQuery } from '@/api/ctrl'
+import { callCtrl, type CtrlReply, type WriteQuery } from '@/api/ctrl'
+import { createRecordSender } from './records'
 import { INVALID_HOURLY, NO_DATA } from '@/api/values'
 import { roomSwitchReported } from '@/api/config'
 import { ApiError } from '@/api/errors'
@@ -96,15 +97,16 @@ export async function readUnifiedSnapshot(projectId: string, signal: AbortSignal
   return summarizeRooms(r.data ?? [])
 }
 
-/** 写入口：S4 的 writeCtrl(203)，传整个 Project（写防护按 code 比对白名单，请求体用 id） */
+/** 写入口：unified-ctrls-send（records.ts 的 createRecordSender），传整个 Project（写防护按 code 比对白名单，请求体用 id） */
 /**
  * beforeSend：写入口在令牌就绪后、真正 fetch 前同步调用，返回 false 就不发（见 http.ts requestWrite）。
  * 自己实现的下发函数（演示数据、测试）也必须在「发出」前调用它
  */
 export type BatchSender = (project: BatchProject, query: WriteQuery<203>, opts: { beforeSend: () => boolean; signal: AbortSignal }) => Promise<CtrlReply<203>>
-// 批次的取消信号不交给 writeCtrl 去中止 fetch：已经发出的写请求要照常走完、拿到应答（S12a abort 语义）。
-// 取消在发出前由 beforeSend 最先检查（recheck 第一行），效果等同 http 层的信号检查
-export const defaultBatchSender: BatchSender = (project, query, opts) => writeCtrl(203, project, query, { beforeSend: opts.beforeSend })
+// 默认发送函数（后端 11/26 08:43）：unified-ctrls-send（只带这一个项目）+ 轮询执行记录，见 records.ts。
+// 批次的取消信号不交给下发请求去中止 fetch：已经发出的写请求要照常走完（S12a abort 语义）；取消在发出前由 beforeSend 最先检查
+// （recheck 第一行）。取消信号只用来停止执行记录轮询（停下后按应答未知，交给写锁继续核对）
+export const defaultBatchSender: BatchSender = (project, query, opts) => createRecordSender()(project, query, opts)
 
 /** success 已生效、unapplied 未变化、unverifiable 无法核对、unknown 结果未知 */
 export type RowStatus = 'waiting' | 'sending' | 'success' | 'unapplied' | 'unverifiable' | 'failure' | 'unknown' | 'not-sent'
