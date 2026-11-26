@@ -2,7 +2,7 @@
 //
 // - prepare(ids, draft)：为每个项目建一个控制器并 request(draft)（逐个校验：离线、app_code、温度范围、无改动…）。
 //   任一项目校验不过就整体不下发，全部 cancel，返回错误；全部通过则停在 confirming，等页面的二次确认。
-// - start()：二次确认通过后按顺序逐个 confirm()（下发前读 → 203 → 下发后读），一个结束再下一个；不重试。
+// - start()：二次确认通过后按顺序逐个 confirm()（下发前读 → unified-ctrls-send + 执行记录 → 下发后读），一个结束再下一个；不重试。
 // - cancel()：确认弹窗取消或失效 → 全部 cancel。
 // - abort()：页面卸载 → 还没发出的全部终止（S12a abort 语义：已发出的照常走完回读），不再开始后面的项目。
 // - 写入口：控制器给出的 {id, code} 先在最新项目列表里找回整个 Project，id 与 code 都对得上才把 Project 交给写入口；
@@ -482,6 +482,8 @@ export function createUnifiedBatch(deps: BatchDeps) {
           let r = await once(e)
           for (let i = 0; i < SCREEN_RETRIES && r === 'timeout'; i++) {
             if (stopped || expired || ac.signal.aborted) return r
+            // 预留按「再查 5 秒 + send 12 秒」算，不含执行记录轮询：记录通常 1–2 秒出结果；轮询没完就到 35 秒截止的，按「已下发，结果未知」
+            // 冻结、写锁继续核对（安全一侧）。若把轮询窗口也算进来，第 5 秒超时后永远不够重查，S13 P2 的「超时重查一次」就失效了
             if (deadlineAt - now().getTime() < SCREEN_CHECK_MS + SCREEN_WRITE_MS) return r
             r = await once(e)
           }

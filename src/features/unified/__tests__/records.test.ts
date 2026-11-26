@@ -2,6 +2,7 @@
 // 只注入查询函数和时钟，不发任何请求。
 import { describe, expect, it, vi } from 'vitest'
 import { ApiError } from '@/api/errors'
+import { __resetWriteLockForTests } from '@/api/writeLock'
 import { cleanMessage, normalizeResult, utcToBeijing, pickRecord, RECORD_EVERY_MS, RECORD_FIRST_MS, RECORD_TEXT, waitRecord } from '../records'
 
 const rec = (result: unknown, extra: Record<string, unknown> = {}) => ({ id: 'r', batch_id: 'B1', project_id: 'p1', result, message: '', ...extra })
@@ -44,7 +45,7 @@ describe('pickRecord：batch_id 与 project_id 都对上的恰好一条才采用
 describe('operate_time：后端 11/26 确认是 UTC（不带时区），前端转北京时间', () => {
   it('01:09:00（UTC）显示成 09:09:00', () => expect(utcToBeijing('2026-11-26 01:09:00')).toBe('2026-11-26 09:09:00'))
   it('跨天', () => expect(utcToBeijing('2026-11-25 20:30:05')).toBe('2026-11-26 04:30:05'))
-  it.each([undefined, '', '2026-11-26T01:09:00Z', '2026-13-01 00:00:00', '2026-11-26 25:00:00', 123])('格式不对（%s）→ null，退回前端时间', (v) => expect(utcToBeijing(v)).toBeNull())
+  it.each([undefined, '', '2026-11-26T01:09:00Z', '2026-13-01 00:00:00', '2026-11-26 25:00:00', '2026-11-26 01:30:75', 123])('格式不对（%s）→ null，退回前端时间', (v) => expect(utcToBeijing(v)).toBeNull())
   it('pickRecord 带出转换后的时间', () => {
     expect(pickRecord({ records: [rec(2, { operate_time: '2026-11-26 01:13:02' })] }, 'B1', 'p1')).toMatchObject({ operateTime: '2026-11-26 09:13:02' })
   })
@@ -94,6 +95,13 @@ describe('waitRecord：轮询到终态或窗口结束', () => {
     const h = harness([new ApiError('forbidden', 'no permission', { status: 403 })])
     await waitRecord('B1', 'p1', ac(), h.deps)
     expect(h.query).toHaveBeenCalledTimes(1)
+  })
+  it('轮询期间换了账号：迟到的成功不采用 → 结果未知', async () => {
+    let user = 'u1'
+    __resetWriteLockForTests(() => ({ user, gen: 1 }))
+    const h = harness([() => { user = 'u2'; return { records: [rec(2)] } }])
+    expect(await waitRecord('B1', 'p1', ac(), h.deps)).toEqual({ kind: 'unknown', note: RECORD_TEXT.account })
+    __resetWriteLockForTests()
   })
   it('离开页面（取消）：迟到的成功不采用 → 结果未知', async () => {
     const c = new AbortController()
