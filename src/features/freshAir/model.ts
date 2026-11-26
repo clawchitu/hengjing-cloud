@@ -25,7 +25,7 @@ export const WIND_SPEEDS_210: Readonly<Record<number, string>> = Object.freeze({
 /** 210 的开关：1 开，0 关 */
 export const SWITCHES_210: Readonly<Record<number, string>> = Object.freeze({ 0: '关', 1: '开' })
 
-/** 设定范围和步长（方案 A3，待后端确认；S10c 用）。界面上不写「范围」这行字 */
+/** 设定范围和步长（方案 A3，待后端确认；S10c 用）。界面上不写具体范围数字，只有 RANGE_HINT 提示 */
 export const LIMITS = Object.freeze({
   dewPoint: Object.freeze({ min: 8, max: 16, step: 0.5 }),
   humiditySet: Object.freeze({ min: 35, max: 70, step: 1 }),
