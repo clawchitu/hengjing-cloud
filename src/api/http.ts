@@ -158,6 +158,12 @@ export function refreshSession(): Promise<Tokens> {
   inflight = withRefreshLock(async () => {
     const cur = readTokens()
     if (!cur) throw new ApiError('unauthenticated', '登录已过期，请重新登录')
+    // 等锁期间跨过了无操作超时：同样不续期
+    if (isIdleExpired(cur)) {
+      const err = new ApiError('unauthenticated', IDLE_LOGOUT_TEXT)
+      if (!notifyIdleExpired()) expireSession(err)
+      throw err
+    }
     // 等锁期间别的标签页已经续期（或重新登录）：直接用存储里的新令牌
     if (seen !== undefined && cur.refreshToken !== seen) return cur
     try {

@@ -18,7 +18,7 @@
 import { can as matchPath, isDealer, logout, login, me, setCurrentUserId, type MeUser } from './auth'
 import { ApiError } from './errors'
 import { adoptRotation, onSessionExpired, refreshSession, REFRESH_LEEWAY_MS } from './http'
-import { ACTIVITY_EVENTS, IDLE_CHECK_MS, IDLE_LOGOUT_TEXT, isIdleExpired, onIdleExpired, recordActivity, writeLastActivity } from './idle'
+import { ACTIVITY_EVENTS, IDLE_CHECK_MS, IDLE_LOGOUT_TEXT, isIdleExpired, onIdleExpired, readLastActivity, recordActivity, writeLastActivity } from './idle'
 import { hasSessionChannel, onSessionMessage, postSession, type SessionMessage } from './sessionChannel'
 import { clearTokens, isTokens, jwtSub, purgeLegacyTokens, readTokens, writeTokens, type Tokens } from './tokens'
 
@@ -65,7 +65,9 @@ export const isIdleLogout = (e: unknown) => e instanceof ApiError && e.kind === 
  * force：已经是 anon 也重新通知一次（启动时用，让登录页看到原因）；否则已是 anon 时不动状态，不打断本页正在进行的登录
  */
 function expireIdle(force = false) {
-  const done = logout() // 同步部分先取出令牌并清掉本地
+  // invalidate 之前再读一次最后操作时间：被别的标签页刷新了（比如那边刚登录），就不调，免得把新会话一起作废
+  const seen = readLastActivity()
+  const done = logout({ skipInvalidate: () => (readLastActivity() ?? 0) > (seen ?? 0) }) // 同步部分先取出令牌并清掉本地
   if (force || state.status !== 'anon') toAnon(idleError())
   postSession({ type: 'logout', reason: 'idle' })
   void done

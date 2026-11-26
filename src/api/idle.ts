@@ -26,13 +26,17 @@ const store = (): Storage | null => {
 }
 let memory: number | null = null // 没有 Web Storage 的环境（node 脚本）
 
+/** 存储值和本页内存值里较新的那个：写不进存储（配额满等）时，本页的操作仍然算数 */
 export function readLastActivity(): number | null {
   const s = store()
-  if (!s) return memory
-  let raw: string | null = null
-  try { raw = s.getItem(ACTIVITY_KEY) } catch { return null }
-  const n = raw === null ? NaN : Number(raw)
-  return Number.isFinite(n) && n > 0 ? n : null
+  let stored: number | null = null
+  try {
+    const raw = s?.getItem(ACTIVITY_KEY) ?? null
+    const n = raw === null ? NaN : Number(raw)
+    stored = Number.isFinite(n) && n > 0 ? n : null
+  } catch { /* 读不了存储：只看内存值 */ }
+  if (stored === null) return memory
+  return memory === null ? stored : Math.max(stored, memory)
 }
 
 let lastWrite = -Infinity

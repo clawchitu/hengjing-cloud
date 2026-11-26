@@ -60,12 +60,14 @@ export function can(paths: readonly string[], route: string): boolean {
  * POST /auth/invalidate；不论成败本地登录态都已清掉。
  * 先取出令牌并立即清本地，再用取出的令牌调 invalidate：退出途中重新登录的新会话不受影响。
  */
-export async function logout() {
+export async function logout(opts: { skipInvalidate?: () => boolean } = {}) {
   const t = readTokens()
   const uid = currentUserId
   clearTokens()
   currentUserId = ''
   if (!t) return
+  // skipInvalidate：调用前最后一次确认（无操作超时退出时，别的标签页可能刚登录，见 session.ts expireIdle）
+  if (opts.skipInvalidate?.()) return
   try {
     await request('/auth/invalidate', { body: { user_id: uid }, accessToken: t.accessToken })
   } catch { /* 退出时忽略 */ }

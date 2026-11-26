@@ -262,6 +262,52 @@ describe('启动时（Chrome 恢复会话、刷新页面）', () => {
   })
 })
 
+describe('评审补充（第 1 轮）', () => {
+  it('写不进 localStorage（配额满）：登录后不会一分钟就被踢', async () => {
+    backend()
+    localStorage.setItem(ACTIVITY_KEY, String(Date.now() - 20 * HOUR))
+    const real = Storage.prototype.setItem
+    const set = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (this: Storage, k: string, v: string) {
+      if (k === ACTIVITY_KEY) throw new DOMException('quota', 'QuotaExceededError')
+      return real.call(this, k, v)
+    })
+    await signIn('d', 'pw')
+    expect(getSession().status).toBe('authed')
+    await vi.advanceTimersByTimeAsync(2 * MIN)
+    expect(getSession().status).toBe('authed')
+    set.mockRestore()
+  })
+
+  it('超时退出时别的标签页刚刷新了最后操作时间（比如刚登录）：不调 invalidate', async () => {
+    const be = backend()
+    writeTokens({ accessToken: jwt('u1'), refreshToken: 'R1', expiresAt: Date.now() + 2 * HOUR, loginAt: Date.now() - 10 * HOUR })
+    localStorage.setItem(ACTIVITY_KEY, String(Date.now() - 9 * HOUR))
+    // 本页清令牌的那一刻，别的标签页登录写了最后操作时间
+    const real = Storage.prototype.removeItem
+    const rm = vi.spyOn(Storage.prototype, 'removeItem').mockImplementation(function (this: Storage, k: string) {
+      if (this === sessionStorage) localStorage.setItem(ACTIVITY_KEY, String(Date.now()))
+      return real.call(this, k)
+    })
+    await restoreSession()
+    rm.mockRestore()
+    expect(getSession().status).toBe('anon')
+    expect(readTokens()).toBeNull()
+    expect(be.counts['/auth/invalidate']).toBeUndefined()
+  })
+
+  it('等续期锁期间跨过超时点：拿到锁后不发 refresh', async () => {
+    const be = backend()
+    await signIn('d', 'pw')
+    vi.setSystemTime(Date.now() + 7 * HOUR + 59 * MIN) // 还没超时，令牌已过期
+    const request = vi.fn((_n: string, fn: () => Promise<unknown>) => { vi.setSystemTime(Date.now() + 2 * MIN); return fn() })
+    vi.stubGlobal('navigator', { locks: { request } })
+    await expect(refreshSession()).rejects.toMatchObject({ kind: 'unauthenticated', message: IDLE_LOGOUT_TEXT })
+    expect(request).toHaveBeenCalled()
+    expect(be.counts['/auth/refresh']).toBeUndefined()
+    expect(getSession().status).toBe('anon')
+  })
+})
+
 describe('别的标签页超时退出', () => {
   it('收到 logout（reason: idle）：本页也退出，原因是「长时间未操作」', async () => {
     backend()
