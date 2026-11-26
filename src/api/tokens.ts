@@ -11,6 +11,8 @@ export interface Tokens {
   refreshToken: string
   /** access_token 过期时刻（毫秒时间戳） */
   expiresAt: number
+  /** 本次登录的时刻（毫秒）。续期沿用，不变；用于无操作超时判断（idle.ts）。旧版本存的令牌没有这一项 */
+  loginAt?: number
 }
 
 export const TOKEN_KEY = 'hjc-session'
@@ -24,6 +26,7 @@ export const isTokens = (t: unknown): t is Tokens => {
   const v = t as Tokens | null
   return !!v && typeof v === 'object' && typeof v.accessToken === 'string' && !!v.accessToken
     && typeof v.refreshToken === 'string' && !!v.refreshToken && typeof v.expiresAt === 'number'
+    && (v.loginAt === undefined || typeof v.loginAt === 'number')
 }
 
 /** 删掉旧版本留在 localStorage 里的令牌（旧版本「记住我」存在那里，关浏览器也不失效）。应用启动时调用 */

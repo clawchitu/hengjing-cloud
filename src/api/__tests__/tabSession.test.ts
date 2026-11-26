@@ -2,6 +2,7 @@
 // 令牌改存 sessionStorage 后的跨标签页行为：新开标签页要令牌、续期广播、一起退出、旧 localStorage 令牌清除。
 // 「别的标签页」用同名 BroadcastChannel 模拟（同一进程里的另一个频道对象收得到本页的消息，本页也收得到它的）。
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { writeLastActivity } from '../idle'
 import { setConfig } from '../config'
 import { __resetHttpForTests, refreshSession, request } from '../http'
 import { __resetSessionForTests, ASK_TIMEOUT_MS, getSession, initSession, restoreSession, signIn, signOut } from '../session'
@@ -29,6 +30,7 @@ beforeEach(() => {
   localStorage.clear(); sessionStorage.clear()
   setConfig({ apiBase: '/api', dataSource: 'real' })
   __resetHttpForTests(); __resetSessionForTests()
+  writeLastActivity() // 刚有过操作（无操作超时另见 idle.test.ts）
   unwire = initSession()
 })
 afterEach(() => {

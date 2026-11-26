@@ -4,7 +4,7 @@
 // - rotated：某个标签页续期成功，旧 refresh_token → 新令牌（http.ts 发，session.ts 收）；
 // - ask / give：新开的标签页没有令牌，向已登录的标签页要（session.ts）；
 // - login：某个标签页登录成功（session.ts）；
-// - logout：某个标签页主动退出，所有标签页一起退出（session.ts）。
+// - logout：某个标签页主动退出或无操作超时（reason: 'idle'），所有标签页一起退出（session.ts）。
 // 频道只在同源页面之间可见；令牌本来就在同源可读的 sessionStorage 里，经频道传递不扩大暴露面。
 import type { Tokens } from './tokens'
 
@@ -15,7 +15,7 @@ export type SessionMessage =
   | { type: 'ask'; id: string }
   | { type: 'give'; id: string; tokens: Tokens }
   | { type: 'login'; to: Tokens }
-  | { type: 'logout' }
+  | { type: 'logout'; reason?: 'idle' }
 
 let channel: BroadcastChannel | null | undefined
 const handlers = new Set<(m: SessionMessage) => void>()

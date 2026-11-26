@@ -17,6 +17,8 @@
 //                          写 false 时房间开关显示「未知」、核对开关记无法核对、不拿它禁用温度和节能。
 //   weatherNowFallback     true（默认）| false：/weather 失败时用小时预报顶替实时数据。
 //   例：features: { freshAirWrite: 'off' }
+// idleTimeoutHours 连续多少小时没有操作（点击、按键、滚轮、触摸）就要重新登录，所有标签页合起来算。
+//                 不写或写了非法值（非正数）默认 8。可以写小数（0.5 = 30 分钟）。只管真实接口模式。
 // icp             备案号：{ number, hosts }。只在 hosts 里的域名（等于它，或以「.它」结尾）下，在登录页底部和全站页脚显示，
 //                 链接到 https://beian.miit.gov.cn/（新窗口）；其他域名（hvac-demo、hvac-mock、localhost 等）不显示。
 //                 不写或写了非法值都取默认值 { number: '苏ICP备18008267号-1', hosts: ['cosyhome.com.cn'] }。

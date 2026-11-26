@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { writeLastActivity } from '../idle'
 import { can as matchPath, getCurrentUserId } from '../auth'
 import { setConfig } from '../config'
 import { __resetHttpForTests, adoptRotation, onSessionExpired, refreshSession, request } from '../http'
@@ -16,6 +17,7 @@ let unwire: () => void = () => {}
 beforeEach(() => {
   setConfig({ apiBase: '/api', dataSource: 'real' })
   __resetHttpForTests(); __resetSessionForTests(); clearTokens()
+  writeLastActivity() // 刚有过操作（无操作超时另见 idle.test.ts）
   unwire = initSession()
 })
 afterEach(() => { unwire(); vi.unstubAllGlobals(); vi.useRealTimers() })

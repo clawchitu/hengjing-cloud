@@ -160,3 +160,52 @@ test.describe('令牌存 sessionStorage（真实接口模式）', () => {
     expect(be.calls['/auth/refresh']).toBeUndefined()
   })
 })
+
+test.describe('8 小时无操作需重新登录（真实接口模式）', () => {
+  const ACTIVITY_KEY = 'hjc-last-activity'
+  const idleToast = (page: Page) => page.getByText('长时间未操作，请重新登录')
+
+  test('启动时（Chrome 恢复会话、刷新）最后操作已超过 8 小时 → 登录页并提示，不取 /me', async ({ context, page }) => {
+    const be = await realMode(context)
+    await login(page)
+    const me = be.calls['/me']
+    // sessionStorage 里的令牌还在（Chrome「继续浏览上次打开的网页」会恢复它），最后操作在 8 小时 1 分前
+    await page.evaluate((k) => localStorage.setItem(k, String(Date.now() - 8 * 3600_000 - 60_000)), ACTIVITY_KEY)
+    await page.reload()
+    await expect(page).toHaveURL(/\/login$/)
+    await expect(idleToast(page)).toBeVisible()
+    expect(await tokenIn(page)).toBeNull()
+    expect(be.calls['/me']).toBe(me)
+    await expect.poll(() => be.invalidated).toBe(1)
+  })
+
+  test('启动时最后操作在 7 小时 59 分前：照常恢复', async ({ context, page }) => {
+    await realMode(context)
+    await login(page)
+    // 10 小时前登录，7 小时 59 分前最后一次操作
+    await page.evaluate(([k, tk]) => {
+      const t = JSON.parse(sessionStorage.getItem(tk)!) as { loginAt: number }
+      sessionStorage.setItem(tk, JSON.stringify({ ...t, loginAt: Date.now() - 10 * 3600_000 }))
+      localStorage.setItem(k, String(Date.now() - 7 * 3600_000 - 59 * 60_000))
+    }, [ACTIVITY_KEY, TOKEN_KEY] as const)
+    await page.reload()
+    await expectLoggedIn(page)
+  })
+
+  test('运行中 8 小时没有操作 → 回登录页并提示；另一个标签页也退出', async ({ context, page }) => {
+    const be = await realMode(context)
+    await page.clock.install()
+    await login(page)
+    const tab2 = await context.newPage()
+    await tab2.goto('/sensors')
+    await expectLoggedIn(tab2)
+    await page.clock.fastForward('08:01:00')
+    await expect(page).toHaveURL(/\/login$/)
+    await expect(idleToast(page)).toBeVisible()
+    await expect(tab2).toHaveURL(/\/login$/)
+    await expect(idleToast(tab2)).toBeVisible()
+    expect(await tokenIn(tab2)).toBeNull()
+    // 假时钟装在整个 context 上，两个标签页的每分钟检查同时到点，各调一次 invalidate（尽力调用，重复无害）
+    await expect.poll(() => be.invalidated).toBeGreaterThanOrEqual(1)
+  })
+})

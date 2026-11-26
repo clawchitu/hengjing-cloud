@@ -22,6 +22,8 @@ export interface RuntimeConfig {
   ctrlTimeoutMs: number
   /** 功能开关（S10 新风、S7 天气里等后端答复的点），见 FEATURE_DEFAULTS 与 docs/plan-s10-s7.md 2.1 */
   features: Readonly<Features>
+  /** 连续这么多小时没有用户操作就要重新登录（见 idle.ts）。不写或非法（非正数）取 8 */
+  idleTimeoutHours: number
   /** 备案号：只在 hosts 里的域名（含子域名）下显示，见 src/components/Icp.tsx（S13 走查 P3） */
   icp: Readonly<IcpConfig>
 }
@@ -125,7 +127,7 @@ export function envOfUrl(url: string): ApiEnv {
   try { return TEST_HOSTS.has(new URL(url.startsWith('//') ? 'https:' + url : url).hostname) ? 'test' : 'prod' } catch { return 'prod' }
 }
 
-type Input = Partial<Omit<RuntimeConfig, 'apiEnv' | 'writeProjectCodes' | 'features' | 'icp'>> & { apiEnv?: string; writeProjectCodes?: unknown; features?: unknown; icp?: unknown }
+type Input = Partial<Omit<RuntimeConfig, 'apiEnv' | 'writeProjectCodes' | 'features' | 'icp' | 'idleTimeoutHours'>> & { apiEnv?: string; writeProjectCodes?: unknown; features?: unknown; icp?: unknown; idleTimeoutHours?: unknown }
 
 /**
  * 合并各层配置并推导 apiEnv。导出供测试使用。
@@ -149,9 +151,18 @@ export function resolveConfig(layers: Input[], devProxyTarget = '', mockAllowed 
     writeProjectCodes: parseCodes(layers),
     requestTimeoutMs: Number(m.requestTimeoutMs) > 0 ? Number(m.requestTimeoutMs) : 10_000,
     ctrlTimeoutMs: Number(m.ctrlTimeoutMs) > 0 ? Number(m.ctrlTimeoutMs) : 12_000,
+    idleTimeoutHours: parseIdleHours(m.idleTimeoutHours),
     features: parseFeatures(layers),
     icp: parseIcp(layers),
   }
+}
+
+/** 无操作超时默认 8 小时（负责人同意，11/25） */
+export const IDLE_TIMEOUT_HOURS_DEFAULT = 8
+/** 正的有限数（可以是小数，如 0.5 = 30 分钟）才用；其他一律取默认值 */
+function parseIdleHours(v: unknown): number {
+  const n = typeof v === 'number' ? v : typeof v === 'string' && v.trim() ? Number(v) : NaN
+  return Number.isFinite(n) && n > 0 ? n : IDLE_TIMEOUT_HOURS_DEFAULT
 }
 
 function buildTimeLayer(): Input {
