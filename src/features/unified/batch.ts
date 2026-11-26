@@ -1,8 +1,8 @@
-// 统一控制页面（S12b）：对同一集成项目里选中的多个项目，逐个走 S12a 的单项目状态机（ctrl 203）。
+// 统一控制页面（S12b）：对同一集成项目里选中的多个项目，逐个走 S12a 的单项目状态机（unified-ctrls-send + 执行记录，见 records.ts）。
 //
 // - prepare(ids, draft)：为每个项目建一个控制器并 request(draft)（逐个校验：离线、app_code、温度范围、无改动…）。
 //   任一项目校验不过就整体不下发，全部 cancel，返回错误；全部通过则停在 confirming，等页面的二次确认。
-// - start()：二次确认通过后按顺序逐个 confirm()（下发前读 → 203 → 下发后读），一个结束再下一个；不重试。
+// - start()：二次确认通过后按顺序逐个 confirm()（下发前读 → unified-ctrls-send + 执行记录 → 下发后读），一个结束再下一个；不重试。
 // - cancel()：确认弹窗取消或失效 → 全部 cancel。
 // - abort()：页面卸载 → 还没发出的全部终止（S12a abort 语义：已发出的照常走完回读），不再开始后面的项目。
 // - 写入口：控制器给出的 {id, code} 先在最新项目列表里找回整个 Project，id 与 code 都对得上才把 Project 交给写入口；
@@ -20,7 +20,8 @@
 //   发起，互相并行），不够就直接按超时拦下；503、403、其他失败不重查。重查只发 205，不重发写请求。
 //   文案分开：503「未下发（控制屏未连接），可重新勾选下发」；两次超时 / 来不及重查「控制屏在线检查超时，未下发，请重试」；
 //   其他失败「控制屏在线检查失败，未下发，请重试」；403 单独标「未下发（当前账号无连接状态权限…）」、不标可重试
-import { callCtrl, writeCtrl, type CtrlReply, type WriteQuery } from '@/api/ctrl'
+import { callCtrl, type CtrlReply, type WriteQuery } from '@/api/ctrl'
+import { createRecordSender } from './records'
 import { INVALID_HOURLY, NO_DATA } from '@/api/values'
 import { roomSwitchReported } from '@/api/config'
 import { ApiError } from '@/api/errors'
@@ -96,15 +97,16 @@ export async function readUnifiedSnapshot(projectId: string, signal: AbortSignal
   return summarizeRooms(r.data ?? [])
 }
 
-/** 写入口：S4 的 writeCtrl(203)，传整个 Project（写防护按 code 比对白名单，请求体用 id） */
+/** 写入口：unified-ctrls-send（records.ts 的 createRecordSender），传整个 Project（写防护按 code 比对白名单，请求体用 id） */
 /**
  * beforeSend：写入口在令牌就绪后、真正 fetch 前同步调用，返回 false 就不发（见 http.ts requestWrite）。
  * 自己实现的下发函数（演示数据、测试）也必须在「发出」前调用它
  */
 export type BatchSender = (project: BatchProject, query: WriteQuery<203>, opts: { beforeSend: () => boolean; signal: AbortSignal }) => Promise<CtrlReply<203>>
-// 批次的取消信号不交给 writeCtrl 去中止 fetch：已经发出的写请求要照常走完、拿到应答（S12a abort 语义）。
-// 取消在发出前由 beforeSend 最先检查（recheck 第一行），效果等同 http 层的信号检查
-export const defaultBatchSender: BatchSender = (project, query, opts) => writeCtrl(203, project, query, { beforeSend: opts.beforeSend })
+// 默认发送函数（后端 11/26 08:43）：unified-ctrls-send（只带这一个项目）+ 轮询执行记录，见 records.ts。
+// 批次的取消信号不交给下发请求去中止 fetch：已经发出的写请求要照常走完（S12a abort 语义）；取消在发出前由 beforeSend 最先检查
+// （recheck 第一行）。取消信号只用来停止执行记录轮询（停下后按应答未知，交给写锁继续核对）
+export const defaultBatchSender: BatchSender = (project, query, opts) => createRecordSender()(project, query, opts)
 
 /** success 已生效、unapplied 未变化、unverifiable 无法核对、unknown 结果未知 */
 export type RowStatus = 'waiting' | 'sending' | 'success' | 'unapplied' | 'unverifiable' | 'failure' | 'unknown' | 'not-sent'
@@ -212,6 +214,8 @@ export function createUnifiedBatch(deps: BatchDeps) {
     open?: Set<EchoField>
     /** 正在进行的核对（锁的 verify 同一时刻只跑一个，正在跑时再调会直接返回） */
     checking?: Promise<unknown>
+    /** 执行记录的操作时间（records.ts 已把 UTC 转成北京时间）：结果卡的「操作时间」优先用它，没有就用前端结束时刻 at */
+    recordAt?: string
     /** 截止时冻结的结果（含 205 预检没通过的未下发） */
     final?: { status: 'not-sent' | 'unknown' | 'failure'; note: string; notExecuted?: boolean; retry?: boolean }
   }
@@ -234,7 +238,7 @@ export function createUnifiedBatch(deps: BatchDeps) {
 
   const emit = (patch: Partial<BatchState>) => {
     const rows = entries.map((e): BatchRow => ({
-      id: e.p.id, code: e.p.code, name: e.p.name, at: e.at, state: e.ctl.getState(),
+      id: e.p.id, code: e.p.code, name: e.p.name, at: e.recordAt ?? e.at, state: e.ctl.getState(),
       status: e.final?.status ?? rowStatus(e.ctl.getState(), e.started), note: e.final?.note, notExecuted: e.final?.notExecuted, replyOk: e.reply === 'ok',
       ...(e.final?.retry ? { retry: true } : {}),
     }))
@@ -299,6 +303,8 @@ export function createUnifiedBatch(deps: BatchDeps) {
     })
     out.then((r) => {
       const ok = r?.success === true
+      const rt = (r as { operateTime?: unknown } | null)?.operateTime
+      if (e.sent && typeof rt === 'string' && rt) e.recordAt = rt
       if (e.sent) e.reply = ok ? 'ok' : 'rejected'
       // success=true 只算「已下发」：已认领的不在这里放锁，等下发后回读的结论（见 settleByReadback）。
       // 截止后才到的成功应答（这一项已冻结、页面可能已 reset 取消订阅）：按结果未知结算，交给锁核对或到期
@@ -476,6 +482,8 @@ export function createUnifiedBatch(deps: BatchDeps) {
           let r = await once(e)
           for (let i = 0; i < SCREEN_RETRIES && r === 'timeout'; i++) {
             if (stopped || expired || ac.signal.aborted) return r
+            // 预留按「再查 5 秒 + send 12 秒」算，不含执行记录轮询：记录通常 1–2 秒出结果；轮询没完就到 35 秒截止的，按「已下发，结果未知」
+            // 冻结、写锁继续核对（安全一侧）。若把轮询窗口也算进来，第 5 秒超时后永远不够重查，S13 P2 的「超时重查一次」就失效了
             if (deadlineAt - now().getTime() < SCREEN_CHECK_MS + SCREEN_WRITE_MS) return r
             r = await once(e)
           }

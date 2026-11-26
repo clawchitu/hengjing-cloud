@@ -179,7 +179,7 @@ function rowDetail(r: BatchRow): string {
   }
 }
 
-// 最近一次结果：203 下发不会出现在 unified-ctrls-records 里，没有可查的历史，只存在本标签页（sessionStorage）。
+// 最近一次结果：只存在本标签页（sessionStorage）。下发已改走 unified-ctrls-send（会写执行记录），结论仍由 200 回读定；执行记录的历史列表暂不做页面。
 // 键 = 数据源 + 稳定的账号标识（/me 的 user id，没有就用令牌的 sub；演示模式用演示账号名），
 // 换账号或换数据源都看不到别的结果
 const LAST_KEY = 'hjc-unified-last:'

@@ -111,7 +111,10 @@ export function transition<S>(s: UnifiedState<S>, e: UnifiedEvent<S>): UnifiedSt
   }
 }
 
-/** 下发函数：默认走 S4 统一写入口 writeCtrl(203)（内部 requestWrite() 过写防护、不重试）。不传取消信号：发出后不中止 */
+/**
+ * 下发函数：单项目控制器的默认值 writeCtrl(203)（内部 requestWrite() 过写防护、不重试）。只给单元测试和 hooks.ts 的单项目 hook 用，
+ * 页面不用：统一控制页走 batch.ts（unified-ctrls-send + 执行记录，后端 11/26 08:43），真实下发不要用这个默认值
+ */
 export type UnifiedSender = (project: WriteProject, query: WriteQuery<203>) => Promise<CtrlReply<203>>
 export const defaultSender: UnifiedSender = (project, query) => writeCtrl(203, project, query)
 
