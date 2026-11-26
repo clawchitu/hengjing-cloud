@@ -1,5 +1,5 @@
 // H1 泄漏回归（npm run e2e:live:dry 的第二步，不连测试服）：
-// 用一对独特的假账号密码跑 setup，并故意让「记住我」找不到（填完账号密码后才失败），
+// 用一对独特的假账号密码跑 setup，并故意让登录按钮找不到（填完账号密码后才失败），
 // 然后在终端输出、JSON 报告、test-results-live/（含 error-context.md）、e2e-live/.auth/ 里搜这两个值，搜到即失败。
 import { spawnSync } from 'node:child_process'
 import { existsSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs'
@@ -10,7 +10,7 @@ const account = `H1LEAKACCT${randomBytes(4).toString('hex')}`
 const password = `H1LEAKPW${randomBytes(4).toString('hex')}`
 const r = spawnSync('npx', ['playwright', 'test', '-c', 'playwright.live-dry.config.ts', '--project', 'platform'], {
   encoding: 'utf8',
-  env: { ...process.env, H1_DRY_BREAK: 'remember', H1_DRY_KEEP: '1', H1_DRY_MARK_ACCOUNT: account, H1_DRY_MARK_PASSWORD: password },
+  env: { ...process.env, H1_DRY_BREAK: 'submit', H1_DRY_KEEP: '1', H1_DRY_MARK_ACCOUNT: account, H1_DRY_MARK_PASSWORD: password },
 })
 const out = (r.stdout ?? '') + (r.stderr ?? '')
 

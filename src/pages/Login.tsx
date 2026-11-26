@@ -110,6 +110,7 @@ export default function Login() {
   const [show, setShow] = useState(false)
   const form = useForm<LoginValues>({ resolver: zodResolver(loginSchema), defaultValues: loginDefaults })
   const busy = form.formState.isSubmitting
+  const mockLogin = __HJC_MOCK__ && isMockMode()
 
   // 跳转由 main.tsx 的 LoginRoute 在登录态变化后统一处理（回原路径或首页）
   const done = () => toast('登录成功，欢迎回来')
@@ -118,7 +119,7 @@ export default function Login() {
     // 交付包（__HJC_MOCK__ = false）只有真实接口登录，演示账号登录代码在打包时剔除
     if (!__HJC_MOCK__ || !isMockMode()) {
       try {
-        await signIn(account, password, remember)
+        await signIn(account, password)
       } catch (e) {
         // 后端文案（密码错误、经销商未配置集成功能等）原样提示；令牌类技术细节已在 errors.ts 统一成中文
         return toast(isApiError(e) ? e.message : '登录失败，请重试', true)
@@ -180,11 +181,12 @@ export default function Login() {
                 </InputGroup>
               </FormItem>
             )} />
-            <div className="login-row">
+            {/* 真实接口的令牌只存 sessionStorage、关浏览器即失效（src/api/tokens.ts），「记住我」没有意义，不显示；演示数据照旧 */}
+            {mockLogin && <div className="login-row">
               <FormField control={form.control} name="remember" render={({ field }) => (
                 <label><Checkbox name={field.name} ref={field.ref} checked={field.value} onCheckedChange={(v) => field.onChange(v === true)} onBlur={field.onBlur} />记住我</label>
               )} />
-            </div>
+            </div>}
             <button className="btn-login" disabled={busy}>{busy ? '登录中…' : '登 录'}</button>
           </form>
         </Form>

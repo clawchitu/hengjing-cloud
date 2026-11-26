@@ -1,7 +1,7 @@
 // H1 真实测试服只读 e2e 的公共夹具：
 // - 每个用例的 context 在 context.route 层装请求闸门（policy.ts），请求发出前就 abort，违规记账、用例结束时判失败；
 // - 记录 /api 的读回包，供断言「界面结论与只读接口返回一致」；
-// - 登录态来自 setup 项目保存的 storageState（每个账号每次运行只登录一次），用例里不登录、不续期；
+// - 登录态来自 setup 项目保存的 storageState 和 sessionStorage 里的令牌（每个账号每次运行只登录一次），用例里不登录、不续期；
 // - 每个用例开始前核对目标是测试站、令牌剩余时间够跑完。
 import { readFileSync } from 'node:fs'
 import { expect, test as base, type BrowserContext, type Page, type Request } from '@playwright/test'
@@ -14,6 +14,8 @@ import { ORIGIN, TARGET } from './target'
 export type Role = 'platform' | 'dealer'
 export const authFile = (role: Role) => `e2e-live/.auth/${role}.json`
 export const metaFile = (role: Role) => `e2e-live/.auth/${role}.meta.json`
+/** setup 登录后 sessionStorage 里的令牌记录（storageState 不含 sessionStorage），由 page 夹具在每个 context 启动时写回 */
+export const sessionFile = (role: Role) => `e2e-live/.auth/${role}.session.json`
 export interface AuthMeta { role: Role; loginAt: number; expiresAt: number }
 
 /** 令牌至少还要剩这么久才开跑一个用例（app 在到期前 REFRESH_LEEWAY_MS 内会主动续期，留出用例本身的时长） */
@@ -147,7 +149,7 @@ export async function assertTestTarget(page: Page) {
 /** 浏览器里存的令牌过期时间（只取数字，不读令牌本身） */
 export async function tokenExpiresAt(page: Page): Promise<number | null> {
   return page.evaluate((key) => {
-    try { const v = JSON.parse(localStorage.getItem(key) ?? 'null'); return typeof v?.expiresAt === 'number' ? v.expiresAt : null } catch { return null }
+    try { const v = JSON.parse(sessionStorage.getItem(key) ?? 'null'); return typeof v?.expiresAt === 'number' ? v.expiresAt : null } catch { return null }
   }, TOKEN_KEY)
 }
 
@@ -201,12 +203,18 @@ export const test = base.extend<{ role: Role; ledger: Ledger; api: ApiLog }>({
     const left = meta.expiresAt - Date.now()
     if (left < MIN_TOKEN_LEFT_MS) throw new Error(`${role} 令牌只剩 ${Math.round(left / 60_000)} 分钟，不足以在不续期的前提下跑完；本次运行中止，不重新登录`)
     info.annotations.push({ type: 'token', description: `${role} 令牌剩余约 ${Math.round(left / 60_000)} 分钟` })
+    // 令牌写回 sessionStorage（只写测试站源、只在还没有时写，页面内的变化不被覆盖）。参数不进步骤标题
+    const raw = JSON.parse(readFileSync(sessionFile(role), 'utf8')) as string | null
+    if (!raw) throw new Error(`${role} 没有保存的令牌，本次运行中止，不重新登录`)
+    await page.context().addInitScript(([key, value, origin]) => {
+      if (location.origin === origin && !sessionStorage.getItem(key)) sessionStorage.setItem(key, value)
+    }, [TOKEN_KEY, raw, ORIGIN] as const)
     await use(page)
   },
   api: async ({ page }, use) => { await use(new ApiLog(page)) },
 })
 
-/** 打开某页，核对目标与登录态（落在登录页说明 storageState 失效：直接失败，不重新登录） */
+/** 打开某页，核对目标与登录态（落在登录页说明保存的登录态失效：直接失败，不重新登录） */
 export async function open(page: Page, path: string) {
   await page.goto(path)
   await assertTestTarget(page)

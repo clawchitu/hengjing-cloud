@@ -8,7 +8,8 @@ import { profile } from '../api'
 import { isMockMode } from '../api/config'
 import type { ApiError } from '../api/errors'
 import { can as canRoute, getSession, initSession, restoreSession, signOut, subscribeSession, type SessionInfo, type SessionState } from '../api/session'
-import { readTokens } from '../api/tokens'
+import { hasSessionChannel } from '../api/sessionChannel'
+import { purgeLegacyTokens, readTokens } from '../api/tokens'
 import type { Role, User } from './org/types'
 
 export type MockAuth = { username: string; role: Role }
@@ -57,15 +58,15 @@ export function mockSignIn(a: MockAuth, remember: boolean) {
 }
 
 // ---------------------------------------------------------------------------
-// real：首屏在恢复开始前，有令牌就先当作 loading，避免守卫在恢复完成前把人踢到登录页
+// real：首屏在恢复开始前，有令牌（或能向别的标签页要令牌）就先当作 loading，避免守卫在恢复完成前把人踢到登录页
 
 let booted = false
-let hadTokens: boolean | undefined
+let mayRestore: boolean | undefined
 const LOADING: SessionState = { status: 'loading', info: null }
 function realState(): SessionState {
   if (!booted) {
-    if (hadTokens === undefined) hadTokens = !!readTokens()
-    if (hadTokens && getSession().status === 'anon') return LOADING
+    if (mayRestore === undefined) mayRestore = !!readTokens() || hasSessionChannel()
+    if (mayRestore && getSession().status === 'anon') return LOADING
   }
   return getSession()
 }
@@ -138,6 +139,7 @@ export function logout() {
 /** 真实接口模式：接上会话（过期通知、跨标签页同步），用已存令牌恢复登录态。AppProvider 调一次 */
 export function useSessionBoot() {
   useEffect(() => {
+    purgeLegacyTokens() // 旧版本存在 localStorage 的令牌一律作废（演示数据模式也清，不留在磁盘上）
     if (isMockMode()) return
     clearMockAuth() // 旧的 hjc-auth（可伪造）废弃
     const unwire = initSession()
@@ -151,7 +153,7 @@ export function useSessionBoot() {
 export function __resetSessionViewForTests() {
   mockAuth = undefined
   booted = false
-  hadTokens = undefined
+  mayRestore = undefined
   cacheView = undefined
   cacheKey = undefined
   cacheMode = undefined

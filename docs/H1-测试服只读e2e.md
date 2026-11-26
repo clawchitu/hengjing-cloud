@@ -43,7 +43,7 @@ GitHub Actions：`.github/workflows/e2e-live.yml`，只能在 Actions 页面手�
    - **不用 APIRequestContext**（`request` 夹具、`page.request` 等不经过 `context.route`）：单元测试扫描 `e2e-live/` 源码，出现即失败。
    - **拦截但不算违规**：`POST /project/click/{id}`（切换项目时的点击上报，有副作用；前端失败只记日志、不影响切换）；Cloudflare 自动注入的访问统计（`static.cloudflareinsights.com`、`/cdn-cgi/rum`）。
    - 启动自检：白名单和写路由交集为空、白名单没有一条被 `isWritePath` 认作写路径，否则直接报错。setup 里先跑 4 条不联网的闸门自检（放行的请求由本地兜底应答）：每条写路由、续期、作废令牌、无许可的登录在发出前被拦；登录许可连续用第二次被拦；并发 5 个登录只放行 1 个；重定向后的请求补判违规、WebSocket 被关闭。setup 串行，自检不过就不登录。
-3. **单次登录**（`auth.setup.ts`）：setup 项目每个账号登录一次（勾「记住我」，令牌在 localStorage），存成 `e2e-live/.auth/<账号>.json` 的 storageState，`platform`、`dealer` 两个项目依赖它并复用。用例里出现登录请求即违规；`retries: 0`，setup 开头再断言 `retry === 0`、`repeatEachIndex === 0`（重试或重复 setup 就是第二次登录）；`--project` 只选一个账号时，另一个账号不登录。运行结束 `teardown.ts` 删掉 `.auth/`（里面有令牌），不调 `/auth/invalidate`。
+3. **单次登录**（`auth.setup.ts`）：setup 项目每个账号登录一次，存成 `e2e-live/.auth/<账号>.json` 的 storageState；令牌只在 sessionStorage（storageState 不含它），另存为 `e2e-live/.auth/<账号>.session.json`，用例的 context 启动时由 `harness.ts` 的 page 夹具写回 sessionStorage。`platform`、`dealer` 两个项目依赖它并复用。用例里出现登录请求即违规；`retries: 0`，setup 开头再断言 `retry === 0`、`repeatEachIndex === 0`（重试或重复 setup 就是第二次登录）；`--project` 只选一个账号时，另一个账号不登录。运行结束 `teardown.ts` 删掉 `.auth/`（里面有令牌），不调 `/auth/invalidate`。
 4. **不续期**：访问令牌有效期 2 小时（`expires_in=7200`）；前端在到期前 1 分钟（`REFRESH_LEEWAY_MS`）才主动续期，且续期请求会被闸门拦下判失败。每个用例开始前检查令牌至少还剩 11 分钟，不够就中止（不重新登录）。整次运行 `globalTimeout` 30 分钟，远低于 2 小时。
 5. **不泄漏账号和令牌**：账号密码用 `evaluate` 填入（`locator.fill` 会把值写进步骤标题，HTML 报告和 trace 里能看到明文，已实测）；不截图、不录视频、不录 trace（trace 里有请求头）；不出 HTML 报告，只出 JSON 报告；设 `PLAYWRIGHT_NO_COPY_PROMPT=1`；登录页上的每一步显式 10 秒超时（远短于用例超时，出错一定走到清空输入框那一步）；从填入账号到离开登录页这一段不用 `expect` 匹配器（匹配器失败时会立刻抓整页快照、含输入框的值，写进 `error-context.md`，已实测），失败时先清空输入框再抛一条不带页面内容的错误；运行结束删掉 `test-results-live/`。每个用例附一个去敏的 `network.txt`（只有判定、方法、路径）。
 
@@ -60,7 +60,7 @@ GitHub Actions：`.github/workflows/e2e-live.yml`，只能在 Actions 页面手�
 
 新风用例只证明「打开不白屏、页面上没有 65536」：S10b（#62）起 `src/pages/FreshAir.tsx` 已走 S10a 的新风数据源（`src/features/freshAir`，ctrl 202 / 210，都在白名单），但这里还不核对 202 / 210 回包，通过不代表新风读数正确。读数核对以后再补。
 
-不覆盖：新风的读数核对和任何设置、天气、统一控制、退出登录、续期（F4）。测完（包括手动在测试服上看页面、`npm run test:live` 联调）不要点页面上的「退出登录」：它调 `/auth/invalidate`，会让同一账号在别的浏览器、设备和脚本里的登录一起失效；只清本地令牌（localStorage / sessionStorage、`e2e-live/.auth/` 的 storageState，脚本里 `clearTokens()`）。S7b 起首页会发 `POST /weather`、`/weather24`（只读，已加入 `e2e-live/policy.ts` 白名单，不算违规），但不核对天气内容。测试服上没有在线项目或离线项目时，相应用例标为跳过（环境不可用，不算失败）。
+不覆盖：新风的读数核对和任何设置、天气、统一控制、退出登录、续期（F4）。测完（包括手动在测试服上看页面、`npm run test:live` 联调）不要点页面上的「退出登录」：它调 `/auth/invalidate`，会让同一账号在别的浏览器、设备和脚本里的登录一起失效；只清本地令牌（sessionStorage、`e2e-live/.auth/` 里保存的登录态，脚本里 `clearTokens()`）。S7b 起首页会发 `POST /weather`、`/weather24`（只读，已加入 `e2e-live/policy.ts` 白名单，不算违规），但不核对天气内容。测试服上没有在线项目或离线项目时，相应用例标为跳过（环境不可用，不算失败）。
 
 ## 5. 结果怎么看
 

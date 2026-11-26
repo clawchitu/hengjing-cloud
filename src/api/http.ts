@@ -7,9 +7,9 @@
 //   续期一次并重放一次，再失败就清掉登录态并通知 onSessionExpired。
 // 多标签页之间用 Web Locks 互斥：拿到锁后先看存储里的 refresh_token 是否已被别的标签页换掉，
 // 换掉了就直接用新令牌，不再发刷新（否则会拿已作废的旧值去刷新，把所有标签页踢下线）。
-// localStorage 是各标签页共享的；sessionStorage 不共享（复制出来的标签页带着同一个 refresh_token，
-// 之后各存各的），所以续期成功后再用 BroadcastChannel 把「旧 refresh → 新令牌」告诉其他标签页，
-// 还持有旧值的标签页直接换上新令牌。
+// 令牌存 sessionStorage，各标签页各存一份（新开的标签页从已登录的标签页要来同一份），所以续期成功后
+// 用 BroadcastChannel 把「旧 refresh → 新令牌」告诉其他标签页（sessionChannel.ts），还持有旧值的标签页
+// 直接换上新令牌。广播发出后再占住锁一小会儿（ROTATION_SETTLE_MS），让排队的标签页先收到广播再拿锁。
 //
 // 写接口只能走 requestWrite()（先过 guard.ts 防护、不重试、超时/断网提示结果未知）；
 // request() 遇到写接口路径直接拒绝。写请求不走上面的「未认证 → 续期 → 重放」：发送前先确保令牌有效，
@@ -17,7 +17,8 @@
 import { getConfig } from './config'
 import { ApiError, errorFromResponse, errorFromThrown } from './errors'
 import { assertWriteAllowed, assertWriteBodyEnums, isNonCanonicalPath, isWritePath, WRITE_ROUTES, type WriteOp, type WriteProject } from './guard'
-import { clearTokens, jwtSub, readTokens, tokensFromResponse, writeTokens, type Tokens } from './tokens'
+import { __resetSessionChannelForTests, hasSessionChannel, postSession, type SessionMessage } from './sessionChannel'
+import { clearTokens, isTokens, jwtSub, readTokens, tokensFromResponse, writeTokens, type Tokens } from './tokens'
 
 export interface RequestOptions {
   method?: 'GET' | 'POST'
@@ -34,6 +35,8 @@ export interface RequestOptions {
 export const REFRESH_LEEWAY_MS = 60_000
 /** 刷新被拒后等其他标签页广播新令牌的时间 */
 const ROTATION_GRACE_MS = 300
+/** 续期成功并广播后继续占锁的时间：锁的交接和广播走不同的通道，先后没有保证 */
+const ROTATION_SETTLE_MS = 100
 
 // ---------------------------------------------------------------------------
 // 会话过期通知。同一个会话的多个并发请求同时失败时 3 秒内只通知一次；
@@ -59,22 +62,15 @@ function expireSession(reason: ApiError) {
 }
 
 // ---------------------------------------------------------------------------
-// 跨标签页同步续期结果（见文件头）
+// 跨标签页同步续期结果（见文件头；频道的订阅在 session.ts 的 initSession）
 
-interface Rotation { type: 'rotated'; from: string; to: Tokens }
-let channel: BroadcastChannel | null | undefined
-/** 订阅别的标签页的续期广播。应用启动时调用（session.ts 的 initSession），不要等到本页第一次刷新 */
-export function listenRotations() { rotationChannel() }
-function rotationChannel(): BroadcastChannel | null {
-  if (channel !== undefined) return channel
-  channel = typeof BroadcastChannel !== 'undefined' ? new BroadcastChannel('hjc-session') : null
-  channel?.addEventListener('message', (e: MessageEvent<Rotation>) => adoptRotation(e.data))
-  return channel
-}
-/** 别的标签页续期了：本页还持有同一个旧 refresh_token 就换成新令牌（写回原来的存储） */
-export function adoptRotation(m: Rotation | null | undefined) {
-  if (!m || m.type !== 'rotated' || !m.to) return
-  if (readTokens()?.refreshToken === m.from) writeTokens(m.to)
+type Rotation = Extract<SessionMessage, { type: 'rotated' }>
+/** 别的标签页续期了：本页还持有同一个旧 refresh_token 就换成新令牌。返回是否换了 */
+export function adoptRotation(m: Rotation | null | undefined): boolean {
+  if (!m || m.type !== 'rotated' || !isTokens(m.to)) return false
+  if (readTokens()?.refreshToken !== m.from) return false
+  writeTokens(m.to)
+  return true
 }
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
@@ -125,17 +121,32 @@ async function send<T>(path: string, opts: RequestOptions, accessToken: string |
 let inflight: Promise<Tokens> | null = null
 
 const LOCK_NAME = 'hjc-token-refresh'
-/** 跨标签页互斥；不支持 Web Locks 的环境（旧浏览器、node）退化为只在页内单飞 */
-function withRefreshLock<T>(fn: () => Promise<T>): Promise<T> {
+/**
+ * 跨标签页互斥；不支持 Web Locks 的环境（旧浏览器、node）退化为只在页内单飞。
+ * fn 的结果一出来就交给调用方；hold() 为真时（刚广播了新令牌）再占锁 ROTATION_SETTLE_MS 才放
+ */
+function withRefreshLock<T>(fn: () => Promise<T>, hold: () => boolean): Promise<T> {
   const locks = typeof navigator !== 'undefined' ? (navigator as Navigator & { locks?: LockManager }).locks : undefined
-  return locks?.request ? locks.request(LOCK_NAME, fn) as Promise<T> : fn()
+  if (!locks?.request) return fn()
+  return new Promise<T>((resolve, reject) => {
+    Promise.resolve(locks.request(LOCK_NAME, async () => {
+      try { resolve(await fn()) } catch (e) { reject(e); return }
+      if (hold()) await new Promise<void>((done) => {
+        const t = setTimeout(release, ROTATION_SETTLE_MS)
+        function release() { clearTimeout(t); releaseHold = null; done() }
+        releaseHold = release
+      })
+    })).catch(reject)
+  })
 }
+/** 正在占着的锁（续期广播后的那一小段）；测试重置时立即放掉，免得假时钟下锁一直不放 */
+let releaseHold: (() => void) | null = null
 
 /** 刷新令牌。页内并发调用共用同一个请求，多标签页之间串行。失败时清掉登录态并通知过期 */
 export function refreshSession(): Promise<Tokens> {
   if (inflight) return inflight
-  rotationChannel()
   const seen = readTokens()?.refreshToken
+  let rotated = false
   inflight = withRefreshLock(async () => {
     const cur = readTokens()
     if (!cur) throw new ApiError('unauthenticated', '登录已过期，请重新登录')
@@ -152,12 +163,13 @@ export function refreshSession(): Promise<Tokens> {
         throw new ApiError('unauthenticated', '登录已过期，请重新登录')
       }
       writeTokens(next)
-      rotationChannel()?.postMessage({ type: 'rotated', from: cur.refreshToken, to: next } satisfies Rotation)
+      postSession({ type: 'rotated', from: cur.refreshToken, to: next })
+      rotated = true
       return next
     } catch (e) {
       const err = e instanceof ApiError ? e : errorFromThrown(e, false)
       // refresh 被拒可能是别的标签页刚轮换过、广播还没到：稍等再看一次
-      if (channel) await sleep(ROTATION_GRACE_MS)
+      if (hasSessionChannel()) await sleep(ROTATION_GRACE_MS)
       const now = readTokens()
       // 存储里已是新令牌（别的标签页续期，或本页重新登录）：直接用；已退出：不再清
       if (now && now.refreshToken !== cur.refreshToken) return now
@@ -168,7 +180,7 @@ export function refreshSession(): Promise<Tokens> {
       expireSession(expired)
       throw expired
     }
-  }).finally(() => { inflight = null })
+  }, () => rotated).finally(() => { inflight = null })
   return inflight
 }
 
@@ -347,6 +359,6 @@ export function __resetHttpForTests() {
   lastExpiredAt = -Infinity
   lastExpiredKey = undefined
   listeners.clear()
-  channel?.close()
-  channel = undefined
+  releaseHold?.()
+  __resetSessionChannelForTests()
 }

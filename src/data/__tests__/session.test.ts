@@ -3,6 +3,7 @@ import { act, renderHook } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { setConfig } from '../../api/config'
 import { __resetHttpForTests } from '../../api/http'
+import { __resetSessionChannelForTests } from '../../api/sessionChannel'
 import { __resetSessionForTests, signIn } from '../../api/session'
 import { clearTokens, writeTokens } from '../../api/tokens'
 import { fakeBackend, json } from '../../api/__tests__/helpers'
@@ -55,12 +56,20 @@ describe('真实接口模式', () => {
   beforeEach(() => setConfig({ apiBase: '/api', dataSource: 'real' }))
 
   it('有已存令牌、恢复还没开始时先报 loading，守卫不会提前跳登录页', () => {
-    writeTokens({ accessToken: 'A1', refreshToken: 'R1', expiresAt: Date.now() + 3600_000 }, true)
+    writeTokens({ accessToken: 'A1', refreshToken: 'R1', expiresAt: Date.now() + 3600_000 })
     expect(getSessionView()).toMatchObject({ authed: false, authLoading: true })
   })
 
-  it('没有令牌 → 未登录', () => {
+  it('没有令牌、恢复还没开始：能向别的标签页要令牌（有 BroadcastChannel）时先报 loading', () => {
+    expect(getSessionView()).toMatchObject({ authed: false, authLoading: true, userKey: null })
+  })
+
+  it('没有令牌、也没有 BroadcastChannel → 直接未登录', () => {
+    vi.stubGlobal('BroadcastChannel', undefined)
+    __resetSessionChannelForTests()
     expect(getSessionView()).toMatchObject({ authed: false, authLoading: false, userKey: null })
+    vi.unstubAllGlobals()
+    __resetSessionChannelForTests()
   })
 
   it('登录后：身份取自 /me（type=1 经销商），userKey 按用户 ID', async () => {

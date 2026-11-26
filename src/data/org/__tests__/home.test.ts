@@ -53,7 +53,7 @@ beforeEach(() => {
 afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); setConfig(null) })
 
 describe('只读接口（pcfg.ts）', () => {
-  beforeEach(() => writeTokens({ accessToken: 'A1', refreshToken: 'R1', expiresAt: Date.now() + 3600_000 }, true))
+  beforeEach(() => writeTokens({ accessToken: 'A1', refreshToken: 'R1', expiresAt: Date.now() + 3600_000 }))
 
   it('统计：int64 是字符串，转成数字；缺 project_offline 时按 total - online 算', async () => {
     const be = fakeBackend({ '/integrated-projects/stat': (_c, n) => json(n === 1 ? { total: '3', project_total: '3', project_online: '2', project_offline: '1' } : { total: '2', project_total: '5', project_online: '1' }) })

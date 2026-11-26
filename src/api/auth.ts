@@ -25,14 +25,14 @@ export const setCurrentUserId = (id: string) => { currentUserId = id }
  * POST /auth/login。恒境云一律传 isdp=true（负责人答复；没有集成功能的账号在登录时就被拒，
  * 后端返回 500 code 13，文案原样提示）。
  */
-export async function login(mobile: string, password: string, opts: { remember?: boolean; store?: boolean } = {}) {
+export async function login(mobile: string, password: string, opts: { store?: boolean } = {}) {
   const r = await request<{ access_token?: string; refresh_token?: string; expires_in?: number }>('/auth/login', {
     auth: false,
     body: { mobile, password, isdp: true },
   })
   const t = tokensFromResponse(r)
   // store=false：由调用方确认本次登录仍然有效后再写（session.ts）
-  if (opts.store !== false) writeTokens(t, opts.remember ?? false)
+  if (opts.store !== false) writeTokens(t)
   return t
 }
 

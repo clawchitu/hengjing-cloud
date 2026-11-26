@@ -12,7 +12,7 @@ const ctx = { user: users.hjadmin, dealerAccount: false }
 beforeEach(() => {
   setConfig({ apiBase: '/api', dataSource: 'real' })
   __resetHttpForTests(); clearTokens()
-  writeTokens({ accessToken: 'A1', refreshToken: 'R1', expiresAt: Date.now() + 3600_000 }, true)
+  writeTokens({ accessToken: 'A1', refreshToken: 'R1', expiresAt: Date.now() + 3600_000 })
 })
 afterEach(() => { vi.unstubAllGlobals(); setConfig(null) })
 
