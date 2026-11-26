@@ -33,7 +33,7 @@ beforeAll(() => {
 })
 
 type Route = (call: Call, n: number) => Response | Promise<Response>
-// p1 同时属于 g1、g2；真实项目没有区县名（只有行政区划码）
+// p1 同时属于 g1、g2；真实项目只有行政区划码 customer_region，名称由 src/data/region 转换
 const PROJECTS = [
   { id: 'p1', code: '240829001', name: '测试项目0829', app_code: '1', app_name: '通用版', customer_region: '320000/320500/320506', online: true },
   { id: 'p2', code: '260911001', name: '独立空气系统测试', app_code: '12', app_name: '独立空气系统', online: true },
@@ -72,17 +72,35 @@ beforeEach(() => {
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); setConfig(null) })
 
 describe('Groups（真实数据形状）', () => {
-  it('区域下拉能打开：没有区县名的项目归到「未知区域」，不产生空值选项', async () => {
-    backend()
+  it('区域列：区划码转成「市 区县」，查不到显示原码（未知），空值显示「—」；筛选用同样的文字，空值叫「未设置区域」', async () => {
+    const projects = [
+      ...PROJECTS,
+      { id: 'p4', code: '250101001', name: '北京样板间', app_code: '1', customer_region: '110000/110100/110101' },
+      { id: 'p5', code: '250101002', name: '码查不到', app_code: '1', customer_region: '320000/320500/320599' },
+    ]
+    backend({
+      '/ctrl/projects': () => json({ project_entities: projects }),
+      '/integrated-projects': () => json({ entities: [{ ...GROUPS[0], project_ids: ['p1', 'p3', 'p4', 'p5'] }, ...GROUPS.slice(1)] }),
+    })
     await signIn('u', 'pw', true)
-    mount(createElement(Groups))
+    const { container } = mount(createElement(Groups))
     await screen.findByText('测试项目0829')
+    const areaOfRow = (name: string) => screen.getByText(name).closest('tr')!.querySelectorAll('td')[2].textContent
+    expect(areaOfRow('测试项目0829')).toBe('苏州市 吴中区')
+    expect(areaOfRow('北京样板间')).toBe('北京市 东城区')
+    expect(areaOfRow('码查不到')).toBe('320000/320500/320599（未知）')
+    expect(areaOfRow('科希家办公室')).toBe('—')
+    expect(container.textContent).not.toContain('未知区域')
     const trigger = screen.getByRole('combobox', { name: '区域' })
     await act(async () => { fireEvent.keyDown(trigger, { key: 'Enter' }) })
     const list = await screen.findByRole('listbox')
-    expect(within(list).getAllByRole('option').map((o) => o.textContent)).toEqual(['全部区域', '未知区域'])
-    await act(async () => { fireEvent.click(within(list).getByRole('option', { name: '未知区域' })) })
-    expect(screen.getAllByText('未知区域').length).toBeGreaterThan(1) // 表格里的区域列
+    expect(within(list).getAllByRole('option').map((o) => o.textContent)).toEqual(['全部区域', '苏州市 吴中区', '北京市 东城区', '320000/320500/320599（未知）', '未设置区域'])
+    await act(async () => { fireEvent.click(within(list).getByRole('option', { name: '未设置区域' })) })
+    const rows = container.querySelectorAll('tbody[data-slot="table-body"] > tr')
+    expect([...rows].map((r) => r.querySelector('td')!.textContent)).toEqual(['科希家办公室'])
+    await act(async () => { fireEvent.keyDown(screen.getByRole('combobox', { name: '区域' }), { key: 'Enter' }) })
+    await act(async () => { fireEvent.click(within(await screen.findByRole('listbox')).getByRole('option', { name: '苏州市 吴中区' })) })
+    expect([...container.querySelectorAll('tbody[data-slot="table-body"] > tr')].map((r) => r.querySelector('td')!.textContent)).toEqual(['测试项目0829'])
   })
 
   it('项目显示 code 和应用名称（appName），空集成项目的在线比例不出现 NaN', async () => {

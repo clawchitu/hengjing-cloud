@@ -1,6 +1,7 @@
 // 纯函数：后端实体 → 视图模型、组织范围的拼装、当前项目与默认经销商的取值规则。不依赖 React，单测直接覆盖。
 import type { DistributorEntity, IntegratedProjectEntity, ProjectEntity } from '../../api/pcfg'
 import { toAppCode } from './capabilities'
+import { regionText, type RegionNames } from '../region/text'
 import type { Dealer, Group, Project, Scope } from './types'
 
 /**
@@ -21,7 +22,8 @@ export const isOnlineEntity = (e: { online?: unknown }) => e.online === true
 const str = (v: unknown) => (typeof v === 'string' ? v : v === undefined || v === null ? '' : String(v))
 const count = (v: unknown) => { const n = Number(v); return Number.isFinite(n) && n > 0 ? Math.trunc(n) : 0 }
 
-export function toProject(e: ProjectEntity): Project {
+/** names：行政区划名称表（src/data/region，按需加载）；不传或加载失败时区域显示原码 */
+export function toProject(e: ProjectEntity, names: RegionNames | null = null): Project {
   return {
     id: e.id,
     code: str(e.code),
@@ -29,6 +31,7 @@ export function toProject(e: ProjectEntity): Project {
     groupId: '',
     city: '',
     district: '',
+    area: regionText(e.customer_region, names),
     kind: str(e.app_category_name),
     online: isOnlineEntity(e),
     version: str(e.app_version),

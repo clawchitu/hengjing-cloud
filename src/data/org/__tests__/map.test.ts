@@ -5,7 +5,7 @@ import { isOnlineEntity, joinScope, PLATFORM_DEALER, PLATFORM_DEALER_ID, withPla
 import type { Group, Project } from '../types'
 
 const P = (id: string, extra: Partial<Project> = {}): Project => ({
-  id, code: 'c' + id, name: 'n' + id, groupId: '', city: '', district: '', kind: '', online: false, version: '', devices: 0, programCode: 1, ...extra,
+  id, code: 'c' + id, name: 'n' + id, groupId: '', city: '', district: '', area: '', kind: '', online: false, version: '', devices: 0, programCode: 1, ...extra,
 })
 const G = (id: string, projectIds: string[], dealerId = 'D1'): Group => ({ id, code: id, dealerId, name: id, type: '', typeColor: 'cyan', desc: '', created: '', projectIds })
 

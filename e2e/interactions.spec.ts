@@ -174,13 +174,13 @@ test.describe('Select（集成项目）', () => {
     await expect(area).toHaveText('全部区域')
     await area.click()
     await page.clock.runFor(100)
-    await page.getByRole('option', { name: '浦东新区' }).click()
+    await page.getByRole('option', { name: '上海 浦东新区' }).click()
     await page.clock.runFor(500)
-    await expect(area).toHaveText('浦东新区')
+    await expect(area).toHaveText('上海 浦东新区')
     // 重复点当前集成项目：筛选不变
     await page.locator('.grp-card.on h4').click()
     await page.clock.runFor(500)
-    await expect(area).toHaveText('浦东新区')
+    await expect(area).toHaveText('上海 浦东新区')
     // 滨江别墅区的项目都在滨江区
     await page.locator('.grp-card', { hasText: '滨江别墅区' }).locator('h4').click()
     await page.clock.runFor(500)
@@ -192,7 +192,7 @@ test.describe('Select（集成项目）', () => {
     // 下拉里只有本集成项目的区域
     await area.click()
     await page.clock.runFor(100)
-    await expect(page.getByRole('option')).toHaveText(['全部区域', '滨江区'])
+    await expect(page.getByRole('option')).toHaveText(['全部区域', '杭州 滨江区'])
     await page.keyboard.press('Escape')
   })
 

@@ -69,7 +69,7 @@ const EXPIRE_TEXT: Record<ExpireReason, string> = {
 
 /** 没有可见项目时的占位，保证旧页面拿到的 project 不为空 */
 const NO_PROJECT: Project = Object.freeze({
-  id: '', code: '', name: '', groupId: '', city: '', district: '', kind: '', online: false, version: '', devices: 0, programCode: 0,
+  id: '', code: '', name: '', groupId: '', city: '', district: '', area: '', kind: '', online: false, version: '', devices: 0, programCode: 0,
 }) as Project
 
 /** 兼容门面：拆分前 AppProvider 提供的全部字段 */
