@@ -18,7 +18,8 @@ export function regionText(raw: unknown, names: RegionNames | null): string {
   if (!s) return ''
   if (!names) return s
   const unknown = `${s}（未知）`
-  const segs = s.split('/').map((x) => x.trim()).filter(Boolean)
+  // 空段（「/」「320000//320500」）也算格式不对
+  const segs = s.split('/').map((x) => x.trim())
   if (!segs.every((x) => /^\d{6}(\d{3}|\d{6})?$/.test(x))) return unknown
   const codes = segs.map((x) => x.slice(0, 6))
   const code = codes[codes.length - 1]

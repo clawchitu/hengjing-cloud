@@ -42,6 +42,9 @@ describe('regionText（区划码 → 区域文字）', () => {
     expect(regionText('320000/320500/110101', names)).toBe('320000/320500/110101（未知）')
     expect(regionText('江苏省', names)).toBe('江苏省（未知）')
     expect(regionText('3205', names)).toBe('3205（未知）')
+    expect(regionText('/', names)).toBe('/（未知）')
+    expect(regionText('320000//320500', names)).toBe('320000//320500（未知）')
+    expect(regionText('320000/320500/', names)).toBe('320000/320500/（未知）')
   })
 
   it('空值返回空串；名称表没加载时原样返回码', () => {
