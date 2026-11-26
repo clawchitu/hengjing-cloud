@@ -130,6 +130,19 @@ describe('新开标签页向已登录的标签页要令牌', () => {
     await vi.waitFor(() => expect(got).toContainEqual({ type: 'give', id: 'q2', tokens: t }))
   })
 
+  it('要令牌期间别的标签页续期、续期广播先于回应到达（不同标签页）：采用续期后的令牌', async () => {
+    const rotator = otherTab()
+    otherTab((m, send) => {
+      if (m.type !== 'ask') return
+      rotator.send({ type: 'rotated', from: 'R1', to: tk('u1', 2) })
+      setTimeout(() => send({ type: 'give', id: m.id, tokens: tk('u1', 1) }), 20)
+    })
+    fakeBackend({ '/me': () => json({ user_entity: { id: 'u1' } }) })
+    await restoreSession()
+    expect(getSession().status).toBe('authed')
+    expect(readTokens()?.refreshToken).toBe('R2')
+  })
+
   it('回应的 id 不是本页问的、或令牌格式不对：不采用', async () => {
     otherTab((m, send) => {
       if (m.type !== 'ask') return

@@ -108,7 +108,9 @@ export async function restoreSession(): Promise<SessionState> {
   if (!t && hasSessionChannel()) {
     const g = ++gen
     if (state.status !== 'loading') set({ status: 'loading', info: null })
-    const got = await askPeers()
+    const asked = await askPeers()
+    const got = asked && followRotations(asked)
+    if (!asks.size) seenRotations.clear()
     // 等待期间登录、退出或又开始了一次恢复：这次作废
     if (g !== gen) return state
     t = readTokens()
@@ -144,6 +146,15 @@ export async function signOut() {
 // 新开的标签页向已登录的标签页要令牌
 
 const asks = new Map<string, (t: Tokens | null) => void>()
+/**
+ * 要令牌期间收到的续期广播（旧 refresh → 新令牌）。回应和续期广播可能来自不同的标签页、先后没有保证：
+ * 先到的续期广播本页还没有令牌可换，记下来，拿到回应后沿着链换成最新的
+ */
+const seenRotations = new Map<string, Tokens>()
+function followRotations(t: Tokens): Tokens {
+  for (let i = 0; i < 20 && seenRotations.has(t.refreshToken); i++) t = seenRotations.get(t.refreshToken)!
+  return t
+}
 const askId = () => (typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`)
 
 /** 广播 ask，取第一个回应；ASK_TIMEOUT_MS 内没有回应返回 null */
@@ -199,6 +210,7 @@ function onMessage(m: SessionMessage) {
   switch (m.type) {
     case 'rotated':
       // 登录页上的标签页（恢复失败时可能还留着令牌）不跟着续期；from 对上就是同一会话，只重排定时器
+      if (asks.size && isTokens(m.to)) seenRotations.set(m.from, m.to)
       if (state.status === 'anon') return
       if (adoptRotation(m) && state.status === 'authed') schedule()
       return
@@ -260,6 +272,7 @@ export function __resetSessionForTests() {
   gen = 0
   lastSub = null
   for (const finish of [...asks.values()]) finish(null)
+  seenRotations.clear()
   state = { status: 'anon', info: null }
   subs.clear()
 }
