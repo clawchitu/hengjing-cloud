@@ -167,7 +167,8 @@ export function ProjectSwitch() {
           aria-label={pinned ? `取消置顶「${name}」` : `置顶「${name}」`}
           title={pinned ? '取消置顶' : '置顶'}
           data-pin
-          className={cn('grid size-6 shrink-0 cursor-pointer place-items-center rounded text-[12px] hover:bg-line-2', pinned ? 'text-amber' : 'text-faint/60 hover:text-faint')}
+          // 项目没有 preflight，裸 <button> 的浏览器默认 2px outset 边框 / 灰底 / 内边距要自己清掉（这就是之前的粗框）；焦点环沿用浏览器默认（随圆角变圆）
+          className={cn('grid size-7 shrink-0 cursor-pointer place-items-center rounded-full border-0 bg-transparent p-0 text-[13px] hover:bg-black/[.07]', pinned ? 'text-amber' : 'text-faint/70 hover:text-faint')}
           // 不让搜索框失焦、不触发选中
           onPointerDown={(e) => { e.preventDefault(); e.stopPropagation() }}
           onClick={(e) => { e.preventDefault(); e.stopPropagation(); togglePinned(userKey, p.id) }}
