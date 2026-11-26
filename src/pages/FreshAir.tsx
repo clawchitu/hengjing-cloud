@@ -29,7 +29,7 @@ import { useCurrentProject, type Project } from '../data/org'
 import { timeLabel } from '../data/sensors'
 import { clearResult as clearResultOf, isLocked, noteCurrentProject, useWrites, type Running, type WriteResult } from '../features/thermostat/writes'
 import {
-  build204, canStepSetpoint, CONTROL_TYPES, describeChanges, describeDraft, describeResult, draftChanges, editBlock, editDraft, faTarget, FIELD_STATE,
+  build204, canStepSetpoint, CONTROL_TYPES, describeChanges, describeDraft, describeResult, draftChanges, editBlock, editDraft, faTarget, FIELD_STATE, hoursText,
   fieldBlock, hasSettings, isGood, panelBlock, reconcileDraft, resultText, runFreshAirSet, shownOf, stepSetpoint, SWITCHES_210,
   TEXT_CT_LOCKED, TEXT_DEVICE_OFF, useFreshPair, writableReason, useRefetchFreshAir, useSettings, useUnits, valueText, VERDICT_TEXT, WIND_SPEEDS_210,
   type FaCtx, type FaDraft, type FreshPair, type SettingsState, type SettingsView, type UnitView,
@@ -114,7 +114,7 @@ function LiveCard({ u, name, wide }: { u: UnitView; name: string; wide: boolean 
     ['送风温度', num(u.supplyTemp, 1, ' °C')], ['回风温度', num(u.returnTemp, 1, ' °C')],
     ['风速档位', num(u.windLevel)], ['风机转速', num(u.fanSpeed)],
     ['压缩机状态', compressorText(u.compressorStatus), u.compressorStatus === 1 ? 'green' : u.compressorStatus === 0 ? 'faint' : undefined], ['压缩机频率', num(u.compressorFreq, 0, ' Hz')],
-    ['运行时间', num(u.runningTime)], ['运行模式', u.runningMode || PLACEHOLDER],
+    ['运行时间', hoursText(u.runningTime)], ['运行模式', u.runningMode || PLACEHOLDER],
   ]
   return (
     <Card>
@@ -126,7 +126,7 @@ function LiveCard({ u, name, wide }: { u: UnitView; name: string; wide: boolean 
             <b className="fb-t"><Icon icon={faFilter} />滤网寿命</b>
             <div className={'fb-s ' + f.cls} data-testid="filter-text">{f.text}</div>
             <div className="bar" style={{ height: 8, margin: '12px 0 8px' }}><i style={{ width: (u.filter.percent ?? 0) + '%', background: f.bar }} /></div>
-            <small className="muted num">滤网运行时间 {num(u.filterRunning)}</small>
+            <small className="muted num">滤网运行时间 {hoursText(u.filterRunning)}</small>
           </div>
         </div>
       </div>
@@ -636,8 +636,8 @@ export default function FreshAir() {
                       <TableCell style={{ fontWeight: 500, color: 'var(--text)' }}>{unitName(f, i, s)}</TableCell>
                       <TableCell>{live ? (f.on === null ? PLACEHOLDER : <Badge variant={f.on ? 'green' : 'gray'}><Icon icon={faPowerOff} /> {f.on ? '开' : '关'}</Badge>) : <Badge variant="red">未连接</Badge>}</TableCell>
                       <TableCell>{live ? f.runningMode || PLACEHOLDER : PLACEHOLDER}</TableCell>
-                      <TableCell className="num text-right">{live ? num(f.runningTime) : PLACEHOLDER}</TableCell>
-                      <TableCell className="num text-right">{live ? num(f.filterRunning) : PLACEHOLDER}</TableCell>
+                      <TableCell className="num text-right">{live ? hoursText(f.runningTime) : PLACEHOLDER}</TableCell>
+                      <TableCell className="num text-right">{live ? hoursText(f.filterRunning) : PLACEHOLDER}</TableCell>
                       <TableCell style={{ width: 170 }}>
                         {live ? (
                           <div className="row" style={{ gap: 10 }}><div className="bar"><i style={{ width: (f.filter.percent ?? 0) + '%', background: look.bar }} /></div><span className={'num ' + look.cls} style={{ width: 34, textAlign: 'right', fontSize: 12 }}>{f.filter.percent === null ? PLACEHOLDER : `${f.filter.percent}%`}</span></div>
