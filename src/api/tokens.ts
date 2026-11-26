@@ -1,6 +1,8 @@
-// 令牌存取。勾选「记住我」存 localStorage，否则 sessionStorage；只存令牌和过期时间，
-// 不存用户名和角色（角色每次从 /me 取，见方案第 2 节）。每次都从存储读取，
-// 这样别的标签页刷新令牌后，本页下一次请求自然拿到新值。
+// 令牌存取。只存 sessionStorage：关掉浏览器令牌就没了，重新打开要重新登录（负责人要求）。
+// sessionStorage 按标签页隔离，新开的标签页向已登录的标签页要令牌、续期结果和退出在标签页之间广播，
+// 见 sessionChannel.ts 与 session.ts。只存令牌和过期时间，不存用户名和角色（角色每次从 /me 取，见方案第 2 节）。
+// 旧版本存在 localStorage 里的令牌一律清掉、不再读取（purgeLegacyTokens）；
+// 账号相关的本地偏好（最近使用、置顶、天气城市等）不在这里，仍留在 localStorage。
 
 import { ApiError, registerSecrets } from './errors'
 
@@ -14,39 +16,39 @@ export interface Tokens {
 export const TOKEN_KEY = 'hjc-session'
 
 let memory: Tokens | null = null // 没有 Web Storage 的环境（单元测试、node 脚本）
-const stores = (): Storage[] => {
-  try { return typeof localStorage !== 'undefined' ? [localStorage, sessionStorage] : [] } catch { return [] }
+const store = (): Storage | null => {
+  try { return typeof sessionStorage !== 'undefined' ? sessionStorage : null } catch { return null }
 }
 
-const valid = (t: unknown): t is Tokens => {
+export const isTokens = (t: unknown): t is Tokens => {
   const v = t as Tokens | null
-  return !!v && typeof v.accessToken === 'string' && typeof v.refreshToken === 'string' && typeof v.expiresAt === 'number'
+  return !!v && typeof v === 'object' && typeof v.accessToken === 'string' && !!v.accessToken
+    && typeof v.refreshToken === 'string' && !!v.refreshToken && typeof v.expiresAt === 'number'
+}
+
+/** 删掉旧版本留在 localStorage 里的令牌（旧版本「记住我」存在那里，关浏览器也不失效）。应用启动时调用 */
+export function purgeLegacyTokens() {
+  try { if (typeof localStorage !== 'undefined') localStorage.removeItem(TOKEN_KEY) } catch { /* 存储不可用 */ }
 }
 
 export function readTokens(): Tokens | null {
-  const ss = stores()
-  if (!ss.length) return memory
-  for (const s of ss) {
-    const raw = s.getItem(TOKEN_KEY)
-    if (!raw) continue
-    try { const t = JSON.parse(raw) as unknown; if (valid(t)) return t } catch { /* 损坏的记录当作没有 */ }
-  }
-  return null
+  const s = store()
+  if (!s) return memory
+  const raw = s.getItem(TOKEN_KEY)
+  if (!raw) return null
+  try { const t = JSON.parse(raw) as unknown; return isTokens(t) ? t : null } catch { return null } // 损坏的记录当作没有
 }
 
-/** remember 不传时写回原来所在的存储 */
-export function writeTokens(t: Tokens, remember?: boolean) {
-  const ss = stores()
-  if (!ss.length) { memory = t; return }
-  const [local, session] = ss
-  const useLocal = remember ?? local.getItem(TOKEN_KEY) !== null
-  ;(useLocal ? session : local).removeItem(TOKEN_KEY)
-  ;(useLocal ? local : session).setItem(TOKEN_KEY, JSON.stringify(t))
+export function writeTokens(t: Tokens) {
+  const s = store()
+  if (!s) { memory = t; return }
+  s.setItem(TOKEN_KEY, JSON.stringify(t))
 }
 
 export function clearTokens() {
   memory = null
-  for (const s of stores()) s.removeItem(TOKEN_KEY)
+  store()?.removeItem(TOKEN_KEY)
+  purgeLegacyTokens()
 }
 
 /** 后端 login / refresh 的返回 → Tokens */

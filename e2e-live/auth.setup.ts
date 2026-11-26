@@ -7,7 +7,8 @@ import { mkdirSync, writeFileSync } from 'node:fs'
 import { test as base, type Locator, type Page } from '@playwright/test'
 import { readAccount } from '../scripts/live/keychain'
 import { WRITE_PATHS } from './policy'
-import { ApiLog, assertGateClean, assertTestTarget, authFile, expect, installGate, metaFile, MIN_TOKEN_LEFT_MS, newLedger, tokenExpiresAt, type AuthMeta, type Role } from './harness'
+import { TOKEN_KEY } from '../src/api/tokens'
+import { ApiLog, assertGateClean, assertTestTarget, authFile, expect, installGate, metaFile, MIN_TOKEN_LEFT_MS, newLedger, sessionFile, tokenExpiresAt, type AuthMeta, type Role } from './harness'
 
 const ACCOUNTS: Record<Role, { env: string; keychain: string; dealer: boolean }> = {
   platform: { env: 'H1_PLATFORM', keychain: 'hengjing-test-platform', dealer: false },
@@ -28,8 +29,8 @@ const ROLES = (process.env.H1_ROLES ?? '').split(',').filter(Boolean)
 /** 登录页上每一步的超时：都远短于用例超时，保证出错时一定走到 catch 先清空输入框 */
 const STEP_MS = 10_000
 
-/** 演练专用的故障注入（只在 playwright.live-dry.config.ts 下可用，见 dry/leak-check.mjs）：让「记住我」找不到，在填完账号密码后失败 */
-const REMEMBER = process.env.H1_DRY === '1' && process.env.H1_DRY_BREAK === 'remember' ? '记住我（演练：故意找不到）' : '记住我'
+/** 演练专用的故障注入（只在 playwright.live-dry.config.ts 下可用，见 dry/leak-check.mjs）：让登录按钮找不到，在填完账号密码后失败 */
+const SUBMIT = process.env.H1_DRY === '1' && process.env.H1_DRY_BREAK === 'submit' ? '登 录（演练：故意找不到）' : '登 录'
 
 /**
  * 填账号密码并登录。从填入到离开登录页这一段不用 expect 匹配器：匹配器失败时 Playwright 立刻抓整页快照
@@ -40,9 +41,8 @@ async function loginOnce(page: Page, acct: { mobile: string; password: string })
   try {
     await typeSecret(page.getByPlaceholder('请输入用户名'), acct.mobile)
     await typeSecret(page.getByPlaceholder('请输入密码'), acct.password)
-    // 「记住我」：令牌存 localStorage，storageState 才能带给后面的用例
-    await page.getByRole('checkbox', { name: REMEMBER }).check({ timeout: STEP_MS })
-    await page.getByRole('button', { name: '登 录' }).click({ timeout: STEP_MS })
+    // 真实接口模式没有「记住我」：令牌一律存 sessionStorage，由下面另存一份带给后面的用例（见 harness.ts 的 page 夹具）
+    await page.getByRole('button', { name: SUBMIT }).click({ timeout: STEP_MS })
     await page.waitForURL(/\/sensors$/, { timeout: 30_000 })
   } catch {
     await clearInputs(page)
@@ -183,7 +183,7 @@ for (const role of ['platform', 'dealer'] as const) {
       expect(type === 1, `${role} 账号身份（/me type）与预期不符，检查账号配置`).toBe(ACCOUNTS[role].dealer)
 
       const expiresAt = await tokenExpiresAt(page)
-      expect(expiresAt, '令牌应存在 localStorage（记住我）').not.toBeNull()
+      expect(expiresAt, '令牌应存在 sessionStorage').not.toBeNull()
       const left = expiresAt! - Date.now()
       expect(left, '新登录的令牌有效期').toBeGreaterThan(MIN_TOKEN_LEFT_MS)
       base.info().annotations.push({ type: 'token', description: `${role} 令牌有效期约 ${Math.round(left / 60_000)} 分钟（不续期）` })
@@ -195,6 +195,8 @@ for (const role of ['platform', 'dealer'] as const) {
       expect(ledger.logins, '刷新后没有再次登录').toBe(1)
 
       await context.storageState({ path: authFile(role) })
+      // storageState 不含 sessionStorage：令牌另存，用例的 context 启动时写回（运行结束由 teardown 删掉）
+      writeFileSync(sessionFile(role), JSON.stringify(await page.evaluate((key) => sessionStorage.getItem(key), TOKEN_KEY)))
       writeFileSync(metaFile(role), JSON.stringify({ role, loginAt: Date.now(), expiresAt: expiresAt! } satisfies AuthMeta))
     } finally {
       await clearInputs(page)

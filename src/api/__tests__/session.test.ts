@@ -176,17 +176,15 @@ describe('刷新竞争（多标签页，Web Locks）', () => {
     expect(be.counts['/auth/refresh']).toBe(1)
   })
 
-  it('别的标签页退出（令牌被删）→ 本页转为未登录', async () => {
+  it('别的标签页退出（logout 广播）→ 本页清令牌、转为未登录', async () => {
     writeTokens({ accessToken: 'A1', refreshToken: 'R1', expiresAt: Date.now() + HOUR })
     fakeBackend({ '/me': () => json({ user_entity: { id: 'u1' } }) })
-    const listeners: Array<(e: { key: string | null }) => void> = []
-    unwire()
-    vi.stubGlobal('window', { addEventListener: (_t: string, fn: (e: { key: string | null }) => void) => listeners.push(fn), removeEventListener: () => {} })
-    unwire = initSession()
     await restoreSession()
-    clearTokens()
-    listeners.forEach((fn) => fn({ key: 'hjc-session' }))
-    expect(getSession().status).toBe('anon')
+    const other = new BroadcastChannel('hjc-session')
+    other.postMessage({ type: 'logout' })
+    await vi.waitFor(() => expect(getSession().status).toBe('anon'))
+    expect(readTokens()).toBeNull()
+    other.close()
   })
 })
 
@@ -219,35 +217,34 @@ describe('can()', () => {
 })
 
 describe('交错与跨标签页（第一轮评审补充）', () => {
-  /** 记录 storage 事件监听器的假 window */
-  function fakeWindow() {
-    const listeners: Array<(e: { key: string | null }) => void> = []
-    unwire()
-    vi.stubGlobal('window', { addEventListener: (_t: string, fn: (e: { key: string | null }) => void) => listeners.push(fn), removeEventListener: () => {} })
-    unwire = initSession()
-    return (key: string | null = 'hjc-session') => listeners.forEach((fn) => fn({ key }))
+  /** 另一个标签页：经同名 BroadcastChannel 发消息 */
+  const others: BroadcastChannel[] = []
+  afterEach(() => { others.splice(0).forEach((c) => c.close()) })
+  function otherTab() {
+    const c = new BroadcastChannel('hjc-session')
+    others.push(c)
+    return (m: unknown) => c.postMessage(m)
   }
 
   it('别的标签页换了账号登录（sub 变了）→ 重新取 /me，身份跟着换', async () => {
-    const fire = fakeWindow()
+    const post = otherTab()
     writeTokens({ accessToken: jwt('u1'), refreshToken: 'R1', expiresAt: Date.now() + HOUR })
     const be = fakeBackend({ '/me': (c) => json({ user_entity: c.headers.Authorization === `Bearer ${jwt('u2')}` ? { id: 'u2', type: 1 } : { id: 'u1' } }) })
     await restoreSession()
     expect(getSession().info?.dealer).toBe(false)
-    writeTokens({ accessToken: jwt('u2'), refreshToken: 'X1', expiresAt: Date.now() + HOUR })
-    fire()
+    post({ type: 'login', to: { accessToken: jwt('u2'), refreshToken: 'X1', expiresAt: Date.now() + HOUR } })
     await vi.waitFor(() => expect(getSession().info?.user.id).toBe('u2'))
     expect(getSession().info?.dealer).toBe(true)
     expect(be.counts['/me']).toBe(2)
   })
 
   it('别的标签页只是续期（sub 不变）→ 不重新取 /me', async () => {
-    const fire = fakeWindow()
+    const post = otherTab()
     writeTokens({ accessToken: jwt('u1'), refreshToken: 'R1', expiresAt: Date.now() + HOUR })
     const be = fakeBackend({ '/me': () => json({ user_entity: { id: 'u1' } }) })
     await restoreSession()
-    writeTokens({ accessToken: jwt('u1', 2), refreshToken: 'R2', expiresAt: Date.now() + 2 * HOUR })
-    fire()
+    post({ type: 'rotated', from: 'R1', to: { accessToken: jwt('u1', 2), refreshToken: 'R2', expiresAt: Date.now() + 2 * HOUR } })
+    await vi.waitFor(() => expect(readTokens()?.refreshToken).toBe('R2'))
     await new Promise((r) => setTimeout(r, 10))
     expect(be.counts['/me']).toBe(1)
     expect(getSession().status).toBe('authed')
@@ -446,17 +443,21 @@ describe('交错与跨标签页（第二轮评审补充）', () => {
   })
 
   it('已登录时别的标签页换了账号：重新取 /me 期间是 loading（不显示旧身份）', async () => {
-    const listeners: Array<(e: { key: string | null }) => void> = []
-    unwire()
-    vi.stubGlobal('window', { addEventListener: (_t: string, fn: (e: { key: string | null }) => void) => listeners.push(fn), removeEventListener: () => {} })
-    unwire = initSession()
     writeTokens({ accessToken: jwt('u1'), refreshToken: 'R1', expiresAt: Date.now() + HOUR })
-    fakeBackend({ '/me': (c) => json({ user_entity: { id: c.headers.Authorization === `Bearer ${jwt('u1')}` ? 'u1' : 'u2' } }) })
+    let release!: () => void
+    fakeBackend({ '/me': async (c) => {
+      if (c.headers.Authorization === `Bearer ${jwt('u1')}`) return json({ user_entity: { id: 'u1' } })
+      await new Promise<void>((r) => { release = r })
+      return json({ user_entity: { id: 'u2' } })
+    } })
     await restoreSession()
-    writeTokens({ accessToken: jwt('u2'), refreshToken: 'X1', expiresAt: Date.now() + HOUR })
-    listeners.forEach((fn) => fn({ key: 'hjc-session' }))
+    const other = new BroadcastChannel('hjc-session')
+    other.postMessage({ type: 'login', to: { accessToken: jwt('u2'), refreshToken: 'X1', expiresAt: Date.now() + HOUR } })
+    await vi.waitFor(() => expect(release).toBeTypeOf('function'))
+    other.close()
     expect(getSession()).toMatchObject({ status: 'loading', info: null })
     expect(can('/projects')).toBe(false)
+    release()
     await vi.waitFor(() => expect(getSession().info?.user.id).toBe('u2'))
   })
 
@@ -474,7 +475,8 @@ describe('第二轮 Opus 建议', () => {
     const seen: string[] = []
     const off = (await import('../session')).subscribeSession((s) => seen.push(s.status))
     await restoreSession()
-    expect(seen).toEqual(['anon'])
+    // 先向别的标签页要令牌（loading），没有回应 → anon
+    expect(seen).toEqual(['loading', 'anon'])
     off()
   })
 

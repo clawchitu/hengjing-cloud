@@ -8,7 +8,7 @@ import { setConfig } from '../../../api/config'
 import { __resetHttpForTests, refreshSession, request } from '../../../api/http'
 import { createQueryClient } from '../../../api/query'
 import { __resetSessionForTests, getSession, initSession, signIn, signOut } from '../../../api/session'
-import { clearTokens, readTokens, TOKEN_KEY, writeTokens } from '../../../api/tokens'
+import { clearTokens, readTokens } from '../../../api/tokens'
 import { fakeBackend, json, text } from '../../../api/__tests__/helpers'
 import { __resetSessionViewForTests } from '../../session'
 import { useResetOnAccountChange } from '../hooks'
@@ -115,7 +115,26 @@ describe('账号变化清缓存', () => {
     expect(cached()).toBe(2)
   })
 
-  it('别的标签页换了账号（storage 事件）：本页回到 loading 时就清掉旧账号缓存', async () => {
+  it('别的标签页退出（logout 广播）：本页清令牌，ctrl 与组织缓存都清掉', async () => {
+    fakeBackend({
+      '/auth/login': () => json({ access_token: jwt('u1'), refresh_token: 'R1', expires_in: 7200 }),
+      '/me': () => json({ user_entity: { id: 'u1' } }),
+    })
+    await signIn('u', 'pw', true)
+    const { seed, cached } = setup()
+    seed()
+    expect(cached()).toBe(2)
+    const other = new BroadcastChannel('hjc-session')
+    await act(async () => {
+      other.postMessage({ type: 'logout' })
+      await vi.waitFor(() => expect(getSession().status).toBe('anon'))
+    })
+    other.close()
+    expect(readTokens()).toBeNull()
+    expect(cached()).toBe(0)
+  })
+
+  it('别的标签页换了账号（login 广播）：本页回到 loading 时就清掉旧账号缓存', async () => {
     fakeBackend({
       '/auth/login': () => json({ access_token: jwt('u1'), refresh_token: 'R1', expires_in: 7200 }),
       '/me': () => json({ user_entity: { id: meId } }),
@@ -124,10 +143,12 @@ describe('账号变化清缓存', () => {
     const { seed, cached } = setup()
     seed()
     meId = 'u2'
+    const other = new BroadcastChannel('hjc-session')
     await act(async () => {
-      writeTokens({ accessToken: jwt('u2'), refreshToken: 'R9', expiresAt: Date.now() + 7200_000 }, true)
-      window.dispatchEvent(new StorageEvent('storage', { key: TOKEN_KEY }))
+      other.postMessage({ type: 'login', to: { accessToken: jwt('u2'), refreshToken: 'R9', expiresAt: Date.now() + 7200_000 } })
+      await vi.waitFor(() => expect(readTokens()?.refreshToken).toBe('R9'))
     })
+    other.close()
     expect(cached()).toBe(0)
   })
 })
