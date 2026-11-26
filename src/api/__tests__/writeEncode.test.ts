@@ -5,6 +5,7 @@ import { fromBinary, ScalarType, type DescMessage } from '@bufbuild/protobuf'
 import { base64Decode } from '@bufbuild/protobuf/wire'
 import { describe, expect, it } from 'vitest'
 import { CTRL, ENUM_UNCHANGED, EXPLICIT_ZERO_FIELDS, MODE_UNCHANGED, WRITE_CTRL, assertEnumsDefined, buildProjectRoomSwitchSet, buildRoomTemperatureSet, buildRunningCtrlSet, buildUnifiedCtrlSet, decodeReply, encodeMessage, encodeWrite, unchangedOf, validateWriteQuery } from '../ctrl'
+import { FeatureSet_FieldPresence } from '@bufbuild/protobuf/wkt'
 import * as pb from '../gen/ctrl200_pb.js'
 import { OPERATING_MODES } from '../values'
 import { buildRoomSet, buildRoomSwitch, newDraft, editDraft, resolveTempRange } from '@/features/thermostat/edit'
@@ -90,6 +91,8 @@ describe('206 ProjectRoomSwitchSetQuery 线上字节', () => {
     const f = Q206.fields.find((x) => x.localName === 'switch')!
     expect(f.number).toBe(1)
     expect(f.fieldKind === 'scalar' && f.scalar).toBe(ScalarType.INT32)
+    // proto3 普通字段（不是 optional）：0 时 toBinary 不输出，显式追加不会重复
+    expect(f.presence).toBe(FeatureSet_FieldPresence.IMPLICIT)
   })
   it('关 → "CAA="（0x08 0x00，switch 显式写 0，不再是空 body），开 → "CAE="；解码回来分别是 0 和 1', () => {
     const off = encodeWrite('ctrl-206', Q206, buildProjectRoomSwitchSet(false))

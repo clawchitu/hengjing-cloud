@@ -201,7 +201,7 @@ export function assertWriteBodyEnums(op: WriteOp, body: unknown): void {
   }
   let decoded: Record<string, unknown>
   try {
-    const bytes = body ? base64Decode(body) : new Uint8Array()
+    const bytes = base64Decode(body)
     // 只认规范 base64（encodeMessage 的输出）：带空白、base64url、中间带填充的拼接串等，本地和后端可能解出不同的字节，一律拒发
     if (base64Encode(bytes) !== body) throw new Error('不是规范 base64')
     decoded = fromBinary(schema, bytes) as unknown as Record<string, unknown>

@@ -18,6 +18,7 @@ import { ApiError } from './errors'
 import { assertEnumsDefined, assertNoImplicitZero, type WriteOp, type WriteProject } from './guard'
 import { request, requestWrite } from './http'
 import { MODE_UNCHANGED } from './values'
+import { FeatureSet_FieldPresence } from '@bufbuild/protobuf/wkt'
 import * as pb from './gen/ctrl200_pb.js'
 
 interface CtrlDef { route: string; query: DescMessage; reply: DescMessage; write?: WriteOp }
@@ -103,7 +104,10 @@ function explicitZeros(schema: DescMessage, plain: Record<string, unknown>): Uin
   let any = false
   for (const no of nos) {
     const f = schema.fields.find((x) => x.number === no)
-    if (!f || f.fieldKind !== 'scalar' || f.scalar !== ScalarType.INT32) throw new ApiError('bad_request', `显式写 0 的白名单字段不是 int32：${schema.typeName} #${no}`)
+    // 只对 proto3 普通字段（隐式存在）做：optional 字段 toBinary 自己会写 0，再追加就成了重复字段
+    if (!f || f.fieldKind !== 'scalar' || f.scalar !== ScalarType.INT32 || f.presence !== FeatureSet_FieldPresence.IMPLICIT) {
+      throw new ApiError('bad_request', `显式写 0 的白名单字段须是 proto3 普通 int32：${schema.typeName} #${no}`)
+    }
     if (plain[f.localName] === 0) { w.tag(no, WireType.Varint).int32(0); any = true }
   }
   return any ? w.finish() : null
