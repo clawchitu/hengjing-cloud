@@ -180,17 +180,28 @@ export const WRITE_QUERY_SCHEMAS: Readonly<Record<WriteOp, DescMessage>> = Objec
 })
 
 /**
+ * 206 线上只有这两种 body：关 = switch 显式写 0（0x08 0x00），开 = switch 1（0x08 0x01）。
+ * 旧的「关 = 空 body」后端拒收（「body不能为空」，实测记录-1125-下发 第十节 A5），已不再产生；空串和其他写法在发送边界拒发
+ */
+export const BODY_206 = Object.freeze({ off: 'CAA=', on: 'CAE=' } as const)
+
+/**
  * 发送边界的枚举检查（http.ts requestWrite 在发出前调用，直接调 requestWrite 也绕不过）：
  * 把 body（Query 的 base64，只认规范写法）按该写接口的 schema 解码：所有枚举字段必须在枚举里；203 / 批量统一控制的运行模式只能是 0（不变）或界面可选的模式。
- * body 缺失、不是字符串、解不出来一律拒发
+ * body 缺失、不是字符串、为空、解不出来一律拒发；206 只认 BODY_206 的两种
  */
 export function assertWriteBodyEnums(op: WriteOp, body: unknown): void {
   const schema = WRITE_QUERY_SCHEMAS[op]
   if (!schema) throw new ApiError('write_blocked', `未登记的写操作：${op}`)
   if (typeof body !== 'string') throw new ApiError('write_blocked', '写请求体缺少 body，未下发')
+  // 空 body：后端拒收（「body不能为空」），而且 proto3 解出来全是 0，任何写消息都不发
+  if (!body) throw new ApiError('write_blocked', '写请求体为空，未下发')
+  if (op === 'ctrl-206' && body !== BODY_206.off && body !== BODY_206.on) {
+    throw new ApiError('write_blocked', `全部房间开关的请求体只能是 ${BODY_206.off}（关）或 ${BODY_206.on}（开），未下发`)
+  }
   let decoded: Record<string, unknown>
   try {
-    const bytes = body ? base64Decode(body) : new Uint8Array()
+    const bytes = base64Decode(body)
     // 只认规范 base64（encodeMessage 的输出）：带空白、base64url、中间带填充的拼接串等，本地和后端可能解出不同的字节，一律拒发
     if (base64Encode(bytes) !== body) throw new Error('不是规范 base64')
     decoded = fromBinary(schema, bytes) as unknown as Record<string, unknown>
