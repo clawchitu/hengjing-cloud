@@ -27,6 +27,7 @@ import { describeFields, LABEL_204, verdictOf, type Field204 } from '../api/writ
 import { showToast, useConfirm } from '../app/feedback'
 import { useCurrentProject, type Project } from '../data/org'
 import { timeLabel } from '../data/sensors'
+import { RANGE_HINT } from '../data/constants'
 import { clearResult as clearResultOf, isLocked, noteCurrentProject, useWrites, type Running, type WriteResult } from '../features/thermostat/writes'
 import {
   build204, canStepSetpoint, CONTROL_TYPES, describeChanges, describeDraft, describeResult, draftChanges, editBlock, editDraft, faTarget, FIELD_STATE, hoursText,
@@ -138,7 +139,7 @@ function LiveCard({ u, name, wide }: { u: UnitView; name: string; wide: boolean 
 }
 
 /** 运行设置的一项：值；不能设置时带锁和原因（Tooltip 挂在可聚焦的锁图标上） */
-function SettingRow({ s, f, label, value, active }: { s: SettingsView; f: Field204; label: string; value: string; active?: boolean }) {
+function SettingRow({ s, f, label, value, active, hint }: { s: SettingsView; f: Field204; label: string; value: string; active?: boolean; hint?: string }) {
   const why = fieldBlock(s, f)
   return (
     <div className={'setbox' + (why ? ' dis' : active ? ' on' : '')} data-field={f}>
@@ -154,6 +155,7 @@ function SettingRow({ s, f, label, value, active }: { s: SettingsView; f: Field2
         ) : active ? <Badge style={{ background: 'var(--primary-2)', color: '#fff' }}>生效中</Badge> : null}
       </div>
       <div className="stepper"><span className="sv num">{value}</span></div>
+      {hint && <div className="range-hint">{hint}</div>}
     </div>
   )
 }
@@ -167,8 +169,8 @@ function SettingsBody({ s }: { s: SettingsView }) {
       <SettingRow s={s} f="switch" label="开关" value={fl.switch.value === null ? PLACEHOLDER : SWITCHES_210[fl.switch.value]} />
       <SettingRow s={s} f="controlType" label="控制类型" value={ctText} />
       {ct !== null && !s.canChange && <div className="ctl-hint"><Icon icon={faLock} />该设备的控制类型不可切换</div>}
-      <SettingRow s={s} f="dewPoint" label="露点设定" value={num(fl.dewPoint.value, 1, ' °C')} active={ct === 1} />
-      <SettingRow s={s} f="humiditySet" label="湿度设定" value={num(fl.humiditySet.value, 0, ' %RH')} active={ct === 0} />
+      <SettingRow s={s} f="dewPoint" label="露点设定" value={num(fl.dewPoint.value, 1, ' °C')} active={ct === 1} hint={RANGE_HINT} />
+      <SettingRow s={s} f="humiditySet" label="湿度设定" value={num(fl.humiditySet.value, 0, ' %RH')} active={ct === 0} hint={RANGE_HINT} />
       <SettingRow s={s} f="windSpeed" label="风速" value={fl.windSpeed.value === null ? PLACEHOLDER : WIND_SPEEDS_210[fl.windSpeed.value]} />
     </>
   )
@@ -271,7 +273,7 @@ function LockTip({ label, why }: { label: string; why: string }) {
 interface EditorProps { s: SettingsView; draft: FaDraft | null; ctx: FaCtx; frozen: boolean; onEdit: (f: Field204, v: number) => void }
 
 /** 一项的外框：标题、原值、读数上不能设置的锁 / 生效中 / 未启用 */
-function FieldBox({ s, draft, f, label, active, inactive, children }: { s: SettingsView; draft: FaDraft | null; f: Field204; label: string; active?: boolean; inactive?: boolean; children: ReactNode }) {
+function FieldBox({ s, draft, f, label, active, inactive, hint, children }: { s: SettingsView; draft: FaDraft | null; f: Field204; label: string; active?: boolean; inactive?: boolean; hint?: string; children: ReactNode }) {
   const why = fieldBlock(s, f)
   const changed = draftChanges(s, draft).find(([k]) => k === f)
   return (
@@ -283,6 +285,7 @@ function FieldBox({ s, draft, f, label, active, inactive, children }: { s: Setti
           : inactive ? <Badge variant="gray">未启用</Badge> : null}
       </div>
       {children}
+      {hint && <div className="range-hint">{hint}</div>}
     </div>
   )
 }
@@ -330,10 +333,10 @@ function SettingsEditor(p: EditorProps) {
         <Options {...p} label="控制类型" f="controlType" cls="ctl-type" opts={[[1, '露点控制', faTemperatureLow], [0, '湿度控制', faDroplet]]} />
       </FieldBox>
       {ct !== null && !s.canChange && <div className="ctl-hint"><Icon icon={faLock} />{TEXT_CT_LOCKED}</div>}
-      <FieldBox s={s} draft={draft} f="dewPoint" label="露点设定" active={ct === 1} inactive={ct !== 1 && !fieldBlock(s, 'dewPoint')}>
+      <FieldBox s={s} draft={draft} f="dewPoint" label="露点设定" active={ct === 1} inactive={ct !== 1 && !fieldBlock(s, 'dewPoint')} hint={RANGE_HINT}>
         <Stepper {...p} f="dewPoint" label="露点设定" unit="°C" digits={1} />
       </FieldBox>
-      <FieldBox s={s} draft={draft} f="humiditySet" label="湿度设定" active={ct === 0} inactive={ct !== 0 && !fieldBlock(s, 'humiditySet')}>
+      <FieldBox s={s} draft={draft} f="humiditySet" label="湿度设定" active={ct === 0} inactive={ct !== 0 && !fieldBlock(s, 'humiditySet')} hint={RANGE_HINT}>
         <Stepper {...p} f="humiditySet" label="湿度设定" unit="%RH" digits={0} />
       </FieldBox>
       <FieldBox s={s} draft={draft} f="windSpeed" label="风速">

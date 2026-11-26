@@ -17,7 +17,7 @@ import { showToast, useConfirm } from '../app/feedback'
 import { useCapabilities, useCurrentProject, type Project } from '../data/org'
 import { isApiError } from '../api/errors'
 import type { WriteQuery } from '../api/ctrl'
-import { PROGRAMS } from '../data/constants'
+import { PROGRAMS, RANGE_HINT } from '../data/constants'
 import { lockKeysOf, lockOf, onForceReread, OTHER_ACCOUNT_TEXT, verify, type FieldResult, type LockInfo } from '../api/writeLock'
 import { describeFields, verdictOf } from '../api/writeLockVerify'
 import { roomSwitchReported } from '../api/config'
@@ -312,6 +312,7 @@ function RoomCard({ room: r, ctx, range, selected, onSelect, draft, conflict, on
             <button type="button" aria-label={`${r.name} 设定温度升高`} title={tempTitle}
               disabled={!canEdit || !!tBlock || shownTemp === null || !canStep(shownTemp, 1, range)} onClick={() => step(1)}>+</button>
           </div></div>
+          <div className="range-hint">{RANGE_HINT}</div>
         </div>
         <div className={changes.eco ? 'dirty' : undefined}>
           <span>节能模式{changes.eco && <span className="te-old">原 <s>{ecoLabel(changes.eco[0])}</s></span>}</span>

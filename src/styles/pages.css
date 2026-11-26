@@ -433,4 +433,5 @@ tr.cur-row .bico { background: #cffafe; color: var(--primary); }
 .ctl-type .opt-btn:is(:disabled, [aria-disabled=true]) { cursor: not-allowed; }
 .ctl-type .opt-btn:is(:disabled, [aria-disabled=true]):not(.on) { opacity: .45; background: #f8fafc; }
 .ctl-type .opt-btn.on:is(:disabled, [aria-disabled=true]) { opacity: 1; }
+.range-hint { font-size: 11.5px; color: var(--muted); line-height: 1.5; margin-top: 6px; }
 .ctl-hint { display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--muted); margin: -4px 0 10px; }

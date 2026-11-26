@@ -29,6 +29,7 @@ import { UnifiedCtrlSetQuery_OperatingMode as Mode } from '../api/gen/ctrl200_pb
 import * as api from '../api'
 import { attachEvidence, endOf, lockKeysOf, lockOf, writeLockTtl, type VerifyResult, lockVersion, onForceReread, OTHER_ACCOUNT_TEXT, subscribe as subscribeLock } from '../api/writeLock'
 import { seqNames } from '@/lib/seqNames'
+import { RANGE_HINT } from '../data/constants'
 import {
   clampTemp, LOCK_BUSY_TEXT, lockTargetOf, rereadHits, MODE_OPTIONS, readUnifiedSnapshot, resolveTempRange, TEXT, tempAvailability, unifiedAppCode, useUnifiedBatch,
   fieldResults, isStoredQuery203, overallOf, resultTitle,
@@ -463,6 +464,7 @@ export default function Control() {
             <Slider className="mx-[2px] mt-[18px] w-full" aria-label="房间温度设定" disabled={tempDisabled} min={range.min} max={range.max} step={range.step} value={[temp]} onValueChange={([v]) => { if (!tempDisabled) setT(v) }} />
             <div className="ticks num"><span>{range.min}°C</span><span>20°C</span><span>25°C</span><span>{range.max}°C</span></div>
           </fieldset>
+          <div className="range-hint">{RANGE_HINT}</div>
           {tempLock && <div className="cap-note" role="note"><Icon icon={faCircleInfo} />{tempLock}{appBlock ? '，房间开关仍可下发。' : ''}</div>}
           {roomsNote && <div className="cap-note" role="note" data-testid="temp-room-note"><Icon icon={faCircleInfo} />{roomsNote}</div>}
         </Card>
