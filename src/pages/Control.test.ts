@@ -527,6 +527,18 @@ describe('下发', () => {
     expect(await openNotes()).toContain('项目离线，不能下发')
   })
 
+  it('结果卡「操作时间」用执行记录的 operate_time（UTC → 北京时间：01:09:00 显示 09:09:00，后端 11/26 确认）', async () => {
+    let be!: ReturnType<typeof backend>
+    be = backend({
+      '/ctrl/room-temperature-data-get': room200(() => be, [0, 26], [1, 26.5]),
+      '/ctrl/unified-ctrl-set': () => reply(true),
+      '/ctrl/unified-ctrls-records': (c) => json({ records: [{ batch_id: (c.body as { batch_id: string }).batch_id, project_id: 'p1', result: 2, operate_time: '2026-11-26 01:09:00' }], total: '1' }),
+    })
+    await click(okIn(await prepare()))
+    const badge = await screen.findByText('已生效', { selector: '[data-slot=badge]' }, { timeout: 3000 })
+    expect(badge.closest('tr')!.textContent).toContain('2026-11-26 09:09:00')
+  })
+
   it('下发接口返回 503（含 code 14）→ 结果未知（批量接口对屏离线是记「失败」，这里的 503 含义未知，不能说「未下发」诱导重发），不重试', async () => {
     fakeClock()
     const be = backend({ '/ctrl/room-temperature-data-get': () => rooms(0, 26), '/ctrl/unified-ctrl-set': () => json({ code: 14, message: 'no stream' }, 503) })

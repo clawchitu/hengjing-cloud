@@ -43,7 +43,24 @@ export function cleanMessage(v: unknown): string {
   return s.length > 80 ? s.slice(0, 80) + '…' : s
 }
 
-export type Picked = { kind: 'one'; result: RecordResult; message: string } | { kind: 'none' } | { kind: 'many' }
+/**
+ * 记录的 operate_time（"yyyy-MM-dd HH:mm:ss"）：后端 11/26 确认是 UTC、不带时区，由前端转换。按 UTC 解析，转成北京时间
+ * （Asia/Shanghai）同样格式；格式不对返回 null（结果卡退回前端记录的下发时间）
+ */
+export function utcToBeijing(v: unknown): string | null {
+  const m = typeof v === 'string' ? /^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2})$/.exec(v.trim()) : null
+  if (!m) return null
+  const t = Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6])
+  if (!Number.isFinite(t)) return null
+  const d = new Date(t)
+  if (d.getUTCFullYear() !== +m[1] || d.getUTCMonth() !== +m[2] - 1 || d.getUTCDate() !== +m[3] || d.getUTCHours() !== +m[4]) return null
+  const parts = Object.fromEntries(new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23',
+  }).formatToParts(d).map((x) => [x.type, x.value]))
+  return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}:${parts.second}`
+}
+
+export type Picked = { kind: 'one'; result: RecordResult; message: string; operateTime: string | null } | { kind: 'none' } | { kind: 'many' }
 /** 本批次里本项目的记录：batch_id、project_id 都对上的恰好一条才采用（REVIEW 12.3 第 9 条：重复或缺失都算无法确认） */
 export function pickRecord(reply: unknown, batchId: string, projectId: string): Picked {
   const list = (reply as { records?: unknown } | null)?.records
@@ -51,7 +68,7 @@ export function pickRecord(reply: unknown, batchId: string, projectId: string): 
     !!r && typeof r === 'object' && (r as Record<string, unknown>).project_id === projectId && (r as Record<string, unknown>).batch_id === batchId)
   if (rows.length === 0) return { kind: 'none' }
   if (rows.length > 1) return { kind: 'many' }
-  return { kind: 'one', result: normalizeResult(rows[0].result), message: cleanMessage(rows[0].message) }
+  return { kind: 'one', result: normalizeResult(rows[0].result), message: cleanMessage(rows[0].message), operateTime: utcToBeijing(rows[0].operate_time) }
 }
 
 /** 记录轮询：send 返回后 1 秒查第一次，之后上一次返回后隔 2.5 秒；单次 5 秒超时；窗口 = ctrlTimeoutMs（默认 12 秒） */
@@ -74,7 +91,8 @@ export const RECORD_TEXT = {
   failed: '执行记录：失败',
 } as const
 
-export type RecordOutcome = { kind: 'success' } | { kind: 'failure'; message: string } | { kind: 'unknown'; note: string }
+/** operateTime：记录的操作时间（已转北京时间），没有或格式不对为 null */
+export type RecordOutcome = { kind: 'success'; operateTime: string | null } | { kind: 'failure'; message: string; operateTime: string | null } | { kind: 'unknown'; note: string }
 
 export interface WaitDeps {
   query?: (filter: { batch_id: string }, signal: AbortSignal) => Promise<unknown>
@@ -116,8 +134,8 @@ export async function waitRecord(batchId: string, projectId: string, signal: Abo
       const p = pickRecord(reply, batchId, projectId)
       if (p.kind === 'many') return { kind: 'unknown', note: RECORD_TEXT.many }
       if (p.kind === 'none') last = RECORD_TEXT.none
-      else if (p.result === 'success') return { kind: 'success' }
-      else if (p.result === 'failure') return { kind: 'failure', message: p.message }
+      else if (p.result === 'success') return { kind: 'success', operateTime: p.operateTime }
+      else if (p.result === 'failure') return { kind: 'failure', message: p.message, operateTime: p.operateTime }
       else if (p.result === 'timeout') return { kind: 'unknown', note: RECORD_TEXT.timeout }
       else last = p.result === 'pending' ? RECORD_TEXT.pending : RECORD_TEXT.unrecognized
     }
@@ -134,7 +152,7 @@ function sendError(e: unknown): unknown {
 
 /**
  * 统一控制的发送函数（替代 writeCtrl(203)）：unified-ctrls-send 只带这一个项目 → batch_id → 轮询记录 → 折算成原 203 应答的形状。
- * 成功 → { success: true }；失败 → { success: false, msg }（状态机按明确被拒）；其余 → 抛 timeout（状态机按应答未知，交给回读和写锁）
+ * 成功 → { success: true, operateTime }；失败 → { success: false, msg, operateTime }（operateTime 是记录的操作时间，已转北京时间，结果卡优先显示它）（状态机按明确被拒）；其余 → 抛 timeout（状态机按应答未知，交给回读和写锁）
  */
 export function createRecordSender(deps: WaitDeps & { send?: typeof sendUnifiedCtrls } = {}): BatchSender {
   const send = deps.send ?? sendUnifiedCtrls
@@ -144,8 +162,8 @@ export function createRecordSender(deps: WaitDeps & { send?: typeof sendUnifiedC
     const batchId = typeof res?.batch_id === 'string' && res.batch_id ? res.batch_id : null
     if (!batchId) throw new ApiError('timeout', RECORD_TEXT.noBatch)
     const r = await waitRecord(batchId, project.id, opts.signal, deps)
-    if (r.kind === 'success') return { success: true, msg: '' } as unknown as CtrlReply<203>
-    if (r.kind === 'failure') return { success: false, msg: r.message ? `${RECORD_TEXT.failed}（${r.message}）` : RECORD_TEXT.failed } as unknown as CtrlReply<203>
+    if (r.kind === 'success') return { success: true, msg: '', operateTime: r.operateTime } as unknown as CtrlReply<203>
+    if (r.kind === 'failure') return { success: false, msg: r.message ? `${RECORD_TEXT.failed}（${r.message}）` : RECORD_TEXT.failed, operateTime: r.operateTime } as unknown as CtrlReply<203>
     throw new ApiError('timeout', r.note)
   }
 }

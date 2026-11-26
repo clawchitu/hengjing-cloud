@@ -2,7 +2,7 @@
 // 只注入查询函数和时钟，不发任何请求。
 import { describe, expect, it, vi } from 'vitest'
 import { ApiError } from '@/api/errors'
-import { cleanMessage, normalizeResult, pickRecord, RECORD_EVERY_MS, RECORD_FIRST_MS, RECORD_TEXT, waitRecord } from '../records'
+import { cleanMessage, normalizeResult, utcToBeijing, pickRecord, RECORD_EVERY_MS, RECORD_FIRST_MS, RECORD_TEXT, waitRecord } from '../records'
 
 const rec = (result: unknown, extra: Record<string, unknown> = {}) => ({ id: 'r', batch_id: 'B1', project_id: 'p1', result, message: '', ...extra })
 
@@ -29,7 +29,7 @@ describe('normalizeResult', () => {
 })
 
 describe('pickRecord：batch_id 与 project_id 都对上的恰好一条才采用', () => {
-  it('一条', () => expect(pickRecord({ records: [rec(2)] }, 'B1', 'p1')).toEqual({ kind: 'one', result: 'success', message: '' }))
+  it('一条', () => expect(pickRecord({ records: [rec(2)] }, 'B1', 'p1')).toEqual({ kind: 'one', result: 'success', message: '', operateTime: null }))
   it('别的批次、别的项目不算', () => {
     expect(pickRecord({ records: [rec(2, { batch_id: 'B0' }), rec(2, { project_id: 'p2' })] }, 'B1', 'p1')).toEqual({ kind: 'none' })
   })
@@ -39,6 +39,15 @@ describe('pickRecord：batch_id 与 project_id 都对上的恰好一条才采用
     expect(pickRecord(null, 'B1', 'p1')).toEqual({ kind: 'none' })
   })
   it('重复 → 无法确认', () => expect(pickRecord({ records: [rec(2), rec(3)] }, 'B1', 'p1')).toEqual({ kind: 'many' }))
+})
+
+describe('operate_time：后端 11/26 确认是 UTC（不带时区），前端转北京时间', () => {
+  it('01:09:00（UTC）显示成 09:09:00', () => expect(utcToBeijing('2026-11-26 01:09:00')).toBe('2026-11-26 09:09:00'))
+  it('跨天', () => expect(utcToBeijing('2026-11-25 20:30:05')).toBe('2026-11-26 04:30:05'))
+  it.each([undefined, '', '2026-11-26T01:09:00Z', '2026-13-01 00:00:00', '2026-11-26 25:00:00', 123])('格式不对（%s）→ null，退回前端时间', (v) => expect(utcToBeijing(v)).toBeNull())
+  it('pickRecord 带出转换后的时间', () => {
+    expect(pickRecord({ records: [rec(2, { operate_time: '2026-11-26 01:13:02' })] }, 'B1', 'p1')).toMatchObject({ operateTime: '2026-11-26 09:13:02' })
+  })
 })
 
 describe('cleanMessage', () => {
@@ -53,14 +62,14 @@ describe('waitRecord：轮询到终态或窗口结束', () => {
   const ac = () => new AbortController().signal
   it('1 秒后查第一次；成功 → success', async () => {
     const h = harness([{ records: [rec(2)] }])
-    expect(await waitRecord('B1', 'p1', ac(), h.deps)).toEqual({ kind: 'success' })
+    expect(await waitRecord('B1', 'p1', ac(), h.deps)).toEqual({ kind: 'success', operateTime: null })
     expect(h.query).toHaveBeenCalledTimes(1)
     expect(h.query).toHaveBeenCalledWith({ batch_id: 'B1' }, expect.anything())
     expect(h.elapsed()).toBe(RECORD_FIRST_MS)
   })
   it('等待中 → 隔 2.5 秒再查 → 失败（带清洗过的 message）', async () => {
     const h = harness([{ records: [rec(1)] }, { records: [rec(3, { message: '屏忙\n' })] }])
-    expect(await waitRecord('B1', 'p1', ac(), h.deps)).toEqual({ kind: 'failure', message: '屏忙' })
+    expect(await waitRecord('B1', 'p1', ac(), h.deps)).toEqual({ kind: 'failure', message: '屏忙', operateTime: null })
     expect(h.elapsed()).toBe(RECORD_FIRST_MS + RECORD_EVERY_MS)
   })
   it.each([
@@ -79,7 +88,7 @@ describe('waitRecord：轮询到终态或窗口结束', () => {
   })
   it('查询失败一次后恢复 → 照常采用', async () => {
     const h = harness([new ApiError('network', 'x'), { records: [rec(2)] }])
-    expect(await waitRecord('B1', 'p1', ac(), h.deps)).toEqual({ kind: 'success' })
+    expect(await waitRecord('B1', 'p1', ac(), h.deps)).toEqual({ kind: 'success', operateTime: null })
   })
   it('403 只查一次', async () => {
     const h = harness([new ApiError('forbidden', 'no permission', { status: 403 })])

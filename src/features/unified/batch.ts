@@ -214,6 +214,8 @@ export function createUnifiedBatch(deps: BatchDeps) {
     open?: Set<EchoField>
     /** 正在进行的核对（锁的 verify 同一时刻只跑一个，正在跑时再调会直接返回） */
     checking?: Promise<unknown>
+    /** 执行记录的操作时间（records.ts 已把 UTC 转成北京时间）：结果卡的「操作时间」优先用它，没有就用前端结束时刻 at */
+    recordAt?: string
     /** 截止时冻结的结果（含 205 预检没通过的未下发） */
     final?: { status: 'not-sent' | 'unknown' | 'failure'; note: string; notExecuted?: boolean; retry?: boolean }
   }
@@ -236,7 +238,7 @@ export function createUnifiedBatch(deps: BatchDeps) {
 
   const emit = (patch: Partial<BatchState>) => {
     const rows = entries.map((e): BatchRow => ({
-      id: e.p.id, code: e.p.code, name: e.p.name, at: e.at, state: e.ctl.getState(),
+      id: e.p.id, code: e.p.code, name: e.p.name, at: e.recordAt ?? e.at, state: e.ctl.getState(),
       status: e.final?.status ?? rowStatus(e.ctl.getState(), e.started), note: e.final?.note, notExecuted: e.final?.notExecuted, replyOk: e.reply === 'ok',
       ...(e.final?.retry ? { retry: true } : {}),
     }))
@@ -301,6 +303,8 @@ export function createUnifiedBatch(deps: BatchDeps) {
     })
     out.then((r) => {
       const ok = r?.success === true
+      const rt = (r as { operateTime?: unknown } | null)?.operateTime
+      if (e.sent && typeof rt === 'string' && rt) e.recordAt = rt
       if (e.sent) e.reply = ok ? 'ok' : 'rejected'
       // success=true 只算「已下发」：已认领的不在这里放锁，等下发后回读的结论（见 settleByReadback）。
       // 截止后才到的成功应答（这一项已冻结、页面可能已 reset 取消订阅）：按结果未知结算，交给锁核对或到期
