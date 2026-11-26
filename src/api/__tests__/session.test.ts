@@ -463,6 +463,8 @@ describe('交错与跨标签页（第二轮评审补充）', () => {
 
   it('还没刷新过的标签页也能收到广播（initSession 时就订阅）', async () => {
     writeTokens({ accessToken: 'A1', refreshToken: 'R1', expiresAt: Date.now() + HOUR })
+    fakeBackend({ '/me': () => json({ user_entity: { id: 'u1' } }) })
+    await restoreSession()
     const other = new BroadcastChannel('hjc-session')
     other.postMessage({ type: 'rotated', from: 'R1', to: { accessToken: 'A2', refreshToken: 'R2', expiresAt: Date.now() + 2 * HOUR } })
     await vi.waitFor(() => expect(readTokens()?.refreshToken).toBe('R2'))

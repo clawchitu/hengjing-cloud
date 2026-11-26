@@ -198,7 +198,9 @@ function onTokensChanged() {
 function onMessage(m: SessionMessage) {
   switch (m.type) {
     case 'rotated':
-      if (adoptRotation(m)) onTokensChanged()
+      // 登录页上的标签页（恢复失败时可能还留着令牌）不跟着续期；from 对上就是同一会话，只重排定时器
+      if (state.status === 'anon') return
+      if (adoptRotation(m) && state.status === 'authed') schedule()
       return
     case 'ask': {
       // 只有已登录的标签页回应；恢复中、登录页上的不回应（手里的令牌还没确认有效）
@@ -216,9 +218,10 @@ function onMessage(m: SessionMessage) {
       onTokensChanged()
       return
     case 'logout':
-      if (state.status === 'anon') return // 本页可能正在登录：不打断
+      // 令牌一律清掉：登录页上的标签页也可能留着令牌（恢复时断网不清），不清的话刷新又能进去。
+      // 已是 anon 时不 toAnon()，不打断本页正在进行的登录（signIn 确认之后才写令牌，清存储不影响它）
       clearTokens()
-      toAnon()
+      if (state.status !== 'anon') toAnon()
       return
   }
 }

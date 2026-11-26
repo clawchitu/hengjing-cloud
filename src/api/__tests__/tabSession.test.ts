@@ -239,6 +239,43 @@ describe('续期、登录、退出在标签页之间广播', () => {
     expect(be.counts['/auth/invalidate']).toBeUndefined()
   })
 
+  it('恢复时断网落在登录页、还留着令牌的标签页：收到退出广播也清令牌，刷新不能再进去', async () => {
+    writeTokens(tk('u1', 1))
+    const { send } = otherTab()
+    vi.stubGlobal('fetch', () => Promise.reject(new TypeError('Failed to fetch')))
+    await restoreSession()
+    expect(getSession().status).toBe('anon')
+    expect(readTokens()).not.toBeNull()
+    send({ type: 'logout' })
+    await vi.waitFor(() => expect(sessionStorage.getItem(TOKEN_KEY)).toBeNull())
+    const be = fakeBackend({ '/me': () => json({ user_entity: { id: 'u1' } }) })
+    await restoreSession() // 网络恢复后按 F5
+    expect(getSession().status).toBe('anon')
+    expect(be.counts['/me']).toBeUndefined()
+  })
+
+  it('登录页上留着令牌的标签页不跟着别处续期', async () => {
+    writeTokens(tk('u1', 1))
+    const { send } = otherTab()
+    vi.stubGlobal('fetch', () => Promise.reject(new TypeError('Failed to fetch')))
+    await restoreSession()
+    send({ type: 'rotated', from: 'R1', to: tk('u1', 2) })
+    await new Promise((r) => setTimeout(r, 30))
+    expect(readTokens()?.refreshToken).toBe('R1')
+  })
+
+  it('同一会话的续期广播只重排定时器：令牌没有 sub 也不重新取 /me', async () => {
+    writeTokens({ accessToken: 'opaque-1', refreshToken: 'R1', expiresAt: Date.now() + HOUR })
+    const { send } = otherTab()
+    const be = fakeBackend({ '/me': () => json({ user_entity: { id: 'u1' } }) })
+    await restoreSession()
+    send({ type: 'rotated', from: 'R1', to: { accessToken: 'opaque-2', refreshToken: 'R2', expiresAt: Date.now() + 2 * HOUR } })
+    await vi.waitFor(() => expect(readTokens()?.refreshToken).toBe('R2'))
+    await new Promise((r) => setTimeout(r, 10))
+    expect(be.counts['/me']).toBe(1)
+    expect(getSession().status).toBe('authed')
+  })
+
   it('本页登录 → 广播 login；在登录页的标签页收到别处的 login 不自动登录', async () => {
     const { got, send } = otherTab()
     fakeBackend({ '/auth/login': () => json({ access_token: jwt('u1'), refresh_token: 'R1', expires_in: 7200 }), '/me': () => json({ user_entity: { id: 'u1' } }) })
