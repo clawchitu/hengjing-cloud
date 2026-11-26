@@ -212,7 +212,8 @@ describe('202 读数', () => {
     expect(tile('压缩机状态')).toBe('停止')
     expect(tile('压缩机频率')).toBe('0 Hz')
     expect(tile('风机转速')).toBe('1300')
-    expect(tile('运行时间')).toBe('36')
+    expect(tile('运行时间')).toBe('36 小时')
+    expect(within(card).getByText('滤网运行时间', { exact: false }).textContent).toBe('滤网运行时间 1,200 小时')
     for (const gone of ['新风温度', '送风湿度', '送风露点', '新风量', '回风湿度']) expect(within(card).queryByText(gone)).toBeNull()
     const summary = screen.getByText('设备汇总').closest('[data-slot=card]') as HTMLElement
     expect(within(summary).getAllByRole('columnheader').map((h) => h.textContent)).toEqual(['设备', '开关', '模式', '运行时间', '滤网运行时间', '滤网寿命'])

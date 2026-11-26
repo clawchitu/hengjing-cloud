@@ -35,3 +35,9 @@ export function filterOf(raw: { filterLife?: number; filterLifeP?: number }): Fi
     level: ratio === null ? null : ratio < FILTER_RED_RATIO ? 'red' : ratio < FILTER_ORANGE_RATIO ? 'orange' : 'ok',
   }
 }
+
+/** 运行时间、滤网运行时间：单位小时（后端 11/26 确认）。「1,234 小时」；-1、缺失、非有限数显示「—」 */
+export function hoursText(v: number | null | undefined): string {
+  if (v === null || v === undefined || !Number.isFinite(v) || v < 0) return '—'
+  return `${Math.round(v).toLocaleString('en-US')} 小时`
+}

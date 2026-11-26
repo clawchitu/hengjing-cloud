@@ -52,7 +52,7 @@ export interface UnitView {
   /** 压缩机频率 */
   compressorFreq: number | null
   filter: FilterView
-  /** 滤网运行时间、运行时间（单位待后端，A5，只显示数字） */
+  /** 滤网运行时间、运行时间（单位小时，后端 11/26 确认） */
   filterRunning: number | null
   runningTime: number | null
   /** 运行模式文案；没有为空串 */
