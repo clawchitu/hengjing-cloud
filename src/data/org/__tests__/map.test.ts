@@ -43,8 +43,11 @@ describe('app_code 能力', () => {
     expect(capabilitiesOf(8)).toEqual({ appCode: 8, thermostat: false, roomTemp: false, freshAirSettings: false })
     expect(capabilitiesOf('8')).toEqual(capabilitiesOf(8))
   })
-  it('缺失编码和其他编码保持现状：有房间温控、没有新风运行设置（统一控制温度另由白名单决定）', () => {
-    for (const c of [null, undefined, '', 'abc', 0, 4, 6, 7, 9, 11, 1000]) expect(capabilitiesOf(c as never), String(c)).toMatchObject({ thermostat: true, roomTemp: true, freshAirSettings: false })
+  it('其他编码（4、6、7、9、11、1000）和 1 一样：有房间温控、统一控制可设温度、没有新风运行设置（负责人 11/26 08:47 黑名单）', () => {
+    for (const c of [4, 6, 7, 9, 11, 1000, '4']) expect(capabilitiesOf(c as never), String(c)).toMatchObject({ thermostat: true, roomTemp: true, freshAirSettings: false })
+  })
+  it('缺失或无法解析：温控页照常显示（只有 8、12 无面板），但统一控制温度禁用', () => {
+    for (const c of [null, undefined, '', 'abc', 0]) expect(capabilitiesOf(c as never), String(c)).toEqual({ appCode: 0, thermostat: true, roomTemp: false, freshAirSettings: false })
     expect(Object.keys(capabilitiesOf(1))).not.toContain('supported')
   })
   it('hasRooms / isStandalone 与能力一致（演示数据的 11/21/31 都有房间）', () => {

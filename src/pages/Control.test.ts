@@ -231,6 +231,57 @@ describe('运行模式只有 5 种（后端 11/26 08:34）', () => {
   })
 })
 
+describe('温度黑名单：只禁 8、12 和缺失，其他类型按 1 处理（负责人 11/26 08:47）', () => {
+  const as = (app_code: string | undefined, extra: Record<string, Handler> = {}) => backend({
+    ...extra,
+    '/ctrl/projects': () => json({ project_entities: PROJECTS.map((p) => (p.id === 'p1' ? { ...p, app_code } : p)) }),
+    '/ctrl/room-temperature-data-get': () => rooms(1, 26),
+    '/ctrl/unified-ctrl-set': () => reply(true),
+    ...extra,
+  })
+  const pickAndRaise = async () => {
+    await mount()
+    await click(screen.getByText('测试项目0829'))
+    expect(keep().hasAttribute('disabled')).toBe(false)
+    expect(screen.queryByText(/该应用类型不支持温度设定|应用类型未知/)).toBeNull()
+    await click(keep())
+    await click(screen.getByRole('button', { name: '升高温度' }))
+    expect(shown()).toBe('26.5°C')
+    await click(screen.getByRole('button', { name: '确认下发' }))
+    const dlg = await screen.findByRole('alertdialog')
+    expect(dlg.textContent).toContain('房间温度26.5°C')
+    return dlg
+  }
+  it.each(['4', '7', '9', '11', '1000', '6'])('app_code %s：勾选项目后温度可设，205 在线时照常下发温度', async (code) => {
+    const be = as(code)
+    const dlg = await pickAndRaise()
+    await click(within(dlg).getByRole('button', { name: '确认下发' }))
+    await waitFor(() => expect(be.callsTo('/ctrl/unified-ctrl-set')).toHaveLength(1))
+    const body = be.callsTo('/ctrl/unified-ctrl-set')[0].body as { body: string }
+    expect(decodeReply(pb.UnifiedCtrlSetQuerySchema, body.body)).toEqual({ systemSwitch: -1, systemMode: 0, roomSwitch: -1, roomTemp: 26.5 })
+  })
+  it.each([
+    ['控制屏未连接（503 code 14）', () => json({ code: 14, message: '控制屏消息发送失败' }, 503), '未下发（控制屏未连接）'],
+    ['检查失败（500）', () => json({ code: 13, message: 'internal' }, 500), '控制屏在线检查失败，未下发，请重试'],
+  ])('app_code 4（水舒适，还没接入接口）：温度可选，但 205 预检%s → 拦下、不发写请求、不占锁', async (_n, r205, text) => {
+    const be = as('4', { '/ctrl/device-summary-get': r205 })
+    const dlg = await pickAndRaise()
+    await click(within(dlg).getByRole('button', { name: '确认下发' }))
+    await screen.findByText('未下发', { selector: '[data-slot=badge]' }, { timeout: 3000 })
+    expect(be.callsTo('/ctrl/device-summary-get').length).toBeGreaterThan(0)
+    expect(be.callsTo('/ctrl/unified-ctrl-set')).toHaveLength(0)
+    expect(lockOf('project:p1')).toBeNull()
+    expect(await openNotes()).toContain(text)
+  })
+  it.each([[undefined], [''], ['abc'], ['0']])('app_code 缺失或无法解析（%s）：温度仍禁用，提示「应用类型未知」', async (code) => {
+    as(code)
+    await mount()
+    await click(screen.getByText('测试项目0829'))
+    expect(screen.getByText(/应用类型未知，温度设定不可用/)).toBeTruthy()
+    await expectTempLocked()
+  })
+})
+
 describe('app_code 8 按 12 处理（后端 11/26 08:34）', () => {
   it.each([['空气单机', '空气单机测试'], ['独立空气系统', '独立空气系统测试']])('组「%s」：勾选项目「%s」后温度禁用、提示「该应用类型不支持温度设定」；房间开关、运行模式仍可用', async (group, name) => {
     backend({ '/ctrl/room-temperature-data-get': () => json({ body: '' }) })

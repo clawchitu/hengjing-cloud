@@ -299,7 +299,7 @@ export default function Control() {
     : locks.some((x) => x.l!.owner === 'other-account') ? OTHER_ACCOUNT_TEXT
     : `${LOCK_BUSY_TEXT}（${locks.map((x) => x.p.name).join('、')}），请等结果确认后再下发`
 
-  // 温度设定：按 app_code（同组相同；已选项目优先，没选时看组内项目）。8、12 及未知类型不可用
+  // 温度设定：按 app_code（同组相同；已选项目优先，没选时看组内项目）。8、12 和缺失不可用，其他都可用（黑名单，capabilities.ts）
   const range = resolveTempRange(null)
   const appBlock = (pickedP.length ? pickedP : inGroup).map((p) => tempAvailability(unifiedAppCode(p.programCode, mock))).find((a) => !a.enabled)
     ?? (inGroup.length ? undefined : tempAvailability(undefined))

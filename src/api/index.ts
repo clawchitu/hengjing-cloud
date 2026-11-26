@@ -5,6 +5,7 @@ import * as M from '../mock/data'
 import * as O from '../mock/org'
 import * as G from '../mock/gen'
 import { isMockMode } from './config'
+import { hasRooms } from '../data/org/capabilities'
 
 // 演示数据（src/mock）只经由本文件进入页面。生产交付包（__HJC_MOCK__ = false，见 src/build-flags.d.ts）里，
 // 下面每处读演示数据的地方都先判断 __HJC_MOCK__，打包时整段剔除，只剩空结果；其他构建行为不变。
@@ -154,11 +155,11 @@ const mockUnifiedOf = (id: string) => {
   if (!s) mockUnified.set(id, (s = { roomSwitch: 1, roomTemp: 26 }))
   return s
 }
-/** 演示：回读（对应 ctrl 200 整理后的快照）。新风单机版（12）没有房间 */
+/** 演示：回读（对应 ctrl 200 整理后的快照）。8、12 没有房间（capabilities.ts） */
 export const mockUnifiedRead = (projectId: string): Promise<{ rooms: number; roomSwitch: number | null; roomTemp: number | null }> => {
   if (!__HJC_MOCK__) return Promise.reject(new Error('回读不可用'))
   const p = O.projects.find((x) => x.id === projectId)
-  if (!p || p.programCode === 12) return delay({ rooms: 0, roomSwitch: null, roomTemp: null }, 200)
+  if (!p || !hasRooms(p)) return delay({ rooms: 0, roomSwitch: null, roomTemp: null }, 200)
   const s = mockUnifiedOf(projectId)
   return delay({ rooms: p.devices, roomSwitch: s.roomSwitch, roomTemp: s.roomTemp }, 200)
 }

@@ -19,9 +19,9 @@ describe('常量', () => {
 })
 
 describe('app_code 规则', () => {
-  it('1 可设温度', () => expect(tempAvailability(1)).toEqual({ enabled: true }))
+  it.each([1, 4, 6, 7, 9, 11, 1000])('黑名单（负责人 11/26 08:47）：%s 和 1 一样可设温度', (code) => expect(tempAvailability(code)).toEqual({ enabled: true }))
   it.each([12, 8])('%s 禁用温度', (code) => expect(tempAvailability(code)).toEqual({ enabled: false, reason: TEXT.tempDisabledByApp }))
-  it.each([4, 7, 9, 1000, 0, NaN, null, undefined])('其他或缺失（%s）按未知处理、禁用', (code) => {
+  it.each([0, NaN, -1, 1.5, null, undefined])('缺失或无效（%s）按未知处理、禁用', (code) => {
     expect(tempAvailability(code as number)).toEqual({ enabled: false, reason: TEXT.tempDisabledUnknownApp })
   })
   it.each([12, 8])('app %s：带温度的下发被拒，开关和模式照常可下发', (appCode) => {

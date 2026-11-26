@@ -13,21 +13,6 @@ export const TEMP_STEP = 0.5
 export interface TempRange { min: number; max: number; step: number }
 export const DEFAULT_TEMP_RANGE: Readonly<TempRange> = Object.freeze({ min: TEMP_MIN, max: TEMP_MAX, step: TEMP_STEP })
 
-/** 应用类型（项目的 app_code） */
-export const APP_CODE = {
-  /** 通用版：温度设定可用 */
-  GENERAL: 1,
-  /** 空气系统单机版：温度设定不可用 */
-  AIR_STANDALONE: 8,
-  /** 独立空气系统：温度设定不可用，房间开关仍可用（Q6①） */
-  AIR_INDEPENDENT: 12,
-} as const
-
-/** 温度设定可用的 app_code（白名单；没列出的一律不可用，宁可少开不误开） */
-export const TEMP_ENABLED_APP_CODES: readonly number[] = [APP_CODE.GENERAL]
-/** 明确禁用温度设定的 app_code（文案不同于「未知应用类型」） */
-export const TEMP_DISABLED_APP_CODES: readonly number[] = [APP_CODE.AIR_STANDALONE, APP_CODE.AIR_INDEPENDENT]
-
 /** 开关取值（203 的 system_switch / room_switch）：-1 不变由组装函数填，这里只给可选值 */
 export const SWITCH_ON = 1
 export const SWITCH_OFF = 0

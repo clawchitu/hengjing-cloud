@@ -1,13 +1,14 @@
 // 统一控制的规则与校验（纯函数，不发请求）。
-// - app_code 决定温度设定是否可用：1 可用；8、12 不可用；其他/缺失按不可用处理（白名单）。
+// - app_code 决定温度设定是否可用（黑名单，负责人 11/26 08:47）：8、12 不可用；缺失不可用；其他都可用。口径只在 src/data/org/capabilities.ts。
 // - 项目离线不允许下发。
 // - 组装 203 Query 一律走 ctrl.ts 的 buildUnifiedCtrlSet()：不改的开关、温度填 -1；不改的运行模式填 0（枚举 OPERATION_MODE_NONE「不变」，
 //   11/25 真机确认）。运行模式 -1 不在枚举里（传 -1 后端报 unknown enum、504、没执行），传进来按无效拒绝。
 import { buildUnifiedCtrlSet, MODE_UNCHANGED, type WriteQuery } from '@/api/ctrl'
 import { UnifiedCtrlSetQuery_OperatingMode as Mode } from '@/api/gen/ctrl200_pb.js'
 import { isSendableMode, OPERATING_MODES, UNCHANGED } from '@/api/values'
+import { capabilitiesOf } from '@/data/org/capabilities'
 import {
-  DEFAULT_TEMP_RANGE, MODE_OPTIONS, SWITCH_OFF, SWITCH_ON, TEMP_DISABLED_APP_CODES, TEMP_ENABLED_APP_CODES, TEXT,
+  DEFAULT_TEMP_RANGE, MODE_OPTIONS, SWITCH_OFF, SWITCH_ON, TEXT,
   type SwitchValue, type TempRange,
 } from './constants'
 
@@ -38,9 +39,9 @@ export type TempAvailability = { enabled: true } | { enabled: false; reason: str
 
 /** 按 app_code 判断温度设定是否可用 */
 export function tempAvailability(appCode: number | null | undefined): TempAvailability {
-  if (typeof appCode === 'number' && TEMP_ENABLED_APP_CODES.includes(appCode)) return { enabled: true }
-  if (typeof appCode === 'number' && TEMP_DISABLED_APP_CODES.includes(appCode)) return { enabled: false, reason: TEXT.tempDisabledByApp }
-  return { enabled: false, reason: TEXT.tempDisabledUnknownApp }
+  const caps = capabilitiesOf(appCode)
+  if (caps.roomTemp) return { enabled: true }
+  return { enabled: false, reason: caps.appCode === 0 ? TEXT.tempDisabledUnknownApp : TEXT.tempDisabledByApp }
 }
 
 const validNum = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v)
